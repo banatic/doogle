@@ -12,12 +12,56 @@ export const MODELS = Object.freeze([
   { id: 'claude-haiku-5-5', label: 'Claude Haiku 5.5' },
 ]);
 export const DEFAULT_MODEL = 'claude-sonnet-5-5';
+export const MODELS_URL = 'https://api.anthropic.com/v1/models';
+export const ANTHROPIC_VERSION = '2023-06-01';
+const MODELS_PAGE_LIMIT = 1000;
+const MODELS_MAX_PAGES = 20;
+const MODELS_TIMEOUT_MS = 15_000;
 const AUTH_HINT = '설정에서 Anthropic Console API key를 입력하세요. (Max/Team 플랜은 월간 API 크레딧을 Console key로 사용할 수 있습니다)';
 const MAX_ITERATIONS = 60;
 const MAX_TOKENS = 64_000;
 /** 거절(refusal) 시 서버 측 대체 모델 — Opus/Sonnet 5.5에서만 */
 const FALLBACK_BETA = 'server-side-fallback-2026-07-01';
 const FALLBACK_MODELS = new Set(['claude-opus-5-5', 'claude-sonnet-5-5']);
+
+function fallbackModels() {
+  return MODELS.map((m) => ({ ...m, ...(m.id === DEFAULT_MODEL ? { default: true } : {}), source: 'fallback' }));
+}
+
+/**
+ * GET /v1/models (x-api-key, anthropic-version) — has_more/last_id로 끝까지 넘긴다.
+ * 응답: {data:[{type:'model', id, display_name, created_at}], has_more, first_id, last_id}
+ * @param {{apiKey: string, fetch?: typeof fetch, timeoutMs?: number}} p
+ */
+export async function listAnthropicModels({ apiKey, fetch: doFetch = globalThis.fetch, timeoutMs = MODELS_TIMEOUT_MS }) {
+  if (!apiKey) throw new ProviderError('API_KEY_MISSING', 'Anthropic API key가 없습니다.');
+  const rows = [];
+  let after = null;
+  for (let page = 0; page < MODELS_MAX_PAGES; page++) {
+    const url = new URL(MODELS_URL);
+    url.searchParams.set('limit', String(MODELS_PAGE_LIMIT));
+    if (after) url.searchParams.set('after_id', after);
+    const res = await doFetch(url.toString(), {
+      headers: { 'x-api-key': apiKey, 'anthropic-version': ANTHROPIC_VERSION, accept: 'application/json' },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) {
+      const code = res.status === 401 ? 'API_KEY_INVALID' : 'ANTHROPIC_ERROR';
+      throw new ProviderError(code, `Anthropic 모델 목록 HTTP ${res.status}`);
+    }
+    const body = await res.json();
+    for (const m of Array.isArray(body?.data) ? body.data : []) {
+      if (typeof m?.id !== 'string' || !m.id) continue;
+      rows.push({ id: m.id, label: typeof m.display_name === 'string' && m.display_name ? m.display_name : m.id, source: 'live' });
+    }
+    if (!body?.has_more || typeof body.last_id !== 'string' || !body.last_id || body.last_id === after) break;
+    after = body.last_id;
+  }
+  // 기본: DEFAULT_MODEL이 목록에 있으면 그것, 없으면 서버 순서(최신 먼저)의 첫 항목
+  const def = rows.find((m) => m.id === DEFAULT_MODEL) ?? rows[0];
+  if (def) def.default = true;
+  return rows;
+}
 
 async function resolveApiKey() {
   try {
@@ -93,8 +137,13 @@ export default {
   async detect() {
     const key = await resolveApiKey();
     return key
-      ? { available: true, models: [...MODELS] }
-      : { available: false, reason: 'Anthropic API key가 없습니다.', models: [...MODELS], authHint: AUTH_HINT };
+      ? { available: true, models: fallbackModels() }
+      : { available: false, reason: 'Anthropic API key가 없습니다.', models: fallbackModels(), authHint: AUTH_HINT };
+  },
+
+  /** 실시간 모델 목록 (hub의 model-catalog가 캐시·fallback을 맡는다) */
+  async listModels({ fetch } = {}) {
+    return listAnthropicModels({ apiKey: await resolveApiKey(), ...(fetch ? { fetch } : {}) });
   },
 
   /**

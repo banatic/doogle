@@ -213,6 +213,63 @@
   white-space: nowrap;
 }
 
+/* 모델 항목: 이름 + 한 줄 설명 */
+.dg-model-item {
+  min-height: 36px;
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+
+.dg-model-item-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 1px;
+}
+
+.dg-menu-desc {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--dg-x-muted);
+}
+
+.dg-models-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 8px 4px 30px;
+}
+
+.dg-models-note {
+  font-size: 11px;
+  color: var(--dg-x-muted);
+}
+
+.dg-models-refresh {
+  margin-left: auto;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: var(--dg-x-r-sm);
+  background: transparent;
+  font-size: 11px !important;
+  color: var(--dg-x-accent);
+  cursor: pointer;
+}
+
+.dg-models-refresh:hover:not(:disabled),
+.dg-models-refresh:focus-visible {
+  background: var(--dg-x-soft);
+}
+
+.dg-models-refresh:disabled {
+  color: var(--dg-x-muted);
+  cursor: default;
+}
+
 .dg-menu-minor {
   color: var(--dg-x-muted) !important;
   font-size: 12px !important;

@@ -18,9 +18,21 @@ export interface HubEndpoint {
   token: string;
 }
 
+export type ModelSource = 'live' | 'cache' | 'fallback';
+
+/** CONTRACT §2 모델 항목 */
 export interface ProviderModel {
   id: string;
   label: string;
+  description?: string;
+  default?: boolean;
+  /** 별칭 행(sonnet, opus …)이 가리키는 실제 모델 id */
+  aliasOf?: string;
+  resolvedModel?: string;
+  supportsEffort?: boolean;
+  effortLevels?: string[];
+  /** live = 방금 받은 목록, cache = 저장된 목록, fallback = 앱 기본 목록 */
+  source?: ModelSource;
 }
 
 export interface ProviderInfo {
@@ -29,6 +41,12 @@ export interface ProviderInfo {
   available: boolean;
   reason?: string;
   models: ProviderModel[];
+  /** provider 기본 모델 id (없으면 null) */
+  defaultModel?: string | null;
+  /** 목록을 마지막으로 받은 시각 (ISO). fallback이면 null */
+  modelsUpdatedAt?: string | null;
+  /** 마지막 실시간 조회 실패 사유 */
+  modelsError?: string;
   authHint?: string;
 }
 
@@ -250,6 +268,11 @@ export class HubClient {
       { timeoutMs: 30_000 },
     );
     return Array.isArray(response.list) ? response.list : [];
+  }
+
+  /** 모델 목록 다시 받기 (S→H `models_refresh {providerId?}` → H→S `providers`). `on('providers')` 로 받는다. */
+  refreshModels(providerId?: string): boolean {
+    return this.send({ type: 'models_refresh', ...(providerId ? { providerId } : {}) });
   }
 
   sendChat(input: {

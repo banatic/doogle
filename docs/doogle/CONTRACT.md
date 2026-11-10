@@ -32,13 +32,21 @@ studio ↔ hub (`/studio`):
 | S→H | `hello` | `{role:"studio", protocol:1}` |
 | H→S | `welcome` | `{protocol:1, hubVersion}` |
 | S→H | `providers_query` | `{}` |
-| H→S | `providers` | `{list:[{id, label, available:boolean, reason?:string, models:[{id,label}], authHint?:string}]}` |
+| H→S | `providers` | `{list:[{id, label, available:boolean, reason?:string, models:Model[], defaultModel:string\|null, modelsUpdatedAt:string\|null, modelsError?:string, authHint?:string}]}` |
+| S→H | `models_refresh` | `{providerId?}` — 모델 목록을 다시 받은 뒤(없으면 전체) `providers`로 응답 |
 | S→H | `chat_send` | `{threadId, providerId, model?, text, mode:"agent"\|"full", context?:{selection?, documentName?}}` |
 | S→H | `chat_cancel` | `{threadId}` |
 | H→S | `agent_event` | `{threadId, event}` — event는 §3 |
 | H→S | `tool_call` | `{callId, name, args, origin:"agent"\|"mcp", threadId?}` |
 | S→H | `tool_result` | `{callId, ok:true, result}` 또는 `{callId, ok:false, error:{code, message, data?}}` |
 | S→H | `review_decision` | `{threadId, decision:"accept_all"\|"reject_all"\|"partial", note?}` (스테이징 검토 결과, hub가 다음 턴 컨텍스트로 전달) |
+
+`Model` = `{id, label, description?, default?:boolean, aliasOf?, resolvedModel?, supportsEffort?, effortLevels?:string[], source:"live"|"cache"|"fallback"}`.
+- `defaultModel` = `default:true` 항목(없으면 첫 항목)의 id. `modelsUpdatedAt` = 목록을 받은 시각(ISO), fallback이면 null. `modelsError` = 마지막 실시간 조회 실패 사유.
+- 모델 목록 캐시(`doogle-agent/src/model-catalog.mjs`): provider별 메모리 + `appDataDir()/models-cache.json`(0600), TTL 12시간, stale-while-revalidate(오래된 캐시를 즉시 `source:"cache"`로 주고 뒤에서 갱신), provider당 조회 하나만. 실시간·캐시 모두 실패할 때만 provider 정적 목록(`source:"fallback"`).
+- hub가 갱신을 끝내면(목록이 바뀌었을 때) 요청 없이도 `providers`를 다시 보낸다. 자동 갱신 시점: hub 기동(캐시 없음/만료), `auth_done` 성공 후, `secrets_set` 성공 후(해당 provider), 턴이 '없는 모델' 오류로 실패했을 때.
+- 모델 출처: `claude-sdk` = Claude Agent SDK `Query.supportedModels()`(prompt를 내보내지 않는 streaming-input 세션의 `initialize` 응답 — 모델 요청·사용량 없음, tool/MCP/settings 끔). `id:"default"` 행이 Claude Code 기본값이며 SDK에 model을 넘기지 않는다. `anthropic-api` = `GET https://api.anthropic.com/v1/models`(`x-api-key`, `anthropic-version: 2023-06-01`, `has_more`/`last_id`로 페이지 넘김). openai-*·codex는 provider가 직접 받은 목록(source 없으면 `live`).
+- studio는 선택을 provider별로 `localStorage['doogle.model.<providerId>']`에 저장하고, 현재 목록에 없으면 `defaultModel` → 첫 항목으로 바꾼다. `chat_send.model` = 고른 `Model.id`.
 
 mcp ↔ hub (`/mcp`): `tool_call` / `tool_result`만 사용 (hub가 studio로 중계, `origin:"mcp"`). studio 미연결 시 hub가 `{ok:false,error:{code:"NO_DOCUMENT",message:"두글에서 문서를 열어주세요"}}`.
 
@@ -62,7 +70,9 @@ v1 tool 목록 = `D:/dev/두글/TOOLS.md` §2. `zod` 4.x 사용.
 export default {
   id: 'claude-sdk'|'anthropic-api'|'openai-siwc'|'openai-api'|'codex-app-server',
   label: string,
-  async detect(ctx) -> {available, reason?, models:[{id,label}], authHint?},
+  async detect(ctx) -> {available, reason?, models:Model[] /*정적·기본 목록*/, authHint?},
+  /** 선택: 실시간 모델 목록. 있으면 hub가 model-catalog로 캐시·fallback(detect().models)을 관리 */
+  async listModels?(ctx) -> Model[],
   /** 한 턴 실행. callTool은 hub가 studio로 중계하고 결과를 돌려줌. emit은 §3 이벤트. */
   async runTurn({threadId, model, messages /*hub 보관 히스토리*/, text, mode, systemPrompt, tools /*TOOLS*/, callTool, emit, signal}) -> {messages /*갱신된 히스토리*/}
 }

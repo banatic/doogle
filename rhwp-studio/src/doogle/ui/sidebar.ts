@@ -20,6 +20,7 @@ import {
   type HubConnectionState,
   type HubMessage,
   type ProviderInfo,
+  type ProviderModel,
   type ToolCallMessage,
 } from '../hub-client.ts';
 import { describeChange } from '../review/describe.ts';
@@ -40,7 +41,11 @@ export interface SidebarDeps {
 }
 
 const STORE_PROVIDER = 'doogle.provider';
-const STORE_MODEL = 'doogle.model';
+/** 예전 단일 키 — provider별 키(`doogle.model.<id>`)가 없을 때 한 번 읽는다. */
+const STORE_MODEL_LEGACY = 'doogle.model';
+const STORE_MODEL_PREFIX = 'doogle.model.';
+/** 목록을 받기 전에도 버튼에 보일 마지막 모델 이름 */
+const STORE_MODEL_LABEL = 'doogle.modelLabel';
 const STORE_MODE = 'doogle.mode';
 
 /** API 키로 쓰는 provider → keyring 키 */
@@ -59,6 +64,29 @@ function storeGet(key: string): string | null {
 
 function storeSet(key: string, value: string): void {
   try { localStorage.setItem(key, value); } catch { /* 사생활 보호 모드 등 — 무시 */ }
+}
+
+/** 버튼·메뉴에 보일 모델 이름. 'default' 행은 실제 모델 이름을 덧붙인다 (예: "기본 · Opus 5.5"). */
+function modelDisplayName(model: ProviderModel, models: readonly ProviderModel[]): string {
+  if (model.id === 'default' && model.resolvedModel) {
+    const target = models.find((m) => m !== model && (m.id === model.resolvedModel || m.resolvedModel === model.resolvedModel));
+    return `기본 · ${target?.label ?? model.resolvedModel}`;
+  }
+  return model.label || model.id;
+}
+
+/** "목록 갱신: n분 전" / "기본 목록" */
+function modelsFreshnessNote(provider: ProviderInfo, now = Date.now()): string {
+  const source = provider.models[0]?.source;
+  if (source === 'fallback' || (!provider.modelsUpdatedAt && source !== 'live')) {
+    return provider.modelsError ? '기본 목록 (실시간 목록을 받지 못함)' : '기본 목록';
+  }
+  if (!provider.modelsUpdatedAt) return '';
+  const at = Date.parse(provider.modelsUpdatedAt);
+  if (!Number.isFinite(at)) return '';
+  const min = Math.max(0, Math.floor((now - at) / 60_000));
+  const ago = min < 1 ? '방금' : min < 60 ? `${min}분 전` : min < 48 * 60 ? `${Math.floor(min / 60)}시간 전` : `${Math.floor(min / 1440)}일 전`;
+  return `목록 갱신: ${ago}`;
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string): HTMLElementTagNameMap[K] {
@@ -143,7 +171,9 @@ export class DoogleSidebar {
 
   private providers: ProviderInfo[] = [];
   private providerId = storeGet(STORE_PROVIDER) ?? '';
-  private model = storeGet(STORE_MODEL) ?? '';
+  private model = storeGet(`${STORE_MODEL_PREFIX}${storeGet(STORE_PROVIDER) ?? ''}`) ?? storeGet(STORE_MODEL_LEGACY) ?? '';
+  /** models_refresh 를 보내고 새 목록을 기다리는 provider */
+  private readonly refreshingModels = new Set<string>();
   private mode: AgentMode = storeGet(STORE_MODE) === 'full' ? 'full' : 'agent';
   private busy = false;
   private turn: TurnView | null = null;
@@ -515,6 +545,7 @@ export class DoogleSidebar {
     this.conn.hidden = state === 'open';
     this.conn.dataset.state = state;
     if (state === 'open') void this.refreshProviders();
+    this.renderModelButton();
     if (state !== 'open' && this.busy) {
       this.addNotice('연결이 끊겨 응답을 더 받지 못했습니다.', 'error');
       this.endTurn();
@@ -532,13 +563,14 @@ export class DoogleSidebar {
   }
 
   private setProviders(list: ProviderInfo[]): void {
-    this.providers = Array.isArray(list) ? list : [];
+    this.providers = Array.isArray(list) ? list.map((p) => ({ ...p, models: Array.isArray(p.models) ? p.models : [] })) : [];
+    this.refreshingModels.clear();
     const current = this.providers.find((p) => p.id === this.providerId);
     if (!current || (!current.available && this.providers.some((p) => p.available))) {
       const pick = this.providers.find((p) => p.available) ?? this.providers[0];
       if (pick && pick.id !== this.providerId) {
         this.providerId = pick.id;
-        this.model = '';
+        this.model = storeGet(`${STORE_MODEL_PREFIX}${pick.id}`) ?? '';
       }
     }
     this.normalizeModel();
@@ -551,27 +583,53 @@ export class DoogleSidebar {
     return this.providers.find((p) => p.id === this.providerId);
   }
 
+  /** 저장된 선택을 현재 목록으로 검증: 저장값 → provider defaultModel → 첫 항목 */
   private normalizeModel(): void {
-    const models = this.currentProvider()?.models ?? [];
-    if (!models.some((m) => m.id === this.model)) this.model = models[0]?.id ?? '';
+    const provider = this.currentProvider();
+    if (!provider) return; // 목록을 받기 전 — 저장값을 그대로 둔다
+    const models = provider.models;
+    const has = (id: string | null | undefined): id is string => !!id && models.some((m) => m.id === id);
+    if (has(this.model)) return;
+    const stored = storeGet(`${STORE_MODEL_PREFIX}${provider.id}`);
+    this.model = has(stored) ? stored : has(provider.defaultModel) ? provider.defaultModel : models[0]?.id ?? '';
   }
 
   private selectModel(providerId: string, modelId: string): void {
     this.providerId = providerId;
     this.model = modelId;
     storeSet(STORE_PROVIDER, providerId);
-    storeSet(STORE_MODEL, modelId);
+    storeSet(`${STORE_MODEL_PREFIX}${providerId}`, modelId);
     this.renderModelButton();
     this.renderComposer();
   }
 
+  private requestModelRefresh(providerId: string): void {
+    if (!this.deps.hub.refreshModels(providerId)) {
+      this.addNotice('agent hub 에 연결되어 있지 않습니다.', 'error');
+      return;
+    }
+    this.refreshingModels.add(providerId);
+    if (this.openMenuKind === 'model') this.renderModelMenu();
+  }
+
+  /** 버튼 글자: 고른 모델 이름. 목록 전에는 마지막으로 본 이름, 그것도 없으면 상태 안내. */
   private renderModelButton(): void {
     if (!this.modelText) return;
     const provider = this.currentProvider();
     const model = provider?.models.find((m) => m.id === this.model);
-    const label = model?.label ?? provider?.label ?? (this.providers.length ? '모델 고르기' : '모델');
+    let label: string;
+    if (model && provider) {
+      label = modelDisplayName(model, provider.models);
+      storeSet(STORE_MODEL_LABEL, label);
+    } else if (provider) {
+      label = provider.available ? '모델 고르기' : `${provider.label} · 사용 불가`;
+    } else {
+      label = storeGet(STORE_MODEL_LABEL) || (this.deps.hub.state === 'open' ? '모델 불러오는 중…' : '연결 대기 중');
+    }
     this.modelText.textContent = label;
-    this.modelBtn.setAttribute('aria-label', `모델: ${label}${provider && !provider.available ? ' (사용 불가)' : ''}`);
+    const title = provider ? `${provider.label} · ${label}${provider.available ? '' : ' (사용 불가)'}` : label;
+    this.modelBtn.title = title;
+    this.modelBtn.setAttribute('aria-label', `모델: ${title}`);
     this.modelBtn.classList.toggle('dg-warn', !!provider && !provider.available);
   }
 
@@ -591,16 +649,36 @@ export class DoogleSidebar {
       if (provider.available) {
         for (const model of provider.models) {
           const on = provider.id === this.providerId && model.id === this.model;
-          const item = button('dg-menu-item', '', () => {
+          const item = button('dg-menu-item dg-model-item', '', () => {
             this.selectModel(provider.id, model.id);
             this.closeMenu(true);
           });
           item.setAttribute('role', 'menuitemradio');
           item.setAttribute('aria-checked', String(on));
           item.disabled = this.busy;
-          item.append(el('span', 'dg-menu-check', on ? '✓' : ''), el('span', 'dg-menu-label', model.label));
+          const text = el('span', 'dg-model-item-text');
+          const name = modelDisplayName(model, provider.models);
+          text.append(el('span', 'dg-menu-label', name));
+          const desc = model.description || (model.id !== name && model.id !== 'default' ? model.id : '');
+          if (desc) text.append(el('span', 'dg-menu-desc', desc));
+          item.title = model.resolvedModel && model.resolvedModel !== model.id ? `${name} → ${model.resolvedModel}` : model.id;
+          item.append(el('span', 'dg-menu-check', on ? '✓' : ''), text);
           group.append(item);
         }
+        const refreshing = this.refreshingModels.has(provider.id);
+        const foot = el('div', 'dg-models-foot');
+        const note = modelsFreshnessNote(provider);
+        if (note) {
+          const noteEl = el('span', 'dg-models-note', note);
+          if (provider.modelsError) noteEl.title = provider.modelsError;
+          foot.append(noteEl);
+        }
+        const refresh = button('dg-models-refresh', refreshing ? '새로고침 중…' : '새로고침', () => this.requestModelRefresh(provider.id));
+        refresh.setAttribute('role', 'menuitem');
+        refresh.disabled = refreshing;
+        refresh.setAttribute('aria-label', `${provider.label} 모델 목록 새로고침`);
+        foot.append(refresh);
+        group.append(foot);
         if (provider.id === 'openai-siwc') {
           const logout = button('dg-menu-item dg-menu-minor', '로그아웃', () => {
             this.closeMenu(true);
@@ -756,7 +834,7 @@ export class DoogleSidebar {
     this.modelBtn = button('dg-model-btn', '', () => this.toggleMenu('model', this.modelBtn));
     this.modelBtn.setAttribute('aria-haspopup', 'menu');
     this.modelBtn.setAttribute('aria-expanded', 'false');
-    this.modelText = el('span', 'dg-model-text', '모델');
+    this.modelText = el('span', 'dg-model-text', '연결 대기 중');
     this.modelBtn.append(this.modelText, icon('chevronDown', 12, 2));
 
     this.modelMenu = el('div', 'dg-menu dg-model-menu');

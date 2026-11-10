@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
 
+import { defaultModelId, ModelCatalog, normalizeModels } from './model-catalog.mjs';
 import { appDataDir } from './paths.mjs';
 import { loadProviders, sortProviders } from './provider-registry.mjs';
 import { buildSystemPrompt, buildTurnText } from './system-prompt.mjs';
@@ -32,6 +33,12 @@ export const DEFAULT_TOOL_TIMEOUTS = Object.freeze({
 });
 
 const DETECT_TIMEOUT_MS = 15_000;
+/** 캐시가 없을 때 providers 응답이 실시간 모델 조회를 기다리는 최대 시간 (넘기면 fallback 후 갱신 push) */
+const MODELS_FIRST_WAIT_MS = 4_000;
+/** 비밀 키 → 그 키를 쓰는 provider */
+const SECRET_PROVIDER = Object.freeze({ 'anthropic-api-key': 'anthropic-api', 'openai-api-key': 'openai-api' });
+/** turn 실패가 '없는 모델' 때문인지 (그러면 모델 목록을 다시 받는다) */
+export const UNKNOWN_MODEL_ERROR = /(model[^\n]{0,80}(not[ _]found|unknown|invalid|does not exist|not exist|not available|not supported|unavailable))|((unknown|invalid|unsupported)[ _-]model)|(not_found_error[^\n]{0,80}model)/i;
 const NO_DOCUMENT = Object.freeze({ code: 'NO_DOCUMENT', message: '두글에서 문서를 열어주세요' });
 /** studio가 hub에 저장을 요청할 수 있는 비밀 키 (프로토콜 확장 secret_set/secret_delete). */
 const STUDIO_WRITABLE_SECRETS = new Set(['anthropic-api-key', 'openai-api-key']);
@@ -81,6 +88,9 @@ function withTimeout(promise, ms, onTimeout) {
  *   toolTimeouts?: Partial<Record<'read'|'write', number>>,
  *   imageRoots?: string[],
  *   allowedOrigins?: string[],
+ *   modelCatalog?: ModelCatalog,
+ *   modelsFirstWaitMs?: number,
+ *   refreshModelsOnStart?: boolean,
  *   log?: (msg: string) => void,
  * }} [opts]
  */
@@ -109,6 +119,9 @@ export async function createHub(opts = {}) {
     ? process.env.DOOGLE_IMAGE_ROOTS.split(path.delimiter).filter(Boolean)
     : [os.homedir()]);
   const systemPrompt = buildSystemPrompt({ toolRules: tools.TOOL_RULES });
+  const catalog = opts.modelCatalog ?? new ModelCatalog({ dataDir, log });
+  const modelsFirstWaitMs = opts.modelsFirstWaitMs ?? MODELS_FIRST_WAIT_MS;
+  let closing = false;
   const store = new ThreadStore({ dir: opts.persistThreads === false ? null : path.join(dataDir, 'threads') });
 
   /** 현재 studio 소켓 (하나만 유지) */
@@ -221,6 +234,10 @@ export async function createHub(opts = {}) {
     return { dataDir, secrets, hubVersion: HUB_VERSION };
   }
 
+  /** provider.listModels가 있으면 model-catalog(캐시·SWR·fallback)를 거친다. */
+  const hasLiveModels = (p) => typeof p?.listModels === 'function';
+  const modelsFetcher = (p) => () => Promise.resolve().then(() => p.listModels(detectCtx()));
+
   async function providersList() {
     const ctx = detectCtx();
     return Promise.all([...providers.values()].map(async (p) => {
@@ -231,15 +248,82 @@ export async function createHub(opts = {}) {
       } catch (err) {
         d = { available: false, reason: String(err?.message ?? err), models: [] };
       }
+      const available = d?.available === true;
+      let models;
+      let modelsUpdatedAt = null;
+      let modelsError;
+      if (hasLiveModels(p)) {
+        const r = await catalog.resolve(p.id, {
+          fetch: available ? modelsFetcher(p) : null, // 쓸 수 없는 provider는 캐시/기본 목록만
+          fallback: d?.models,
+          waitMs: modelsFirstWaitMs,
+          onUpdate: () => scheduleProvidersBroadcast(),
+        });
+        models = r.models;
+        modelsUpdatedAt = r.updatedAt;
+        modelsError = r.error;
+      } else {
+        // 자체적으로 목록을 받는 provider(openai-*, codex) — source가 없으면 'live'로 본다.
+        models = normalizeModels(d?.models, 'live');
+      }
       return {
         id: p.id,
         label: p.label ?? p.id,
-        available: d?.available === true,
+        available,
         ...(d?.reason ? { reason: String(d.reason) } : {}),
-        models: Array.isArray(d?.models) ? d.models : [],
+        models,
+        defaultModel: defaultModelId(models),
+        modelsUpdatedAt: modelsUpdatedAt ? new Date(modelsUpdatedAt).toISOString() : null,
+        ...(modelsError ? { modelsError } : {}),
         ...(d?.authHint ? { authHint: String(d.authHint) } : {}),
       };
     }));
+  }
+
+  /** 연결된 studio에 최신 providers를 보낸다 (짧게 모아서 한 번). */
+  let broadcastTimer = null;
+  let broadcastChain = Promise.resolve();
+  function scheduleProvidersBroadcast(delayMs = 50) {
+    if (broadcastTimer || closing) return;
+    broadcastTimer = setTimeout(() => {
+      broadcastTimer = null;
+      broadcastChain = broadcastChain.then(async () => {
+        if (!studio || closing) return;
+        try {
+          const list = await providersList();
+          send(studio, { type: 'providers', list });
+        } catch (err) {
+          log(`providers broadcast: ${err?.message ?? err}`);
+        }
+      });
+    }, delayMs);
+    broadcastTimer.unref?.();
+  }
+
+  /**
+   * 모델 목록을 다시 받는다 (provider당 하나만 진행). 실패는 캐시/fallback으로 남긴다.
+   * @param {string|null|undefined} providerId 없으면 listModels가 있는 모든 provider
+   * @param {{onlyStale?: boolean}} [o]
+   */
+  async function refreshModels(providerId, { onlyStale = false } = {}) {
+    const targets = [...providers.values()].filter((p) => hasLiveModels(p) && (!providerId || p.id === providerId));
+    await Promise.all(targets.map(async (p) => {
+      if (onlyStale) {
+        await catalog.load();
+        if (catalog.isFresh(catalog.peek(p.id))) return;
+      }
+      try {
+        await catalog.refresh(p.id, modelsFetcher(p));
+      } catch (err) {
+        log(`모델 목록 갱신 실패 (${p.id}): ${err?.message ?? err}`);
+      }
+    }));
+  }
+
+  async function onModelsRefresh(msg, socket) {
+    const providerId = typeof msg.providerId === 'string' && msg.providerId ? msg.providerId : null;
+    await refreshModels(providerId);
+    send(socket, { type: 'providers', list: await providersList() });
   }
 
   function emitTo(threadId, event) {
@@ -308,6 +392,9 @@ export async function createHub(opts = {}) {
             emitHub({ kind: 'error', code: typeof err?.code === 'string' ? err.code : 'PROVIDER_ERROR', message: String(err?.message ?? err) });
           }
           log(`turn error (${providerId}): ${err?.stack ?? err}`);
+          if (UNKNOWN_MODEL_ERROR.test(String(err?.message ?? ''))) {
+            void refreshModels(providerId).then(() => scheduleProvidersBroadcast());
+          }
         }
       }
       thread.lastProviderId = providerId;
@@ -345,6 +432,11 @@ export async function createHub(opts = {}) {
       else await secrets.deleteSecret(key);
       send(socket, { type: 'secret_ack', key, ok: true });
       void providersList().then((list) => send(socket, { type: 'providers', list }));
+      // 새 키로 모델 목록을 다시 받아 한 번 더 알린다.
+      if (msg.type === 'secret_set' || msg.type === 'secrets_set') {
+        const pid = SECRET_PROVIDER[key];
+        if (pid) void refreshModels(pid).then(() => scheduleProvidersBroadcast());
+      }
     } catch (err) {
       send(socket, { type: 'secret_ack', key, ok: false, error: { code: 'SECRET_ERROR', message: String(err?.message ?? err) } });
     }
@@ -369,6 +461,7 @@ export async function createHub(opts = {}) {
       try {
         await login.waitForCompletion();
         send(socket, { type: 'auth_done', providerId, ok: true });
+        await refreshModels(providerId);
       } finally {
         if (logins.get(providerId) === login) logins.delete(providerId);
       }
@@ -422,6 +515,8 @@ export async function createHub(opts = {}) {
           return send(ws, { type: 'welcome', protocol: PROTOCOL_VERSION, hubVersion: HUB_VERSION });
         case 'providers_query':
           return void providersList().then((list) => send(ws, { type: 'providers', list }));
+        case 'models_refresh':
+          return void onModelsRefresh(msg, ws).catch((e) => log(`models_refresh: ${e?.message}`));
         case 'chat_send':
           return void startTurn(msg);
         case 'chat_cancel':
@@ -516,7 +611,15 @@ export async function createHub(opts = {}) {
     await writeHubJson(hubJsonFile, { port, token, pid: process.pid, version: 1 });
   }
 
+  if (opts.refreshModelsOnStart !== false) {
+    // 기동 시: 캐시가 없거나 오래된 provider만 뒤에서 갱신 (끝나면 연결된 studio에 push)
+    void refreshModels(null, { onlyStale: true }).then(() => scheduleProvidersBroadcast());
+  }
+
   async function close() {
+    closing = true;
+    if (broadcastTimer) { clearTimeout(broadcastTimer); broadcastTimer = null; }
+    await catalog.idle();
     for (const l of logins.values()) l?.cancel?.();
     for (const t of turns.values()) t.abort.abort();
     await Promise.all([...turns.values()].map((t) => t.done));
@@ -539,6 +642,8 @@ export async function createHub(opts = {}) {
     dataDir,
     hubJsonFile,
     providers,
+    modelCatalog: catalog,
+    refreshModels,
     tools,
     systemPrompt,
     store,

@@ -16,12 +16,16 @@ import { appDataDir } from '../paths.mjs';
 
 const require = createRequire(import.meta.url);
 
+/** 정적 목록 — 실시간 조회(supportedModels)와 캐시가 모두 실패할 때만 쓴다 (source 'fallback'). */
 export const MODELS = Object.freeze([
+  { id: 'default', label: '기본값 (Claude Code 권장)', description: 'Claude Code가 계정에 맞게 고르는 기본 모델', default: true },
   { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5' },
   { id: 'claude-opus-5-5', label: 'Claude Opus 5.5' },
   { id: 'claude-haiku-5-5', label: 'Claude Haiku 5.5' },
 ]);
-export const DEFAULT_MODEL = 'claude-sonnet-5-5';
+/** 'default'(또는 미지정)이면 SDK에 model을 넘기지 않아 Claude Code 기본 모델을 쓴다. */
+export const DEFAULT_MODEL = 'default';
+export const LIST_MODELS_TIMEOUT_MS = 15_000;
 export const AUTH_HINT = '두글은 Claude 로그인 화면을 제공하지 않습니다. 터미널에서 `claude`를 실행한 뒤 /login 으로 로그인하고 다시 시도하세요.';
 const MCP_PREFIX = 'mcp__doogle__';
 const SESSION_MARKER = 'claude-sdk-session';
@@ -135,6 +139,104 @@ function sessionMessages(sessionId) {
   return sessionId ? [{ type: SESSION_MARKER, sessionId }] : [];
 }
 
+// ── 모델 목록 ─────────────────────────────────────────────────
+
+function fallbackModels() {
+  return MODELS.map((m) => ({ ...m, source: 'fallback' }));
+}
+
+/**
+ * SDK ModelInfo[] → 공통 모델 형태. value 'default' 행을 기본으로 표시하고,
+ * 별칭 행(sonnet, opus …)은 resolvedModel을 함께 둔다.
+ * @param {any[]} infos
+ */
+export function mapClaudeModels(infos) {
+  const out = [];
+  const seen = new Set();
+  for (const i of Array.isArray(infos) ? infos : []) {
+    const id = typeof i?.value === 'string' ? i.value.trim() : '';
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    const row = { id, label: typeof i.displayName === 'string' && i.displayName.trim() ? i.displayName.trim() : id, source: 'live' };
+    if (typeof i.description === 'string' && i.description.trim()) row.description = i.description.trim().split(/\r?\n/)[0];
+    if (id === 'default') row.default = true;
+    if (typeof i.resolvedModel === 'string' && i.resolvedModel && i.resolvedModel !== id) {
+      row.resolvedModel = i.resolvedModel;
+      if (!/^claude-/.test(id) && id !== 'default') row.aliasOf = i.resolvedModel;
+    }
+    if (typeof i.supportsEffort === 'boolean') row.supportsEffort = i.supportsEffort;
+    if (Array.isArray(i.supportedEffortLevels) && i.supportedEffortLevels.length) row.effortLevels = [...i.supportedEffortLevels];
+    out.push(row);
+  }
+  return out;
+}
+
+/**
+ * Claude Code가 이 계정에서 쓸 수 있다고 알려 주는 모델 목록을 읽는다.
+ *
+ * streaming-input 모드로 query를 시작하되 prompt(async iterable)는 아무 메시지도 내보내지 않는다.
+ * supportedModels()는 SDK가 시작 시 보내는 `initialize` 제어 요청의 응답(models)을 돌려줄 뿐이므로
+ * (sdk.mjs: `supportedModels(){return(await this.initialization).models}`) 사용자 메시지가 없는 한
+ * 모델 요청은 나가지 않고 사용량도 쓰지 않는다. 혹시 assistant/result/usage 메시지가 보이면 경고로 남긴다.
+ * tool·MCP·settings는 모두 끄고, 자격증명은 건드리지 않으며 사용자의 기본 환경 그대로 실행한다.
+ * @param {{sdk?: any, timeoutMs?: number, cwd?: string, exe?: string|null, log?: (m:string)=>void}} [opts]
+ */
+export async function listClaudeModels({ sdk, timeoutMs = LIST_MODELS_TIMEOUT_MS, cwd, exe, log } = {}) {
+  sdk ??= await loadSdk();
+  if (cwd === undefined) {
+    cwd = path.join(appDataDir(), 'claude-workspace');
+    await fs.mkdir(cwd, { recursive: true });
+  }
+  if (exe === undefined) {
+    const bundled = bundledClaudeBinary();
+    exe = bundled && await exists(bundled) ? null : claudeOnPath();
+  }
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  async function* silentPrompt() { await gate; } // 아무것도 보내지 않는다
+  const abortController = new AbortController();
+  const q = sdk.query({
+    prompt: silentPrompt(),
+    options: {
+      abortController,
+      cwd,
+      tools: [],
+      allowedTools: [],
+      mcpServers: {},
+      strictMcpConfig: true,
+      settingSources: [],
+      permissionMode: 'default',
+      canUseTool: async () => ({ behavior: 'deny', message: '모델 목록 조회 전용 세션' }),
+      ...(exe ? { pathToClaudeCodeExecutable: exe } : {}),
+    },
+  });
+  let unexpected = null;
+  const drain = (async () => {
+    try {
+      for await (const m of q) {
+        if (m?.type === 'assistant' || m?.type === 'result' || m?.type === 'stream_event') unexpected ??= m.type;
+      }
+    } catch { /* close/abort */ }
+  })();
+  let timer;
+  try {
+    const infos = await Promise.race([
+      Promise.resolve().then(() => q.supportedModels()),
+      new Promise((_, rej) => { timer = setTimeout(() => rej(new Error(`모델 목록 조회 시간 초과 (${Math.round(timeoutMs / 1000)}초)`)), timeoutMs); }),
+    ]);
+    const models = mapClaudeModels(infos);
+    if (!models.length) throw new Error('Claude Code가 모델 목록을 보내지 않았습니다');
+    return models;
+  } finally {
+    clearTimeout(timer);
+    release();
+    try { q.close?.(); } catch { /* ignore */ }
+    abortController.abort();
+    await Promise.race([drain, new Promise((r) => setTimeout(r, 1000))]);
+    if (unexpected) (log ?? ((m) => process.emitWarning(m)))(`claude-sdk 모델 목록 조회 중 예상하지 못한 메시지: ${unexpected}`);
+  }
+}
+
 // ── provider ─────────────────────────────────────────────────
 
 export default {
@@ -145,7 +247,7 @@ export default {
     try {
       await loadSdk();
     } catch (err) {
-      return { available: false, reason: `Claude Agent SDK를 불러올 수 없습니다: ${err?.message ?? err}`, models: [...MODELS] };
+      return { available: false, reason: `Claude Agent SDK를 불러올 수 없습니다: ${err?.message ?? err}`, models: fallbackModels() };
     }
     const bundled = bundledClaudeBinary();
     const bundledOk = bundled ? await exists(bundled) : false;
@@ -154,15 +256,20 @@ export default {
       return {
         available: false,
         reason: 'Claude Code를 찾을 수 없습니다. Claude Code를 설치한 뒤 터미널에서 `claude`로 로그인하세요.',
-        models: [...MODELS],
+        models: fallbackModels(),
         authHint: AUTH_HINT,
       };
     }
     const loggedIn = await cliLoggedIn(onPath ?? bundled);
     if (loggedIn === false) {
-      return { available: false, reason: 'Claude Code에 로그인되어 있지 않습니다.', models: [...MODELS], authHint: AUTH_HINT };
+      return { available: false, reason: 'Claude Code에 로그인되어 있지 않습니다.', models: fallbackModels(), authHint: AUTH_HINT };
     }
-    return { available: true, models: [...MODELS], authHint: AUTH_HINT };
+    return { available: true, models: fallbackModels(), authHint: AUTH_HINT };
+  },
+
+  /** 실시간 모델 목록 (hub의 model-catalog가 캐시·fallback을 맡는다) */
+  async listModels() {
+    return listClaudeModels();
   },
 
   /**
@@ -230,7 +337,7 @@ async function runQuery({ sdk, server, model, text, systemPrompt, cwd, exe, resu
   const options = {
     abortController,
     cwd,
-    model: model || DEFAULT_MODEL,
+    ...(model && model !== 'default' ? { model } : {}),
     systemPrompt,
     tools: [], // Claude Code 기본 tool(Bash, Read, Edit …) 전부 차단
     allowedTools: [`${MCP_PREFIX}*`],

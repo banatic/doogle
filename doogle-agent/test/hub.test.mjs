@@ -176,7 +176,11 @@ describe('doogle hub', () => {
     assert.equal(w.protocol, 1);
     s.send({ type: 'providers_query' });
     const p = await s.next((m) => m.type === 'providers');
-    assert.deepEqual(p.list, [{ id: 'fake', label: 'Fake', available: true, models: [{ id: 'm1', label: 'M1' }] }]);
+    assert.deepEqual(p.list, [{
+      id: 'fake', label: 'Fake', available: true,
+      models: [{ id: 'm1', label: 'M1', source: 'live' }],
+      defaultModel: 'm1', modelsUpdatedAt: null,
+    }]);
     s.close();
   });
 
