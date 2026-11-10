@@ -160,7 +160,7 @@ export class Ribbon {
     this.aiButton.setAttribute('aria-pressed', 'false');
     this.aiButton.setAttribute('aria-label', 'AI 도우미 사이드바');
     this.aiButton.title = 'AI 도우미 — 오른쪽 사이드바를 열고 닫습니다';
-    this.aiButton.innerHTML = `${iconSvg('sparkle', 14, 2)}<span>AI 도우미</span>${this.keytipHtml(AI_KEY)}`;
+    this.aiButton.innerHTML = `<span>AI 도우미</span>${this.keytipHtml(AI_KEY)}`;
     bindActivate(this.aiButton, () => { toggleAgentPanel(); this.queueRefresh(); });
     this.collapseButton = document.createElement('button');
     this.collapseButton.type = 'button';
