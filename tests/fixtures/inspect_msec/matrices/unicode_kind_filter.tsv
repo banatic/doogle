@@ -1,6 +1,0 @@
-filter	kind	reportsOthers
-zero-width	zero_width	False
-bidi	bidi_override	False
-tag	tag_char	False
-confusable	confusable	False
-all	all	True

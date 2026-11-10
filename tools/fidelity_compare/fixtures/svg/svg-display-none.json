@@ -1,8 +1,0 @@
-{
-  "id": "svg-display-none",
-  "title": "display/visibility 숨김",
-  "why": "숨김 노드는 visible walker 가 건너뛴다.",
-  "expectVisible": "shown",
-  "expectExcludedAtLeast": 0,
-  "svgPath": "fixtures/svg/svg-display-none.svg"
-}

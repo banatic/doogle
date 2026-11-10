@@ -1,2 +1,0 @@
-# PDF xref entries have fixed-width trailing spaces; preserve exact source bytes.
-*.pdf binary

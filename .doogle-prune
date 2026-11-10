@@ -1,0 +1,114 @@
+# 두글(doogle)이 upstream(edwardkim/rhwp)에서 들여오지 않는 경로 목록.
+#
+# scripts/doogle-sync-upstream.ps1 / .sh 가 upstream merge 뒤 이 목록에 걸리는 파일을
+# 다시 git rm 한다. 형식:
+#   - 한 줄에 경로 하나(저장소 루트 기준, 앞뒤 '/' 없음). 디렉터리면 그 아래 전부를 뜻한다.
+#   - '!' 로 시작하면 예외(남길 경로). 예외가 prune 보다 우선한다.
+#   - '#' 로 시작하는 줄과 빈 줄은 무시한다. glob 은 쓰지 않는다(접두 일치만).
+
+# ── upstream 개발 문서·코퍼스·시험 ──
+mydocs
+pdf
+gym
+fuzz
+tools
+bindings
+template
+packaging
+examples
+tests
+# lib 이 include_bytes! 로 읽는 시험용 글꼴(라이선스 고지 포함)은 남긴다.
+!tests/fixtures/fonts
+!tests/fixtures/native_font_family_names
+
+# samples: lib 이 include_bytes! 로 읽는 파일만 남긴다.
+samples
+!samples/hml/formatting_table.hml
+!samples/hwpx/aift.hwpx
+!samples/hwpx/ref/ref_empty.hwpx
+!samples/render-p35-font-native-bitmap.hwpx
+
+# saved: 새 문서 템플릿(include_bytes!)만 남긴다.
+saved
+!saved/blank2010.hwp
+
+# scripts: doogle-release.yml 이 쓰는 WASM 빌드 래퍼와 두글 스크립트만 남긴다.
+scripts
+!scripts/wasm-pack-locked.sh
+!scripts/wasm-pack-locked.ps1
+!scripts/wasm-pack-locked.cmd
+!scripts/doogle-sync-upstream.ps1
+!scripts/doogle-sync-upstream.sh
+
+# 브라우저 확장 홍보 이미지
+assets/chrome
+assets/edge
+assets/screenshots
+
+# ── 다른 배포 채널(확장·IDE·모바일·upstream 데스크탑) ──
+rhwp-chrome
+rhwp-firefox
+rhwp-safari
+rhwp-vscode
+rhwp-ios
+rhwp-desk
+
+# ── upstream CLI 바이너리(rhwp, rhwp-q, rhwp-agent, font-metric-gen)와 그 전용 모듈 ──
+src/main.rs
+src/bin
+src/cli
+src/tools
+src/agent_profiles.rs
+src/anchor_log.rs
+src/atomic_file.rs
+src/audit_standard.rs
+src/capsule_sign.rs
+src/disclose.rs
+src/lineage_bundle.rs
+src/mcp_serve.rs
+src/policy_gate.rs
+src/settle.rs
+
+# ── AI 도구 규칙 파일 ──
+.claude
+.agents
+.junie
+.kilocode
+.kiro
+.roo
+.trae
+.amazonq
+.augment
+.continue
+.cursor
+.clinerules
+.goosehints
+.rules
+.windsurfrules
+.mcp.json
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+QWEN.md
+replit.md
+llms.txt
+
+# ── upstream 저장소 운영 파일 ──
+.github
+!.github/workflows/doogle-release.yml
+.config
+.dockerignore
+.env.docker.example
+.mailmap
+Dockerfile
+docker-compose.yml
+CHANGELOG.md
+CHANGELOG_EN.md
+CONTRIBUTING.md
+CONVENTIONS.md
+ROADMAP.md
+SECURITY.md
+README_EN.md
+diffprobe.json
+rhwp-logo.png
+rhwp-logo.svg

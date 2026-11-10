@@ -1,1 +1,0 @@
-../../rhwp-shared/sw/document-filename.js

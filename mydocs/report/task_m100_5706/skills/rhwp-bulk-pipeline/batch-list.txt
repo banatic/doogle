@@ -1,3 +1,0 @@
-samples/basic/BlogForm_BookReview.hwp
-samples/basic/english.hwp
-samples/basic/request.hwp

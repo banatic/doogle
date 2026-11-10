@@ -7,7 +7,7 @@ edition = "2021"
 description = "HWP/HWPX document engine for Rust applications, WebAssembly, and CLI automation"
 license = "MIT"
 repository = "https://github.com/edwardkim/rhwp"
-readme = "packaging/crates-io/README_PACKAGE.md"
+readme = "README.md"
 autotests = false
 autoexamples = false
 autobins = false
@@ -18,9 +18,7 @@ include = [
     "/src/**",
     "/LICENSE",
     "/README.md",
-    "/README_EN.md",
     "/THIRD_PARTY_LICENSES.md",
-    "/llms.txt",
     "/saved/blank2010.hwp",
     "/assets/fonts/enclosed-pua-metrics.json",
     "/assets/fonts/LatinModernMath-VariableOutline-subset.otf",
@@ -28,23 +26,11 @@ include = [
     "/assets/fonts/licenses/**",
     "/assets/font-rules/font_rule_registry_v2.json",
     "/data/font-metrics/nimbus-roman/**",
-    "/mydocs/manual/agent_knowledge_map.md",
-    "/mydocs/manual/agent_troubleshooting_guide.md",
-    "/mydocs/manual/gym_optional_tool.md",
-    "/mydocs/manual/recipes/01_fill_form_and_submit.md",
-    "/mydocs/manual/recipes/02_table_csv_roundtrip.md",
-    "/mydocs/manual/recipes/03_redact_before_sharing.md",
-    "/mydocs/manual/recipes/04_safety_check_untrusted_doc.md",
-    "/mydocs/manual/recipes/05_mail_merge_batch_fill.md",
-    "/mydocs/manual/recipes/06_visual_regression_before_after.md",
-    "/mydocs/tech/agent_roadmap/atlas_r1_r200.md",
-    "/packaging/crates-io/README_PACKAGE.md",
-    "/packaging/crates-io/examples/pdf_isolation_host.rs"
 ]
 
 [workspace]
 exclude = ["vendor/rhwp-pdf-import-backend", "vendor/rhwp-qcms", "vendor/rhwp-zune-jpeg", "vendor/rhwp-jpeg-decoder", "vendor/rhwp-jpeg-encoder", "vendor/svg2pdf", "vendor/rhwp-codec-resource", "vendor/rhwp-hayro-jbig2", "vendor/rhwp-hayro-jpeg2000", "vendor/rhwp-hayro-ccitt"]
-members = ["crates/*", "tools/rhwp-subsecond", "bindings/Native", "tools/batch-convert", "tools/llm_verifier/verdict_protocol", "tools/llm_verifier/claim_bind", "tools/llm_verifier/criteria_decomp"]
+members = ["crates/*"]
 default-members = [".", "crates/*"]
 resolver = "2"
 
@@ -54,222 +40,6 @@ resolver = "2"
 # crate type 으로 분류하는 규칙과도 맞아떨어진다 — 뒤집으면 `--hot-patch` 가 조용히 안 먹는다.
 # (버전은 여기 적지 않는다. 유일한 사본은 아래 `subsecond` 의 정확 핀이다 — #4580.)
 crate-type = ["rlib", "cdylib"]
-
-[[bin]]
-name = "rhwp"
-path = "src/main.rs"
-# CLI 는 `wasm_api::HwpDocument` 를 쓴다 — 아래 `wasm-api` feature 참고.
-required-features = ["wasm-api"]
-
-[[bin]]
-name = "rhwp-q"
-path = "src/bin/rhwp-q/main.rs"
-
-[[bin]]
-name = "rhwp-agent"
-path = "src/bin/rhwp-agent/main.rs"
-
-[[bin]]
-name = "font-metric-gen"
-path = "src/tools/font_metric_gen.rs"
-required-features = ["dev-tools"]
-
-# BEGIN RHWP GENERATED TEST TARGETS
-# tests/suites/manifest.json에서 생성한다. 직접 수정하지 않는다.
-
-[[test]]
-name = "regression_suite_001"
-path = "tests/generated/regression_suite_001.rs"
-
-[[test]]
-name = "regression_suite_002"
-path = "tests/generated/regression_suite_002.rs"
-
-[[test]]
-name = "regression_suite_003"
-path = "tests/generated/regression_suite_003.rs"
-
-[[test]]
-name = "regression_suite_004"
-path = "tests/generated/regression_suite_004.rs"
-
-[[test]]
-name = "regression_suite_005"
-path = "tests/generated/regression_suite_005.rs"
-
-[[test]]
-name = "regression_suite_006"
-path = "tests/generated/regression_suite_006.rs"
-
-[[test]]
-name = "regression_suite_007"
-path = "tests/generated/regression_suite_007.rs"
-
-[[test]]
-name = "regression_suite_008"
-path = "tests/generated/regression_suite_008.rs"
-
-[[test]]
-name = "regression_suite_009"
-path = "tests/generated/regression_suite_009.rs"
-
-[[test]]
-name = "regression_suite_010"
-path = "tests/generated/regression_suite_010.rs"
-
-[[test]]
-name = "regression_suite_011"
-path = "tests/generated/regression_suite_011.rs"
-
-[[test]]
-name = "regression_suite_012"
-path = "tests/generated/regression_suite_012.rs"
-
-[[test]]
-name = "regression_suite_013"
-path = "tests/generated/regression_suite_013.rs"
-
-[[test]]
-name = "regression_suite_014"
-path = "tests/generated/regression_suite_014.rs"
-
-[[test]]
-name = "regression_suite_015"
-path = "tests/generated/regression_suite_015.rs"
-
-[[test]]
-name = "regression_suite_016"
-path = "tests/generated/regression_suite_016.rs"
-
-[[test]]
-name = "regression_suite_017"
-path = "tests/generated/regression_suite_017.rs"
-
-[[test]]
-name = "regression_suite_018"
-path = "tests/generated/regression_suite_018.rs"
-
-[[test]]
-name = "regression_suite_019"
-path = "tests/generated/regression_suite_019.rs"
-
-[[test]]
-name = "regression_suite_020"
-path = "tests/generated/regression_suite_020.rs"
-
-[[test]]
-name = "regression_suite_021"
-path = "tests/generated/regression_suite_021.rs"
-
-[[test]]
-name = "regression_suite_022"
-path = "tests/generated/regression_suite_022.rs"
-
-[[test]]
-name = "regression_suite_023"
-path = "tests/generated/regression_suite_023.rs"
-
-[[test]]
-name = "regression_suite_024"
-path = "tests/generated/regression_suite_024.rs"
-
-[[test]]
-name = "regression_suite_025"
-path = "tests/generated/regression_suite_025.rs"
-
-[[test]]
-name = "regression_suite_026"
-path = "tests/generated/regression_suite_026.rs"
-
-[[test]]
-name = "regression_suite_027"
-path = "tests/generated/regression_suite_027.rs"
-
-[[test]]
-name = "regression_suite_028"
-path = "tests/generated/regression_suite_028.rs"
-
-[[test]]
-name = "cli_exit_codes"
-path = "tests/cli_exit_codes.rs"
-
-[[test]]
-name = "cli_exit_codes_native"
-path = "tests/cli_exit_codes_native.rs"
-
-[[test]]
-name = "issue_1144"
-path = "tests/issue_1144.rs"
-
-[[test]]
-name = "issue_1144_native"
-path = "tests/issue_1144_native.rs"
-
-[[test]]
-name = "issue_2833_hml_adapter_row_sizes"
-path = "tests/issue_2833_hml_adapter_row_sizes.rs"
-
-[[test]]
-name = "issue_4055_b1_chart_edit_probe"
-path = "tests/issue_4055_b1_chart_edit_probe.rs"
-
-[[test]]
-name = "issue_4098_legacy_chart_grid"
-path = "tests/issue_4098_legacy_chart_grid.rs"
-
-[[test]]
-name = "issue_4099_hwpx_chart_to_hwp"
-path = "tests/issue_4099_hwpx_chart_to_hwp.rs"
-
-[[test]]
-name = "issue_4100_chart_data_edit"
-path = "tests/issue_4100_chart_data_edit.rs"
-
-[[test]]
-name = "issue_4126_cursor_rect_empty_para_pages"
-path = "tests/issue_4126_cursor_rect_empty_para_pages.rs"
-
-[[test]]
-name = "issue_4128_cell_cursor_page_narrowing"
-path = "tests/issue_4128_cell_cursor_page_narrowing.rs"
-
-[[test]]
-name = "issue_4179_cursor_rect_text_host_para_pages"
-path = "tests/issue_4179_cursor_rect_text_host_para_pages.rs"
-
-[[test]]
-name = "issue_4969_shaping_composition_handoff"
-path = "tests/cases/issue_4969_shaping_composition_handoff.rs"
-
-[[test]]
-name = "issue_4969_shaping_emitted_run_mapping"
-path = "tests/cases/issue_4969_shaping_emitted_run_mapping.rs"
-
-[[test]]
-name = "issue_4969_shaping_glyph_lowering"
-path = "tests/cases/issue_4969_shaping_glyph_lowering.rs"
-
-[[test]]
-name = "issue_4969_shaping_page_sidecar"
-path = "tests/cases/issue_4969_shaping_page_sidecar.rs"
-
-[[test]]
-name = "issue_4969_shaping_paragraph_transaction"
-path = "tests/cases/issue_4969_shaping_paragraph_transaction.rs"
-
-[[test]]
-name = "issue_4969_shaping_request_contract"
-path = "tests/cases/issue_4969_shaping_request_contract.rs"
-
-[[test]]
-name = "issue_4969_shaping_shadow_context"
-path = "tests/cases/issue_4969_shaping_shadow_context.rs"
-
-[[test]]
-name = "overflow_cell_baseline"
-path = "tests/overflow_cell_baseline.rs"
-
-# END RHWP GENERATED TEST TARGETS
 
 [dependencies]
 chrono = "0.4"
@@ -402,7 +172,6 @@ wuff = "0.2.9"
 # Same COM types/version as skia-safe 0.156's D3D backend.
 windows = { version = "=0.62.2", optional = true, default-features = false, features = ["Win32_Foundation", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D12", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common"] }
 
-
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 web-sys = { version = "0.3", features = [
     "CanvasRenderingContext2d",
@@ -513,62 +282,6 @@ unused_assignments = "allow"
 unused_macros = "allow"
 # wmf 모듈의 tracing feature cfg 경고 억제
 unexpected_cfgs = { level = "allow", check-cfg = ['cfg(feature, values("tracing", "svg"))'] }
-
-# 재사용 가능한 개발자 도구만 명시적으로 Cargo target에 등록한다.
-# 이슈별 일회성 probe는 mydocs/tech/investigations/issue-*/probes에 보존하며
-# 기본 build/clippy 대상으로 다시 끌어오지 않는다.
-[[example]]
-name = "audit_image_magic"
-path = "tools/diagnostics/audit_image_magic.rs"
-
-[[example]]
-name = "audit_studio_image_parity"
-path = "tools/diagnostics/audit_studio_image_parity.rs"
-
-[[example]]
-name = "dump_layer_json_page"
-path = "tools/diagnostics/dump_layer_json_page.rs"
-
-[[example]]
-name = "dump_source_images"
-path = "tools/diagnostics/dump_source_images.rs"
-
-[[example]]
-name = "edit_sweep"
-path = "tools/diagnostics/edit_sweep.rs"
-
-[[example]]
-name = "hwpx_dump_empty"
-path = "tools/diagnostics/hwpx_dump_empty.rs"
-
-[[example]]
-name = "hwpx_dump_text"
-path = "tools/diagnostics/hwpx_dump_text.rs"
-
-[[example]]
-name = "hwpx_hwp_ir_diff"
-path = "tools/diagnostics/hwpx_hwp_ir_diff.rs"
-
-[[example]]
-name = "hwpx_roundtrip"
-path = "tools/diagnostics/hwpx_roundtrip.rs"
-
-[[example]]
-name = "build_issue_505_fixture"
-path = "tools/fixture_generators/build_issue_505_fixture.rs"
-
-[[example]]
-name = "build_issue_5800_fixture"
-path = "tools/fixture_generators/build_issue_5800_fixture.rs"
-
-[[example]]
-name = "font_metric_coverage_worker"
-path = "tools/diagnostics/font_metric_coverage_worker.rs"
-
-[[example]]
-name = "pdf_isolation_host"
-path = "packaging/crates-io/examples/pdf_isolation_host.rs"
-required-features = ["pdf-import"]
 
 [profile.dev]
 # 로컬 실행 파일의 크기를 줄이되 함수·파일·줄 단위 역추적 정보는 유지한다.
