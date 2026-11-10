@@ -18,8 +18,11 @@
         "title": "두글",
         "width": 1400,
         "height": 900,
-        "minWidth": 800,
-        "minHeight": 560,
+        "minWidth": 1000,
+        "minHeight": 640,
+        "resizable": true,
+        "decorations": false,
+        "shadow": true,
         "dragDropEnabled": false
       }
     ],
@@ -29,6 +32,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": ["nsis", "app", "dmg", "appimage", "deb"],
     "category": "Productivity",
     "shortDescription": "HWP/HWPX 편집기 + AI 문서 편집 에이전트",
@@ -61,6 +65,13 @@
     },
     "macOS": {
       "minimumSystemVersion": "11.0"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": ["https://github.com/banatic/doogle/releases/latest/download/latest.json"],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDRGNTY2MUFFRjNDRkM1MTUKUldRVnhjL3pybUZXVDFUNGJ4QlVWdWlGOFRDMk1oVGZjQzhWbjlDZGtEUHp1QkZvMWNKNHZlNisK",
+      "windows": { "installMode": "passive" }
     }
   }
 }

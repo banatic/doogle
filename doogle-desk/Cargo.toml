@@ -22,6 +22,8 @@ tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-opener = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 getrandom = "0.3"
@@ -42,5 +44,6 @@ strip = true
 
 # 이 개발 PC 의 보안 소프트웨어가 최적화 없는 libc build script 실행 파일을 격리해 `cargo check` 가
 # os error 5 (never executed) 로 실패한다. build script 만 최적화해 빌드한다(산출 코드에는 영향 없음).
+# opt-level 3 은 updater 가 끌어온 httparse build script 가 격리됐다. 1 은 libc·httparse 모두 통과한다.
 [profile.dev.build-override]
-opt-level = 3
+opt-level = 1

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "두글",
+        "width": 1400,
+        "height": 900,
+        "minWidth": 1000,
+        "minHeight": 640,
+        "resizable": true,
+        "decorations": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": { "x": 14, "y": 19 },
+        "dragDropEnabled": false
+      }
+    ]
+  }
+}

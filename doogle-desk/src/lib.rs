@@ -1,22 +1,25 @@
 //! 두글 데스크탑 셸 (Tauri 2).
 //!
-//! webview = rhwp-studio. 셸이 하는 일은 셋뿐이다.
+//! webview = rhwp-studio. 셸이 하는 일은 넷뿐이다.
 //!  1. agent hub(Node sidecar) 를 띄우고 `hub_info` 로 port/token 을 webview 에 준다 (hub.rs).
 //!  2. 네이티브 열기/저장 대화상자와 문서 파일 읽기·쓰기 (files.rs).
 //!  3. 파일 연결(.hwp/.hwpx) 로 들어온 경로를 webview 에 넘긴다.
+//!  4. 창 닫기 요청을 webview 의 저장 안 한 문서 확인으로 돌리고, 자동 업데이트를 맡는다 (updater.rs).
 //!
 //! 비밀값·자격증명은 다루지 않는다 — hub 가 OS keyring 으로 관리한다(CONTRACT §0, §5).
 
 mod files;
 mod hub;
+mod updater;
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde::Deserialize;
 use serde_json::json;
 use tauri::ipc::{InvokeBody, Request, Response};
-use tauri::{AppHandle, Emitter, Manager, RunEvent, State, WebviewWindow};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, State, WebviewWindow, Window, WindowEvent};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
@@ -26,12 +29,16 @@ type CmdResult<T> = Result<T, String>;
 
 const EVENT_HUB: &str = "doogle://hub";
 const EVENT_OPEN: &str = "doogle://open-request";
+const EVENT_CLOSE_REQUESTED: &str = "doogle://close-requested";
 const SAVE_PATH_HEADER: &str = "x-doogle-path";
 
 struct Shell {
     hub: Arc<HubOwner>,
     /// 아직 webview 가 가져가지 않은 열기 요청(파일 연결·두 번째 실행·macOS Opened).
     pending_opens: Mutex<Vec<PathBuf>>,
+    /// webview 가 닫기 확인(저장 안 한 문서)을 맡겠다고 알렸는가. 아니면 닫기를 막지 않는다 —
+    /// webview 가 아직 안 떴거나 죽었을 때 창을 못 닫는 일을 피한다.
+    close_guard: AtomicBool,
 }
 
 async fn blocking<T: Send + 'static>(work: impl FnOnce() -> CmdResult<T> + Send + 'static) -> CmdResult<T> {
@@ -167,6 +174,35 @@ fn queue_opens(app: &AppHandle, paths: Vec<PathBuf>) {
     }
 }
 
+// ----------------------------------------------------------------- close guard
+
+/// webview 가 `doogle://close-requested` 를 듣기 시작했다(또는 그만뒀다).
+#[tauri::command]
+fn set_close_guard(state: State<'_, Arc<Shell>>, enabled: bool) {
+    state.close_guard.store(enabled, Ordering::SeqCst);
+}
+
+/// webview 가 확인을 마쳤으니 창을 정말 닫는다. destroy 는 CloseRequested 를 다시 거치지 않는다.
+#[tauri::command]
+fn confirm_close(window: WebviewWindow) -> CmdResult<()> {
+    window.destroy().map_err(|error| error.to_string())
+}
+
+fn on_window_event(window: &Window, event: &WindowEvent) {
+    let WindowEvent::CloseRequested { api, .. } = event else { return };
+    if window.label() != "main" {
+        return;
+    }
+    let guarded = window
+        .app_handle()
+        .try_state::<Arc<Shell>>()
+        .is_some_and(|shell| shell.close_guard.load(Ordering::SeqCst));
+    if guarded {
+        api.prevent_close();
+        let _ = window.emit_to(window.label(), EVENT_CLOSE_REQUESTED, ());
+    }
+}
+
 // ----------------------------------------------------------------- setup
 
 /// hub 가 있는 doogle-agent 디렉터리. 개발 빌드는 저장소의 것을, 배포본은 리소스를 쓴다.
@@ -215,8 +251,10 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let shell = Arc::new(Shell {
         hub: Arc::clone(&hub),
         pending_opens: Mutex::new(files::document_paths_from_args(&args, None)),
+        close_guard: AtomicBool::new(false),
     });
     app.manage(shell);
+    app.manage(updater::PendingUpdate::default());
     // 사이드바가 열리기 전에 미리 띄워 첫 질문의 대기 시간을 줄인다. 실패해도 앱은 계속 쓴다.
     std::thread::spawn(move || {
         if let Err(error) = hub.ensure() {
@@ -238,6 +276,9 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
+        .on_window_event(on_window_event)
         .invoke_handler(tauri::generate_handler![
             hub_info,
             open_file,
@@ -246,6 +287,10 @@ pub fn run() {
             pick_save_file,
             take_open_requests,
             open_external,
+            set_close_guard,
+            confirm_close,
+            updater::update_check,
+            updater::update_install,
         ])
         .setup(setup)
         .build(tauri::generate_context!())

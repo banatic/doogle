@@ -9,6 +9,7 @@
  */
 import '../theme/tokens.css';
 import '../theme/overlays.css';
+import '../theme/scrollbar.css';
 import './shell.css';
 
 import type { PluginHost } from '@/plugin/types';
@@ -16,6 +17,9 @@ import { Backstage } from './backstage';
 import { iconSvg } from './icons';
 import { Ribbon } from './ribbon';
 import { StatusAddons } from './status';
+import { installWindowControls, markDragRegion } from './window-controls';
+import { installCloseGuard } from './close-guard';
+import { installUpdater } from './updater';
 import { commandShortcut, context, isEnabled, openCommandPalette, run, toggleAgentPanel } from './studio';
 
 export { getPendingCount, setPendingCount, PENDING_COUNT_EVENT } from './status';
@@ -93,6 +97,11 @@ function buildTitleBar(): { bar: HTMLElement; quick: HTMLButtonElement[] } {
   });
 
   bar.append(app, sep, quickWrap, title, chip);
+  // 테두리 없는 창의 끌기 영역(단추·입력에는 달지 않는다). 브라우저에서는 무해하다.
+  markDragRegion(bar, app, sep, quickWrap, title);
+  installWindowControls(bar);
+  // 업데이트 알약은 창 단추 왼쪽에 들어간다(데스크탑 전용).
+  installUpdater(bar);
   return { bar, quick };
 }
 
@@ -145,6 +154,8 @@ export function mountShell(): void {
   const status = statusBar ? new StatusAddons(statusBar, () => { if (!isAgentOpen()) toggleAgentPanel(); }) : null;
 
   state = { ribbon, status, backstage, quick, host: null };
+  // 창 닫기 → 저장 안 한 문서 확인(데스크탑 전용)
+  installCloseGuard();
 
   // host 가 붙기 전에도 사용자의 조작 뒤에는 단추 상태를 다시 본다.
   document.addEventListener('pointerup', queueRefreshAll, true);

@@ -75,7 +75,9 @@
    특이도 (0,3,1): base.css 다크(0,2,0)·flat 스킨(0,3,0)보다 높아 순서와 무관하게 이긴다.
    ================================================================ */
 html:root[data-doogle][data-doogle] {
-  color-scheme: light;
+  /* core/theme.ts 가 root 인라인 style 로 `only dark` 를 박으므로 !important 로 이긴다
+     (안 그러면 시스템 다크 모드에서 스크롤바·폼 컨트롤이 어둡게 그려진다). */
+  color-scheme: light !important;
 
   --ui-bg: var(--dg-chrome);
   --ui-bg-light: var(--dg-chrome);

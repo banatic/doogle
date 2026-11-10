@@ -1,0 +1,68 @@
+/* ================================================================
+   두글 스크롤바 — 시안 F 의 밝은 톤. `:root[data-doogle]` 에서만 살아 있다.
+   ----------------------------------------------------------------
+   Chromium(WebView2)·WebKit(WKWebView/WebKitGTK) 은 ::-webkit-scrollbar 로 칠한다.
+   주의: Chromium 121+ 는 요소에 `scrollbar-color`/`scrollbar-width` 가 (상속 포함) 걸리면
+   ::-webkit-scrollbar 를 통째로 무시한다. `scrollbar-color` 는 상속되므로 root 에 걸면 모든 곳의
+   둥근 썸·hover 가 사라진다. 그래서 표준 속성은 ::-webkit-scrollbar 를 모르는 엔진(Firefox)에만 준다.
+   어두운 스크롤바의 원인이던 color-scheme(theme.ts 인라인 `only dark`)은 tokens.css 에서 light 로 고정한다.
+   ================================================================ */
+
+@supports not selector(::-webkit-scrollbar) {
+  :root[data-doogle] {
+    scrollbar-color: #C5CCD6 transparent;
+    scrollbar-width: thin;
+  }
+}
+
+:root[data-doogle]::-webkit-scrollbar,
+:root[data-doogle] ::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+  background: transparent;
+}
+
+:root[data-doogle]::-webkit-scrollbar-track,
+:root[data-doogle] ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+:root[data-doogle]::-webkit-scrollbar-thumb,
+:root[data-doogle] ::-webkit-scrollbar-thumb {
+  background-color: #CBD5E1;
+  border: 2px solid transparent;
+  border-radius: 6px;
+  background-clip: padding-box;
+  min-height: 32px;
+  min-width: 32px;
+}
+
+:root[data-doogle]::-webkit-scrollbar-thumb:hover,
+:root[data-doogle] ::-webkit-scrollbar-thumb:hover,
+:root[data-doogle] ::-webkit-scrollbar-thumb:active {
+  background-color: #94A3B8;
+}
+
+:root[data-doogle]::-webkit-scrollbar-button,
+:root[data-doogle] ::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+:root[data-doogle]::-webkit-scrollbar-corner,
+:root[data-doogle] ::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* 문서 캔버스 스크롤러(캔버스와 사이드바 사이의 세로 막대): 밝은 크롬 바탕 위에 둔다. */
+:root[data-doogle] #scroll-container::-webkit-scrollbar-track,
+:root[data-doogle] #scroll-container::-webkit-scrollbar-corner {
+  background: #F8FAFC;
+}
+:root[data-doogle] #scroll-container::-webkit-scrollbar-track:vertical {
+  border-left: 1px solid var(--dg-divider, #E5E7EB);
+}
+:root[data-doogle] #scroll-container::-webkit-scrollbar-track:horizontal {
+  border-top: 1px solid var(--dg-divider, #E5E7EB);
+}

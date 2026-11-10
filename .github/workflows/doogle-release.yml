@@ -1,0 +1,193 @@
+# 두글(doogle) 데스크탑 앱 릴리스 — Tauri 2 설치본 + 자동 업데이트(latest.json) 를 초안 릴리스로 올린다.
+#
+# fork(banatic/doogle) 전용이다. upstream(edwardkim/rhwp) 에 이 파일이 들어가도 job 의
+# `github.repository` 가드 때문에 아무것도 실행되지 않는다.
+#
+# 흐름: `release` 브랜치에 push(또는 수동 실행)
+#   → prepare: doogle-desk/tauri.conf.json 버전 읽기 · Cargo.toml/package.json 과 일치 확인 · 태그 중복이면 실패
+#   → build(matrix): WASM(pkg/) → rhwp-studio · doogle-desk · doogle-agent 의존성 → tauri-action
+#   → 초안(draft) 릴리스 `두글 v{version}` 에 설치본 + .sig + latest.json 첨부
+#
+# 초안 릴리스는 /releases/latest/download/latest.json 으로 제공되지 않는다.
+# GitHub 에서 초안을 직접 Publish 해야 설치된 앱이 업데이트를 받는다 (docs/doogle/RELEASE.md).
+#
+# 태그는 upstream 의 `v*` 태그(v0.5.0…v0.9.x 가 fork 에도 있다)와 겹치지 않고, upstream 의
+# `push: tags: ['v*']` workflow(ci.yml · release-binary.yml)를 깨우지 않도록 `doogle-v{version}` 을 쓴다.
+name: Doogle Release
+
+on:
+  push:
+    branches: [release]
+  workflow_dispatch:
+    inputs:
+      notes:
+        description: 앱 업데이트 팝오버에 보일 릴리스 노트(비우면 마지막 커밋 메시지)
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: doogle-release
+  cancel-in-progress: false
+
+env:
+  TAG_PREFIX: doogle-v
+
+jobs:
+  prepare:
+    if: github.repository == 'banatic/doogle'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      notes: ${{ steps.notes.outputs.notes }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Read version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./doogle-desk/tauri.conf.json').version")"
+          pkg_version="$(node -p "require('./doogle-desk/package.json').version")"
+          cargo_version="$(sed -n 's/^version = "\(.*\)"$/\1/p' doogle-desk/Cargo.toml | head -n1)"
+          if [ "$version" != "$pkg_version" ] || [ "$version" != "$cargo_version" ]; then
+            echo "::error::버전 불일치 — tauri.conf.json=$version package.json=$pkg_version Cargo.toml=$cargo_version"
+            exit 1
+          fi
+          tag="${TAG_PREFIX}${version}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
+            echo "::error::태그 ${tag} 가 이미 있습니다. doogle-desk 의 버전을 올린 뒤 다시 release 에 merge 하세요."
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "### 두글 v${version} → 태그 \`${tag}\` (초안 릴리스)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Release notes
+        id: notes
+        shell: bash
+        env:
+          INPUT_NOTES: ${{ inputs.notes }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          set -euo pipefail
+          notes="${INPUT_NOTES:-${COMMIT_MESSAGE:-}}"
+          [ -n "$notes" ] || notes="$(git log -1 --pretty=%B)"
+          delimiter="NOTES_$(date +%s%N)"
+          {
+            echo "notes<<${delimiter}"
+            echo "$notes"
+            echo "${delimiter}"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: prepare
+    if: github.repository == 'banatic/doogle'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            args: ''
+          # macOS · Linux 는 나중에 연다. 서명(Apple notarization)·의존성을 갖춘 뒤 주석을 푼다.
+          # - platform: macos-latest
+          #   args: '--target universal-apple-darwin'
+          #   rust_targets: 'aarch64-apple-darwin,x86_64-apple-darwin'
+          # - platform: ubuntu-22.04
+          #   args: ''
+    runs-on: ${{ matrix.platform }}
+    env:
+      # 루트 rust-toolchain.toml(1.93.1 고정) 대신 stable 을 쓴다.
+      RUSTUP_TOOLCHAIN: stable
+      HAS_WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE != '' && secrets.WINDOWS_CERTIFICATE_PASSWORD != '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable 브랜치 (2026-08-01 시점)
+        with:
+          toolchain: stable
+          targets: ${{ matrix.rust_targets && format('wasm32-unknown-unknown,{0}', matrix.rust_targets) || 'wasm32-unknown-unknown' }}
+
+      - name: Install wasm-pack
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: wasm-pack@0.15.0
+
+      # - name: Install Linux dependencies
+      #   if: runner.os == 'Linux'
+      #   run: |
+      #     sudo apt-get update
+      #     sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Build WASM (pkg/)
+        shell: bash
+        run: bash scripts/wasm-pack-locked.sh --target web --out-dir pkg
+
+      - name: Install rhwp-studio dependencies
+        working-directory: rhwp-studio
+        run: npm ci
+
+      - name: Install doogle-desk dependencies
+        working-directory: doogle-desk
+        run: npm ci
+
+      - name: Install doogle-agent dependencies (bundled as resources)
+        working-directory: doogle-agent
+        run: npm ci --omit=dev
+
+      # 선택: WINDOWS_CERTIFICATE(base64 PFX) + WINDOWS_CERTIFICATE_PASSWORD 가 모두 있을 때만
+      # 인증서를 저장소에 넣고 thumbprint 를 tauri 설정 overlay 로 넘긴다. 없으면 서명 없이 빌드한다.
+      - name: Import Windows code signing certificate
+        if: runner.os == 'Windows' && env.HAS_WINDOWS_CERTIFICATE == 'true'
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pfx = Join-Path $env:RUNNER_TEMP 'doogle-signing.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+          try {
+            $password = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+            $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password |
+              Where-Object { $_.HasPrivateKey } | Select-Object -First 1
+          } finally {
+            Remove-Item $pfx -Force
+          }
+          if (-not $cert) { throw 'PFX 에 개인 키가 있는 인증서가 없습니다' }
+          $overlay = @{ bundle = @{ windows = @{
+            certificateThumbprint = $cert.Thumbprint
+            digestAlgorithm = 'sha256'
+            timestampUrl = 'http://timestamp.digicert.com'
+          } } } | ConvertTo-Json -Depth 5
+          $path = Join-Path $env:RUNNER_TEMP 'tauri.signing.conf.json'
+          Set-Content -Path $path -Value $overlay -Encoding utf8NoBOM
+          "TAURI_SIGNING_OVERLAY=--config `"$path`"" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Build and upload (tauri-action)
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: doogle-desk
+          tauriScript: npx tauri
+          # tauri.bundle.conf.json: doogle-agent 를 리소스로 묶는다(자동 병합되지 않는 파일).
+          args: --config tauri.bundle.conf.json ${{ env.TAURI_SIGNING_OVERLAY }} ${{ matrix.args }}
+          tagName: ${{ needs.prepare.outputs.tag }}
+          releaseName: 두글 v${{ needs.prepare.outputs.version }}
+          releaseBody: ${{ needs.prepare.outputs.notes }}
+          releaseDraft: true
+          prerelease: false
+          releaseCommitish: ${{ github.sha }}
+          includeUpdaterJson: true

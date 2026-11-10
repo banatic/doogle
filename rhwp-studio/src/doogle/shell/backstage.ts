@@ -6,6 +6,8 @@
 import { iconSvg } from './icons';
 import { commandShortcut, hasCommand, isEnabled } from './studio';
 import { activateUpstreamItem, menuBody, refreshRecentDocs } from './upstream-menu';
+import { isDesk } from '../ui/desk-bridge';
+import { checkForUpdates, currentVersion, openUpdatePopover } from './updater';
 
 const ICONS: Record<string, string> = {
   'file:new-doc': 'newDoc',
@@ -79,6 +81,8 @@ export class Backstage {
         }
       }
     }
+
+    this.appendUpdateSection(nav);
 
     const main = document.createElement('section');
     main.className = 'dg-bs-main';
@@ -160,6 +164,46 @@ export class Backstage {
     this.root = null;
     this.returnFocus?.setAttribute('aria-expanded', 'false');
     if (restoreFocus) this.returnFocus?.focus();
+  }
+
+  /** 데스크탑: 현재 버전 + '업데이트 확인'. 새 버전이 있으면 백스테이지를 닫고 제목 막대 팝오버를 연다. */
+  private appendUpdateSection(nav: HTMLElement): void {
+    if (!isDesk()) return;
+    const wrap = document.createElement('div');
+    wrap.className = 'dg-bs-update';
+    const sep = document.createElement('div');
+    sep.className = 'dg-bs-sep';
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'dg-bs-item';
+    b.innerHTML = `${iconSvg('info', 18, 1.7)}<span class="dg-bs-item-label">업데이트 확인</span>`;
+    const version = document.createElement('div');
+    version.className = 'dg-bs-version';
+    version.setAttribute('aria-live', 'polite');
+    version.textContent = '두글';
+    let busy = false;
+    void currentVersion().then((v) => { if (v && !busy) version.textContent = `두글 v${v}`; });
+    b.addEventListener('click', async () => {
+      if (busy) return;
+      busy = true;
+      b.setAttribute('aria-disabled', 'true');
+      version.textContent = '확인하는 중…';
+      const result = await checkForUpdates();
+      busy = false;
+      b.removeAttribute('aria-disabled');
+      const v = await currentVersion();
+      if (result.kind === 'available') {
+        version.textContent = `새 버전 v${result.info.version}`;
+        this.close(false);
+        openUpdatePopover();
+      } else if (result.kind === 'latest') {
+        version.textContent = `두글 v${v ?? ''} — 최신 버전입니다`;
+      } else {
+        version.textContent = `확인하지 못했습니다: ${result.message}`;
+      }
+    });
+    wrap.append(sep, b, version);
+    nav.appendChild(wrap);
   }
 
   private itemButton(item: HTMLElement, nested: boolean): HTMLButtonElement | null {
