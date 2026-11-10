@@ -1,0 +1,335 @@
+/* 두글 검토 목록 (review/list.ts) — 사이드바 안에 놓인다. 색은 --dg-* 토큰만 (doogle/theme/tokens.css). */
+
+.dg-rl {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-family: var(--dg-font-ui, system-ui, sans-serif);
+  font-size: var(--dg-fs-md, 13px);
+  color: var(--dg-text, CanvasText);
+}
+
+.dg-rl-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+}
+
+.dg-rl-title {
+  font-weight: 600;
+}
+
+.dg-rl-count {
+  min-width: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--dg-active, Highlight);
+  color: var(--dg-soft-text, CanvasText);
+  font-size: var(--dg-fs-sm, 12px);
+  font-weight: 600;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.dg-rl-grow {
+  flex: 1;
+}
+
+.dg-rl button {
+  font: inherit;
+  cursor: pointer;
+  color: inherit;
+}
+
+.dg-rl button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.dg-rl button:focus-visible {
+  outline: 2px solid var(--dg-focus, Highlight);
+  outline-offset: 1px;
+}
+
+.dg-rl-btn {
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--dg-border, ButtonBorder);
+  border-radius: var(--dg-r-md, 8px);
+  background: var(--dg-surface, Canvas);
+  white-space: nowrap;
+}
+
+.dg-rl-btn:hover:not(:disabled) {
+  background: var(--dg-hover, ButtonFace);
+}
+
+.dg-rl-quiet {
+  border-color: transparent;
+  background: transparent;
+  color: var(--dg-text2, CanvasText);
+}
+
+.dg-rl-primary {
+  border-color: var(--dg-accent, Highlight);
+  background: var(--dg-accent, Highlight);
+  color: var(--dg-on-accent, HighlightText) !important;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dg-rl-primary:hover:not(:disabled) {
+  background: var(--dg-accent-hover, Highlight);
+}
+
+.dg-rl-danger {
+  border-color: var(--dg-bad, CanvasText);
+  background: var(--dg-bad, CanvasText);
+  color: var(--dg-on-accent, Canvas) !important;
+  font-weight: 600;
+}
+
+.dg-rl-danger:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.dg-rl-kbd {
+  font-family: var(--dg-font-mono, monospace);
+  font-size: var(--dg-fs-kbd, 11.5px);
+  opacity: 0.85;
+}
+
+.dg-rl-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--dg-border, CanvasText);
+  border-radius: var(--dg-r-md, 8px);
+  background: var(--dg-surface, Canvas);
+  overflow: hidden;
+}
+
+.dg-rl-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: start;
+  border-top: 1px solid var(--dg-divider, transparent);
+  transition: opacity var(--dg-dur, 180ms) var(--dg-ease, ease);
+}
+
+.dg-rl-list > :first-child {
+  border-top: 0;
+}
+
+.dg-rl-current {
+  background: var(--dg-soft, Highlight);
+  box-shadow: inset 3px 0 0 var(--dg-accent, Highlight);
+}
+
+/* 파급: 기준 행 뒤는 흐려진다 */
+.dg-rl-dim {
+  opacity: 0.45;
+}
+
+.dg-rl-go {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 4px 8px 10px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+}
+
+.dg-rl-loc {
+  flex-shrink: 0;
+  min-width: 52px;
+  color: var(--dg-hint, GrayText);
+  font-size: var(--dg-fs-sm, 12px);
+  font-variant-numeric: tabular-nums;
+}
+
+.dg-rl-what {
+  min-width: 0;
+  line-height: var(--dg-lh-tight, 1.35);
+  overflow-wrap: anywhere;
+  word-break: keep-all;
+}
+
+.dg-rl-del {
+  color: var(--dg-del, CanvasText);
+  text-decoration: line-through;
+  background: var(--dg-bad-soft, transparent);
+  border-radius: 3px;
+  padding: 0 2px;
+}
+
+.dg-rl-ins {
+  color: var(--dg-ins, CanvasText);
+  text-decoration: none;
+  background: var(--dg-soft, transparent);
+  border-radius: 3px;
+  padding: 0 2px;
+}
+
+.dg-rl-more,
+.dg-rl-fx-label {
+  color: var(--dg-hint, GrayText);
+}
+
+.dg-rl-fx {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.dg-rl-chip {
+  padding: 1px 6px;
+  border: 1px solid var(--dg-border, CanvasText);
+  border-radius: var(--dg-r-sm, 4px);
+  background: var(--dg-surface-2, Canvas);
+  font-size: var(--dg-fs-sm, 12px);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.dg-rl-acts {
+  display: flex;
+  gap: 2px;
+  padding: 5px 6px 0 0;
+}
+
+.dg-rl-icon {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--dg-r-md, 8px);
+  background: transparent;
+}
+
+.dg-rl-ok:hover:not(:disabled) {
+  background: var(--dg-ok-soft, ButtonFace);
+  color: var(--dg-ok, CanvasText);
+}
+
+.dg-rl-no:hover:not(:disabled) {
+  background: var(--dg-bad-soft, ButtonFace);
+  color: var(--dg-bad, CanvasText);
+}
+
+/* 거절 단추의 파급 수 */
+.dg-rl-plus {
+  position: absolute;
+  top: -1px;
+  right: -3px;
+  min-width: 14px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: var(--dg-warn-soft, Canvas);
+  color: var(--dg-warn, CanvasText);
+  border: 1px solid var(--dg-warn-border, CanvasText);
+  font-size: 10px;
+  line-height: 13px;
+  font-weight: 700;
+}
+
+/* 파급 배지 — 기준 행에만 보인다 */
+.dg-rl-chain {
+  display: none;
+  grid-column: 1 / -1;
+  align-items: baseline;
+  gap: 6px;
+  margin: -2px 10px 8px;
+  padding: 4px 8px;
+  border-radius: var(--dg-r-sm, 4px);
+  background: var(--dg-warn-soft, Canvas);
+  color: var(--dg-warn, CanvasText);
+  font-size: var(--dg-fs-sm, 12px);
+}
+
+.dg-rl-anchor .dg-rl-chain {
+  display: flex;
+}
+
+.dg-rl-chain-mark {
+  font-weight: 700;
+}
+
+/* 사용자 직접 편집 자리 */
+.dg-rl-gap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-top: 1px dashed var(--dg-warn-border, CanvasText);
+  background: var(--dg-warn-soft, Canvas);
+  color: var(--dg-warn, CanvasText);
+  font-size: var(--dg-fs-sm, 12px);
+  transition: opacity var(--dg-dur, 180ms) var(--dg-ease, ease);
+}
+
+.dg-rl-gap-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--dg-warn, CanvasText);
+  flex-shrink: 0;
+}
+
+/* 인라인 확인 */
+.dg-rl-confirm {
+  grid-column: 1 / -1;
+  margin: 0 10px 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--dg-bad-border, CanvasText);
+  border-radius: var(--dg-r-md, 8px);
+  background: var(--dg-bad-soft, Canvas);
+}
+
+.dg-rl > .dg-rl-confirm {
+  margin: 0;
+}
+
+.dg-rl-confirm-msg {
+  margin: 0 0 8px;
+  color: var(--dg-text, CanvasText);
+  line-height: var(--dg-lh-ui, 1.5);
+}
+
+.dg-rl-confirm-acts {
+  display: flex;
+  gap: 6px;
+}
+
+.dg-rl-confirming .dg-rl-chain {
+  display: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dg-rl-row,
+  .dg-rl-gap {
+    transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .dg-rl-current {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+  .dg-rl-dim {
+    opacity: 0.6;
+  }
+}

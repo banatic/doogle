@@ -11,13 +11,16 @@
  * (추가) 행 단위 검토: 스테이징 쓰기마다 직전 스냅샷도 남긴다(첫 쓰기의 것은 기준점과 같다).
  *  - accept(id): 행에 kept 표시. 맨 앞부터 연속된 kept 행은 확정하고 기준점을 다음 행 직전으로 옮긴다.
  *  - rejectFrom(id): 그 행 직전 스냅샷으로 복원 — 그 행과 뒤 행이 함께 되돌아간다(마지막 행이면 그 행만).
- *    중간 행만 빼고 뒤 행을 다시 적용하는 재생(replay)은 하지 않는다.
+ *    중간 행만 빼고 뒤 행을 다시 적용하는 재생(replay)은 하지 않는다 — 기록된 인자는 좌표·앵커가
+ *    앞 변경에 기대고 있어(문단 번호 이동, 앞 변경이 만든 글자를 찾는 앵커) 다시 적용하면 검토한 것과
+ *    다른 결과가 조용히 나올 수 있다. 대신 검토 UI 가 거절 전에 함께 되돌아갈 행을 본문에 보여 준다.
+ *  - 행 사이·뒤의 사용자 편집은 revision 으로 감지해 userEditsBefore / hasUserEditsSince 로 알린다.
  * 한 문서의 편집 스레드는 하나뿐이다: 다른 스레드의 편집이 검토를 기다리는 동안의 쓰기는
  * DOCUMENT_WRITER_BUSY 로 거절한다(rhwp-x claimDocumentWrite 와 같은 규칙).
  */
 import { Engine } from './engine-adapter.ts';
 import {
-  DoogleToolError, type DoogleAgentDeps, type PendingApi, type PendingChangeEvent, type PendingChangeSet,
+  DoogleToolError, type DoogleAgentDeps, type FormatDiff, type PendingApi, type PendingChangeEvent, type PendingChangeSet,
   type PendingChangeTarget,
 } from './types.ts';
 
@@ -52,6 +55,8 @@ export class PendingStaging implements PendingApi {
   private befores = new Map<string, number>();
   /** beginWrite 가 잡고 record 가 행에 붙일 스냅샷 */
   private pendingBefore: number | null = null;
+  /** beginWrite 시점 revision — 마지막 스테이징 쓰기 뒤와 다르면 그 사이에 사용자 편집이 끼었다 */
+  private writeStartRevision: number | null = null;
 
   constructor(deps: DoogleAgentDeps, hooks: StagingHooks) {
     this.deps = deps;
@@ -68,6 +73,7 @@ export class PendingStaging implements PendingApi {
   /** 스테이징 쓰기 직전 — 첫 쓰기면 기준점 스냅샷을 남긴다. */
   beginWrite(threadId: string, engine: Engine): void {
     this.claim(threadId);
+    this.writeStartRevision = this.hooks.revision();
     if (this.baseline === null) {
       this.baseline = engine.saveSnapshot();
       this.owner = threadId;
@@ -79,6 +85,7 @@ export class PendingStaging implements PendingApi {
 
   /** 쓰기가 실패해 문서가 그대로면 — 대기 중 편집이 없으면 기준점을 버린다. */
   abortWrite(engine: Engine): void {
+    this.writeStartRevision = null;
     if (this.pendingBefore !== null && this.pendingBefore !== this.baseline) engine.discardSnapshot(this.pendingBefore);
     this.pendingBefore = null;
     if (this.entries.length === 0 && this.baseline !== null) {
@@ -90,8 +97,11 @@ export class PendingStaging implements PendingApi {
 
   record(
     threadId: string, tool: string, summary: string, pages: number[], revision: number,
-    extra?: { targets?: PendingChangeTarget[]; args?: Record<string, unknown> },
+    extra?: { targets?: PendingChangeTarget[]; args?: Record<string, unknown>; formats?: FormatDiff[] },
   ): PendingChangeSet {
+    const userEditsBefore = this.entries.length > 0 && this.writeStartRevision !== null
+      && this.writeStartRevision !== this.lastStagedRevision;
+    this.writeStartRevision = null;
     const entry: PendingChangeSet = {
       id: `cs${++this.seq}`,
       threadId,
@@ -102,6 +112,8 @@ export class PendingStaging implements PendingApi {
       createdAt: this.deps.now?.() ?? Date.now(),
       ...(extra?.targets ? { targets: extra.targets } : {}),
       ...(extra?.args ? { args: extra.args } : {}),
+      ...(extra?.formats && extra.formats.length > 0 ? { formats: extra.formats } : {}),
+      ...(userEditsBefore ? { userEditsBefore: true } : {}),
     };
     const before = this.pendingBefore ?? (this.entries.length === 0 ? this.baseline : null);
     if (before !== null) this.befores.set(entry.id, before);
@@ -117,7 +129,21 @@ export class PendingStaging implements PendingApi {
       ...e,
       pages: [...e.pages],
       ...(e.targets ? { targets: e.targets.map((t) => ({ ...t })) } : {}),
+      ...(e.formats ? { formats: e.formats.map((f) => ({ ...f, keys: [...f.keys], before: { ...f.before }, after: { ...f.after } })) } : {}),
     }));
+  }
+
+  /**
+   * 이 행 뒤로 사용자 편집이 끼었는가 — rejectFrom(id) 가 그 편집까지 되돌리는가.
+   * 뒤 행의 userEditsBefore 또는 마지막 스테이징 쓰기 뒤의 revision 이동. id 가 없으면 rejectAll 기준
+   * (첫 행 앞의 편집은 기준점 스냅샷에 들어 있어 되돌아가지 않는다).
+   */
+  hasUserEditsSince(id?: string): boolean {
+    if (this.entries.length === 0) return false;
+    const index = id === undefined ? 0 : this.entries.findIndex((e) => e.id === id);
+    if (index < 0) return false;
+    if (this.hooks.revision() !== this.lastStagedRevision) return true;
+    return this.entries.slice(index + 1).some((e) => e.userEditsBefore === true);
   }
 
   hasPending(threadId?: string): boolean {
@@ -145,7 +171,7 @@ export class PendingStaging implements PendingApi {
     if (!this.hasPending(threadId) || !this.covers(threadId)) return { rejected: 0, userEditsReverted: false };
     const rejected = this.entries;
     const baseline = this.baseline;
-    const userEditsReverted = this.hooks.revision() !== this.lastStagedRevision;
+    const userEditsReverted = this.hasUserEditsSince();
     if (baseline === null) {
       throw new DoogleToolError('STAGING_BASELINE_LOST', 'The pre-edit snapshot is missing; use undo to revert the staged edits.');
     }
@@ -200,7 +226,7 @@ export class PendingStaging implements PendingApi {
     if (snapshot === undefined) {
       throw new DoogleToolError('STAGING_BASELINE_LOST', 'The snapshot before this edit is missing; use undo to revert it.');
     }
-    const userEditsReverted = this.hooks.revision() !== this.lastStagedRevision;
+    const userEditsReverted = this.hasUserEditsSince(id);
     const revBefore = this.hooks.revision();
     try {
       this.deps.transaction('doogle:reject-staged-edit', (doc) => {
@@ -270,6 +296,7 @@ export class PendingStaging implements PendingApi {
     this.baseline = null;
     this.befores.clear();
     this.pendingBefore = null;
+    this.writeStartRevision = null;
     this.owner = null;
     if (had.length > 0) this.emit({ kind: 'rejected', threadId: null, changeSets: had });
   }

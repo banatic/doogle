@@ -20,6 +20,10 @@ export const DOOGLE_PLUGIN_ID = 'doogle';
 export const DOOGLE_PANEL_ID = 'agent';
 export const DOOGLE_TOGGLE_COMMAND = 'ext:doogle.toggle-panel';
 export const DOOGLE_OPEN_COMMAND = 'ext:doogle.open-native';
+/** 사이드바 열림 상태 기억 ('1' | '0'). 없으면 첫 실행 — 그때만 자동으로 연다 (UI_AUDIT §3.5). */
+const STORE_PANEL = 'doogle.panel';
+/** 에이전트 서비스 연결 상태를 셸(상태 표시줄 등)에 알리는 window 이벤트 */
+export const HUB_STATE_EVENT = 'doogle:hub-state';
 
 /** 두글 데스크탑(Tauri) 안이거나 URL 에 `?doogle=1` 이 있으면 두글 모드다. */
 export function isDoogleMode(): boolean {
@@ -90,9 +94,22 @@ export async function initDoogle(host: PluginHost): Promise<PluginSurface> {
     },
   });
 
+  const openDocument = () => {
+    const id = desk.isDesk() ? DOOGLE_OPEN_COMMAND : 'file:open';
+    try {
+      host.automation.execute(id, {}, { allowDialog: true });
+    } catch (error) {
+      console.error('[doogle] 열기를 실행하지 못했습니다', error);
+    }
+  };
+
   sidebar = new DoogleSidebar({
     hub,
     pending: runtime?.pending ?? null,
+    getDocContext: () => docContext(host),
+    openDocument,
+    isDesk: desk.isDesk(),
+    openHubLog: () => desk.openHubLog(),
     getContext: () => {
       const selection = host.getSelectionText();
       const documentName = currentDocumentName();
@@ -112,7 +129,10 @@ export async function initDoogle(host: PluginHost): Promise<PluginSurface> {
     defaultWidth: 420,
     mount: (container) => sidebar.mount(container),
     unmount: () => sidebar.dispose(),
-    onVisibilityChange: (open) => sidebar.setVisible(open),
+    onVisibilityChange: (open) => {
+      storeSet(STORE_PANEL, open ? '1' : '0');
+      sidebar.setVisible(open);
+    },
   });
   host.automation.registerCommand({
     id: DOOGLE_TOGGLE_COMMAND,
@@ -122,6 +142,25 @@ export async function initDoogle(host: PluginHost): Promise<PluginSurface> {
   host.automation.addMenuItem({ menuId: 'tool', commandId: DOOGLE_TOGGLE_COMMAND, position: 'top' });
 
   const offs: Array<() => void> = [];
+  // 상황별 제안 칩: 문서·선택·커서가 바뀌면 사이드바가 (빈 대화일 때만) 다시 고른다
+  fieldsCache = null;
+  const refreshContext = () => sidebar.refreshContext();
+  offs.push(host.onDocumentSwap(() => { fieldsCache = null; refreshContext(); }));
+  for (const name of ['command-state-changed', 'cursor-format-changed', 'field-info-changed']) {
+    offs.push(host.events.on(name, refreshContext));
+  }
+  offs.push(host.events.on('document-changed', () => { fieldsCache = null; refreshContext(); }));
+  // 셸이 내는 문서 상태(dirty·형식·경로) — 문서가 바뀌었을 수 있다
+  window.addEventListener('doogle:doc-state', refreshContext);
+  offs.push(() => window.removeEventListener('doogle:doc-state', refreshContext));
+  // 연결 상태를 셸 표면(상태 표시줄 점 등)에 알린다 — 상태는 한 곳(HubClient)에서 여러 표면으로
+  offs.push(hub.onState((state, detail) => {
+    window.dispatchEvent(new CustomEvent(HUB_STATE_EVENT, { detail: { state, detail } }));
+  }));
+  // 문서가 없을 때의 캔버스 빈 상태
+  const { mountEmptyCanvas } = await import('./ui/empty-canvas.ts');
+  offs.push(mountEmptyCanvas(host, { openDocument }));
+
   if (desk.isDesk()) {
     host.automation.registerCommand({
       id: DOOGLE_OPEN_COMMAND,
@@ -133,7 +172,9 @@ export async function initDoogle(host: PluginHost): Promise<PluginSurface> {
       },
     });
     host.automation.addMenuItem({ menuId: 'file', commandId: DOOGLE_OPEN_COMMAND, position: 'top' });
+    // hub.rs: ready · exited{restartInMs} · failed{message} — 연결 카드가 원인·카운트다운을 보인다
     offs.push(await desk.onHubEvent((event) => {
+      sidebar.noteDeskHubEvent(event);
       if (event?.state === 'ready') hub.reconnectNow();
     }));
     const drainOpens = async () => {
@@ -147,7 +188,9 @@ export async function initDoogle(host: PluginHost): Promise<PluginSurface> {
   }
 
   hub.start();
-  host.ui.toggleSidePanel(DOOGLE_PANEL_ID, true);
+  // 첫 실행에만 자동으로 열고, 이후에는 마지막 열림 상태를 따른다
+  const remembered = storeGet(STORE_PANEL);
+  if (remembered === null || remembered === '1') host.ui.toggleSidePanel(DOOGLE_PANEL_ID, true);
 
   activeDispose = () => {
     for (const off of offs) off();
@@ -165,6 +208,45 @@ export async function initDoogle(host: PluginHost): Promise<PluginSurface> {
   };
 }
 
+function storeGet(key: string): string | null {
+  try { return localStorage.getItem(key); } catch { return null; }
+}
+
+function storeSet(key: string, value: string): void {
+  try { localStorage.setItem(key, value); } catch { /* 무시 */ }
+}
+
+/** 누름틀 유무 — 문서가 바뀔 때만 다시 센다 */
+let fieldsCache: boolean | null = null;
+
+function hasFields(host: PluginHost): boolean {
+  if (fieldsCache !== null) return fieldsCache;
+  try {
+    fieldsCache = host.read((doc) => {
+      const raw = (doc as unknown as { getFieldList?: () => unknown }).getFieldList?.();
+      const list = typeof raw === 'string' ? (raw ? JSON.parse(raw) : []) : raw;
+      return Array.isArray(list) && list.length > 0;
+    });
+  } catch {
+    fieldsCache = false;
+  }
+  return fieldsCache;
+}
+
+/** 상황별 제안 칩의 입력 — automation 게이트와 같은 EditorContext 를 읽는다 */
+function docContext(host: PluginHost): { hasDocument: boolean; hasSelection: boolean; inTable: boolean; hasFields: boolean } {
+  const hasDocument = host.borrowDocument() !== null;
+  if (!hasDocument) return { hasDocument, hasSelection: false, inTable: false, hasFields: false };
+  let ctx: { hasSelection?: boolean; inTable?: boolean } = {};
+  try { ctx = host.automation.getContext(); } catch { /* 화면 없는 구성 */ }
+  return {
+    hasDocument,
+    hasSelection: !!ctx.hasSelection && !!host.getSelectionText()?.text,
+    inTable: !!ctx.inTable,
+    hasFields: hasFields(host),
+  };
+}
+
 function currentDocumentName(): string {
   const title = document.title.replace(/ - rhwp-studio$/, '');
   return title === 'rhwp-studio' ? '' : title;
@@ -178,6 +260,8 @@ async function openPath(
   try {
     const bytes = await desk.readFile(path);
     await host.loadDocument(bytes, desk.baseName(path));
+    // shell 의 제목 표시줄·최근 문서 카드·「폴더에서 보기」가 경로를 알 수 있게 알린다.
+    window.dispatchEvent(new CustomEvent('doogle:doc-path', { detail: { path } }));
   } catch (error) {
     console.error('[doogle] 문서를 열지 못했습니다', path, error);
   }

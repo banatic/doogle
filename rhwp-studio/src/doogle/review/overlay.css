@@ -1,4 +1,6 @@
-/* 두글 문서 위 검토 막 — 유리 팝오버·하단 알약. 토큰은 doogle/theme/tokens.css (없으면 기본값). */
+/* 두글 문서 위 검토 막 — 유리 팝오버·하단 알약·거터.
+   색은 --dg-* 토큰만 (doogle/theme/tokens.css). 토큰이 없을 때의 대체값은 시스템 색이다.
+   막은 흰 종이 위에 뜨므로 다크 모드에서도 토큰(유리·accent)이 대비를 맞춘다. */
 
 .dg-glass {
   position: fixed;
@@ -7,27 +9,28 @@
   align-items: center;
   gap: 2px;
   padding: 5px;
-  background: var(--dg-glass-bg, rgba(255, 255, 255, 0.58));
+  background: var(--dg-glass-bg, Canvas);
   -webkit-backdrop-filter: blur(var(--dg-glass-blur, 16px)) saturate(180%);
   backdrop-filter: blur(var(--dg-glass-blur, 16px)) saturate(180%);
-  border: 1px solid var(--dg-glass-border, rgba(255, 255, 255, 0.75));
-  box-shadow: var(--dg-glass-shadow, 0 10px 30px rgba(15, 23, 42, 0.16), 0 1px 2px rgba(15, 23, 42, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.9));
-  font-family: var(--dg-font-ui, 'Noto Sans KR', system-ui, sans-serif);
-  font-size: 12px;
-  color: var(--dg-text, #1f2937);
+  border: 1px solid var(--dg-glass-border, ButtonBorder);
+  box-shadow: var(--dg-glass-shadow, none);
+  font-family: var(--dg-font-ui, system-ui, sans-serif);
+  font-size: var(--dg-fs-sm, 12px);
+  color: var(--dg-text, CanvasText);
   box-sizing: border-box;
 }
 
-.dg-glass[hidden] {
+.dg-glass[hidden],
+.dg-review-gutter[hidden] {
   display: none;
 }
 
 @media (prefers-reduced-transparency: reduce) {
   .dg-glass {
-    background: #ffffff;
+    background: var(--dg-surface, Canvas);
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
-    border-color: var(--dg-border, #dde2ea);
+    border-color: var(--dg-border, ButtonBorder);
   }
 }
 
@@ -35,11 +38,16 @@
   width: 1px;
   height: 16px;
   margin: 0 4px;
-  background: rgba(15, 23, 42, 0.15);
+  background: var(--dg-ink-12, GrayText);
   flex-shrink: 0;
 }
 
-.dg-glass button {
+.dg-glass-sep[hidden] {
+  display: none;
+}
+
+.dg-glass button,
+.dg-review-gutter button {
   font: inherit;
   cursor: pointer;
   border: 0;
@@ -47,8 +55,9 @@
   color: inherit;
 }
 
-.dg-glass button:focus-visible {
-  outline: 2px solid var(--dg-accent, #1f5fbf);
+.dg-glass button:focus-visible,
+.dg-review-gutter button:focus-visible {
+  outline: 2px solid var(--dg-focus, Highlight);
   outline-offset: 1px;
 }
 
@@ -57,12 +66,95 @@
   cursor: default;
 }
 
-/* 팝오버 */
+/* ─── 팝오버 ─────────────────────────────────── */
 .dg-review-pop {
-  border-radius: 14px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  max-width: min(440px, 80vw);
+  border-radius: var(--dg-r-lg, 14px);
+}
+
+.dg-pop-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.dg-pop-row[hidden],
+.dg-pop-confirm[hidden] {
+  display: none;
+}
+
+/* 전·후 한 줄 (누르면 펼침) */
+.dg-glass .dg-pop-diff {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 6px;
+  padding: 4px 8px 2px;
+  font-size: var(--dg-fs-md, 13px);
+  line-height: var(--dg-lh-tight, 1.35);
+  text-align: left;
+  max-height: 1.6em;
+  overflow: hidden;
+  white-space: nowrap;
+  border-radius: var(--dg-r-md, 8px);
+}
+
+.dg-glass .dg-pop-diff:disabled {
+  opacity: 1;
+  cursor: default;
+}
+
+.dg-glass .dg-pop-diff:not(:disabled):hover {
+  background: var(--dg-ink-06, transparent);
+}
+
+.dg-glass .dg-pop-diff.dg-pop-diff-open {
+  max-height: 40vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.dg-pop-diff:not(.dg-pop-diff-open) > del,
+.dg-pop-diff:not(.dg-pop-diff-open) > ins {
+  max-width: 44%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dg-pop-del {
+  color: var(--dg-del, CanvasText);
+  text-decoration: line-through;
+}
+
+.dg-pop-ins {
+  color: var(--dg-ins, CanvasText);
+  text-decoration: underline;
+  text-decoration-color: var(--dg-soft-border, currentColor);
+  text-underline-offset: 2px;
+}
+
+.dg-pop-arrow,
+.dg-pop-sum {
+  color: var(--dg-hint, GrayText);
+}
+
+.dg-pop-chip {
+  padding: 0 6px;
+  border: 1px solid var(--dg-border, ButtonBorder);
+  border-radius: var(--dg-r-sm, 4px);
+  background: var(--dg-surface, Canvas);
+  font-size: var(--dg-fs-sm, 12px);
+  white-space: nowrap;
 }
 
 .dg-pop-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   height: 30px;
   padding: 0 12px;
   border-radius: 9px;
@@ -70,30 +162,64 @@
   white-space: nowrap;
 }
 
-.dg-pop-btn:hover {
-  background: rgba(15, 23, 42, 0.06);
+.dg-pop-btn:hover:not(:disabled) {
+  background: var(--dg-ink-06, ButtonFace);
 }
 
-.dg-pop-primary {
-  background: var(--dg-accent, #1f5fbf) !important;
-  color: #fff !important;
+.dg-glass .dg-pop-primary {
+  background: var(--dg-accent, Highlight);
+  color: var(--dg-on-accent, HighlightText);
   font-weight: 600;
 }
 
-.dg-pop-primary:hover {
+.dg-glass .dg-pop-primary:hover:not(:disabled) {
+  background: var(--dg-accent-hover, Highlight);
+}
+
+.dg-glass .dg-pop-danger {
+  background: var(--dg-bad, CanvasText);
+  color: var(--dg-on-accent, Canvas);
+  font-weight: 600;
+}
+
+.dg-glass .dg-pop-danger:hover:not(:disabled) {
   filter: brightness(1.08);
 }
 
 .dg-pop-quiet {
   font-weight: 400;
-  color: var(--dg-text2, #374151);
+  color: var(--dg-text2, CanvasText);
 }
 
-/* 알약 */
+.dg-pop-kbd {
+  font-family: var(--dg-font-mono, monospace);
+  font-size: var(--dg-fs-kbd, 11.5px);
+  font-weight: 400;
+  opacity: 0.75;
+}
+
+/* 인라인 거절 확인 */
+.dg-pop-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 6px 2px;
+  border-top: 1px solid var(--dg-bad-border, CanvasText);
+}
+
+.dg-pop-confirm-msg {
+  margin: 0;
+  padding: 0 4px;
+  max-width: 380px;
+  color: var(--dg-bad, CanvasText);
+  font-size: var(--dg-fs-md, 13px);
+  line-height: var(--dg-lh-ui, 1.5);
+}
+
+/* ─── 알약 ───────────────────────────────────── */
 .dg-review-pill {
   border-radius: 999px;
   transform: translate(-50%, -100%);
-  background: var(--dg-glass-bg, rgba(255, 255, 255, 0.55));
 }
 
 .dg-pill-btn {
@@ -106,11 +232,11 @@
 }
 
 .dg-pill-btn:hover:not(:disabled) {
-  background: rgba(15, 23, 42, 0.07);
+  background: var(--dg-ink-06, ButtonFace);
 }
 
-.dg-pill-zoom {
-  font-size: 16px !important;
+.dg-glass .dg-pill-zoom {
+  font-size: 16px;
 }
 
 .dg-pill-count {
@@ -120,6 +246,19 @@
   white-space: nowrap;
 }
 
+.dg-pill-warn {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--dg-warn-soft, Canvas);
+  color: var(--dg-warn, CanvasText);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.dg-pill-warn[hidden] {
+  display: none;
+}
+
 .dg-pill-zoomval {
   min-width: 38px;
   padding: 0 2px;
@@ -127,8 +266,67 @@
   font-variant-numeric: tabular-nums;
 }
 
-@media (prefers-reduced-transparency: reduce) {
-  .dg-review-pill {
-    background: #ffffff;
+/* ─── 거터 ───────────────────────────────────── */
+.dg-review-gutter {
+  position: fixed;
+  z-index: 39;
+  width: 6px;
+  border-radius: 3px;
+  background: var(--dg-ink-06, transparent);
+  pointer-events: none;
+}
+
+.dg-review-gutter .dg-gutter-mark {
+  position: absolute;
+  left: -3px;
+  width: 12px;
+  height: 6px;
+  margin-top: -3px;
+  padding: 0;
+  border-radius: 3px;
+  background: var(--dg-warn, GrayText);
+  pointer-events: auto;
+  transition: transform var(--dg-dur-fast, 120ms) var(--dg-ease, ease);
+}
+
+.dg-review-gutter .dg-gutter-mark:hover {
+  transform: scale(1.3);
+}
+
+.dg-review-gutter .dg-gutter-cur {
+  height: 10px;
+  margin-top: -5px;
+  background: var(--dg-accent, Highlight);
+  box-shadow: 0 0 0 2px var(--dg-surface, Canvas);
+}
+
+/* 거절에 손이 가면 함께 되돌아갈 점 */
+.dg-review-gutter .dg-gutter-cascade {
+  background: var(--dg-bad, CanvasText);
+}
+
+.dg-review-gutter .dg-gutter-cur.dg-gutter-cascade {
+  box-shadow: 0 0 0 2px var(--dg-bad-soft, Canvas);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dg-review-gutter .dg-gutter-mark {
+    transition: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .dg-glass,
+  .dg-review-gutter {
+    outline: 1px solid CanvasText;
+  }
+  .dg-review-gutter .dg-gutter-mark {
+    background: CanvasText;
+    forced-color-adjust: none;
+  }
+  .dg-glass .dg-pop-primary,
+  .dg-review-gutter .dg-gutter-cur {
+    background: Highlight;
+    color: HighlightText;
   }
 }

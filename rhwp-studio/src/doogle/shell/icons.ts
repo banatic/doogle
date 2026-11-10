@@ -87,12 +87,33 @@ const P: Record<string, string> = {
   sum: '<path d="M17 5H7l6 7-6 7h10"/>',
   ratio: '<path d="M3 12h4M17 12h4M5 10l-2 2 2 2M19 10l2 2-2 2"/><path d="M9 17l3-10 3 10M10 14h4"/>',
   rotate: '<path d="M20 12a8 8 0 11-2.3-5.7M20 4v5h-5"/>',
+  download: '<path d="M12 4v11M7 10l5 5 5-5"/><path d="M5 19h14"/>',
+  saveAs: '<path d="M5 3h9l3 3v6"/><path d="M5 3v18h7M8 3v5h6V3"/><path d="M15 21l1-3 4.5-4.5a1.4 1.4 0 012 2L18 20z"/>',
+  pdf: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M8.5 17v-4h1.5a1.2 1.2 0 010 2.4H8.5M13 13v4h1a2 2 0 000-4z"/>',
+  fileHwp: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M9 12v5M12 12v5M9 14.5h3M14.5 12v5"/>',
+  html: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M10 12l-2 2.5 2 2.5M14 12l2 2.5-2 2.5"/>',
+  word: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4"/><path d="M8.5 12l1.2 5 1.3-3.5 1.3 3.5 1.2-5"/>',
+  refresh: '<path d="M20 11a8 8 0 10-2.3 6.3M20 4v7h-7"/>',
+  pin: '<path d="M9 3h6l-1 6 3 3v2H7v-2l3-3z"/><path d="M12 14v7"/>',
+  folder: '<path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2z"/><path d="M3 10h18"/>',
+  check: '<path d="M5 12l5 5 9-10"/>',
+  checkAll: '<path d="M2 12l5 5 9-10M12 17l1 0 9-10"/>',
+  xAll: '<path d="M6 6l12 12M18 6L6 18"/>',
+  chevronUp: '<path d="M6 15l6-6 6 6"/>',
+  prev: '<path d="M12 19V5M6 11l6-6 6 6"/>',
+  next: '<path d="M12 5v14M6 13l6 6 6-6"/>',
+  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+  moon: '<path d="M20 14.5A8 8 0 019.5 4 8 8 0 1020 14.5z"/>',
+  monitor: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>',
+  ribbon: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 13h8"/>',
+  ribbonSimple: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M3 13h18"/>',
 };
 
 export type IconName = keyof typeof P | string;
 
 export function iconSvg(name: IconName, size = 16, strokeWidth = 1.8, color?: string): string {
   const body = P[name] ?? P.more;
-  const stroke = color ?? 'currentColor';
-  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${stroke}" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${body}</svg>`;
+  // var() 는 SVG 표현 속성에서 풀리지 않으므로 색은 style 의 color 로 주고 선은 currentColor 를 따른다.
+  const style = color ? ` style="color:${color}"` : '';
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor"${style} stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${body}</svg>`;
 }

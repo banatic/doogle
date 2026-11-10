@@ -163,6 +163,17 @@ export interface PendingChangeTarget {
   wholeSection?: boolean;
 }
 
+/**
+ * (추가) 서식 변경 한 건의 전·후 — 바뀐 속성만 담는다(엔진 getChar/ParaPropertiesAt 단위 그대로).
+ * keys 는 도구가 요청한 속성 이름(applyChar/ParaFormat props 키).
+ */
+export interface FormatDiff {
+  kind: 'char' | 'para';
+  keys: string[];
+  before: Record<string, unknown>;
+  after: Record<string, unknown>;
+}
+
 export interface PendingChangeSet {
   id: string;
   threadId: string;
@@ -178,6 +189,13 @@ export interface PendingChangeSet {
   args?: Record<string, unknown>;
   /** (추가) 행 단위로 적용(✓)했지만 앞선 행이 아직 대기 중이라 목록에 남아 있다 */
   kept?: boolean;
+  /** (추가) 서식 도구의 전·후 스냅샷 (처음 몇 곳만) */
+  formats?: FormatDiff[];
+  /**
+   * (추가) 바로 앞 행과 이 행 사이에 사용자가 문서를 직접 고쳤다 (revision 이 실행기 밖에서 움직였다).
+   * 이 행을 거절하면 그 편집은 남고(이 행 직전 스냅샷에 들어 있다), 앞 행을 거절하면 함께 되돌아간다.
+   */
+  userEditsBefore?: boolean;
 }
 
 export interface PendingChangeEvent {
@@ -202,6 +220,13 @@ export interface PendingApi {
    * 돌려주는 rejected 는 함께 되돌아간 행 수.
    */
   rejectFrom?(id: string): { rejected: number; userEditsReverted: boolean };
+  /**
+   * (추가) 이 행이 기록된 뒤 사용자가 직접 고친 내용이 있는가 — 곧 rejectFrom(id) 가 그 편집도 되돌리는가.
+   * id 가 없으면 대기 중 어느 시점에든 사용자 편집이 끼었는가(rejectAll 이 되돌리는가).
+   */
+  hasUserEditsSince?(id?: string): boolean;
+  /** (추가) 지금 문서의 쪽 수 (검토 거터가 변경 위치를 비율로 찍는다) */
+  pageCount?(): number;
 }
 
 export interface DoogleAgentRuntime {

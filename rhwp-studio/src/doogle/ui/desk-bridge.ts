@@ -63,6 +63,14 @@ export function onHubEvent(cb: (event: DeskHubEvent) => void): Promise<() => voi
   return listen<DeskHubEvent>('doogle://hub', cb);
 }
 
+/**
+ * 에이전트 서비스 로그(`hub.rs` 가 쓰는 hub.log)를 시스템 기본 앱으로 연다.
+ * doogle-desk 의 `open_hub_log` 명령이 필요하다 — 없으면 reject 되고, 화면은 로그 경로 복사로 물러선다.
+ */
+export function openHubLog(): Promise<void> {
+  return invoke<void>('open_hub_log');
+}
+
 export async function readFile(path: string): Promise<Uint8Array> {
   const data = await invoke<ArrayBuffer | number[]>('open_file', { path });
   return data instanceof ArrayBuffer ? new Uint8Array(data) : Uint8Array.from(data);

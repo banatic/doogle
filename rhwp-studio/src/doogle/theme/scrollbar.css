@@ -1,16 +1,16 @@
 /* ================================================================
-   두글 스크롤바 — 시안 F 의 밝은 톤. `:root[data-doogle]` 에서만 살아 있다.
+   두글 스크롤바 — 시안 F. 색은 --dg-scroll-thumb* 토큰(라이트: 밝은 회색, 다크: 어두운 남회색). `:root[data-doogle]` 에서만 살아 있다.
    ----------------------------------------------------------------
    Chromium(WebView2)·WebKit(WKWebView/WebKitGTK) 은 ::-webkit-scrollbar 로 칠한다.
    주의: Chromium 121+ 는 요소에 `scrollbar-color`/`scrollbar-width` 가 (상속 포함) 걸리면
    ::-webkit-scrollbar 를 통째로 무시한다. `scrollbar-color` 는 상속되므로 root 에 걸면 모든 곳의
    둥근 썸·hover 가 사라진다. 그래서 표준 속성은 ::-webkit-scrollbar 를 모르는 엔진(Firefox)에만 준다.
-   어두운 스크롤바의 원인이던 color-scheme(theme.ts 인라인 `only dark`)은 tokens.css 에서 light 로 고정한다.
+   color-scheme 은 theme.ts 가 정하는 대로 둔다 — 썸·트랙 색은 아래 규칙이 토큰으로 직접 칠한다.
    ================================================================ */
 
 @supports not selector(::-webkit-scrollbar) {
   :root[data-doogle] {
-    scrollbar-color: #C5CCD6 transparent;
+    scrollbar-color: var(--dg-scroll-thumb) transparent;
     scrollbar-width: thin;
   }
 }
@@ -29,7 +29,7 @@
 
 :root[data-doogle]::-webkit-scrollbar-thumb,
 :root[data-doogle] ::-webkit-scrollbar-thumb {
-  background-color: #CBD5E1;
+  background-color: var(--dg-scroll-thumb);
   border: 2px solid transparent;
   border-radius: 6px;
   background-clip: padding-box;
@@ -40,7 +40,7 @@
 :root[data-doogle]::-webkit-scrollbar-thumb:hover,
 :root[data-doogle] ::-webkit-scrollbar-thumb:hover,
 :root[data-doogle] ::-webkit-scrollbar-thumb:active {
-  background-color: #94A3B8;
+  background-color: var(--dg-scroll-thumb-hover);
 }
 
 :root[data-doogle]::-webkit-scrollbar-button,
@@ -55,14 +55,14 @@
   background: transparent;
 }
 
-/* 문서 캔버스 스크롤러(캔버스와 사이드바 사이의 세로 막대): 밝은 크롬 바탕 위에 둔다. */
+/* 문서 캔버스 스크롤러(캔버스와 사이드바 사이의 세로 막대): 크롬 바탕 위에 둔다. */
 :root[data-doogle] #scroll-container::-webkit-scrollbar-track,
 :root[data-doogle] #scroll-container::-webkit-scrollbar-corner {
-  background: #F8FAFC;
+  background: var(--dg-chrome);
 }
 :root[data-doogle] #scroll-container::-webkit-scrollbar-track:vertical {
-  border-left: 1px solid var(--dg-divider, #E5E7EB);
+  border-left: 1px solid var(--dg-divider);
 }
 :root[data-doogle] #scroll-container::-webkit-scrollbar-track:horizontal {
-  border-top: 1px solid var(--dg-divider, #E5E7EB);
+  border-top: 1px solid var(--dg-divider);
 }

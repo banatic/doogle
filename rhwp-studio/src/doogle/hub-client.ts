@@ -132,6 +132,8 @@ export class HubClient {
   private hubVersion = '';
   private retryMs = MIN_RETRY_MS;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
+  /** 다음 자동 재연결 시각(ms, Date.now 기준). 예약이 없으면 0 */
+  private retryAtValue = 0;
   private stopped = false;
   private connecting = false;
   private readonly listeners = new Map<string, Set<Listener>>();
@@ -158,6 +160,11 @@ export class HubClient {
     return this.hubVersion;
   }
 
+  /** 다음 자동 재연결 시각(ms). 예약된 재시도가 없으면 0 — 화면의 "n초 뒤 다시 연결" 카운트다운용. */
+  get nextRetryAt(): number {
+    return this.retryTimer ? this.retryAtValue : 0;
+  }
+
   start(): void {
     this.stopped = false;
     void this.connect();
@@ -178,6 +185,7 @@ export class HubClient {
     if (this.stopped) return;
     if (this.retryTimer) clearTimeout(this.retryTimer);
     this.retryTimer = null;
+    this.retryAtValue = 0;
     this.retryMs = MIN_RETRY_MS;
     if (this.stateValue === 'open') {
       // 열린 소켓이 이미 죽은 hub 를 가리킬 수 있다. 닫으면 onclose 가 재연결한다.
@@ -231,7 +239,7 @@ export class HubClient {
       const timer = setTimeout(() => {
         off();
         offError();
-        reject(new HubRequestError('TIMEOUT', `hub 가 응답하지 않습니다 (${message.type})`));
+        reject(new HubRequestError('TIMEOUT', `에이전트 서비스가 응답하지 않습니다 (${message.type})`));
       }, options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
       const finish = () => {
         clearTimeout(timer);
@@ -254,7 +262,7 @@ export class HubClient {
       });
       if (!this.send({ ...message, reqId })) {
         finish();
-        reject(new HubRequestError('NOT_CONNECTED', 'agent hub 에 연결되어 있지 않습니다'));
+        reject(new HubRequestError('NOT_CONNECTED', '에이전트 서비스에 연결되어 있지 않습니다'));
       }
     });
   }
@@ -345,14 +353,17 @@ export class HubClient {
 
   private scheduleRetry(detail: string, unavailable = false): void {
     if (this.stopped) return;
-    this.setState(unavailable ? 'unavailable' : 'retrying', detail);
     if (this.retryTimer) clearTimeout(this.retryTimer);
     const delay = this.retryMs;
     this.retryMs = Math.min(this.retryMs * 2, MAX_RETRY_MS);
+    this.retryAtValue = Date.now() + delay;
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null;
+      this.retryAtValue = 0;
       void this.connect();
     }, delay);
+    // 상태 알림은 예약 뒤에 — 구독자가 nextRetryAt 을 바로 읽을 수 있게.
+    this.setState(unavailable ? 'unavailable' : 'retrying', detail);
   }
 
   private async connect(): Promise<void> {
@@ -370,7 +381,7 @@ export class HubClient {
     }
     if (!endpoint) {
       this.connecting = false;
-      this.scheduleRetry('agent hub 연결 정보가 없습니다', true);
+      this.scheduleRetry('에이전트 서비스 연결 정보가 없습니다', true);
       return;
     }
     const url = `ws://127.0.0.1:${endpoint.port}/studio?token=${encodeURIComponent(endpoint.token)}`;
@@ -404,7 +415,7 @@ export class HubClient {
       if (this.socket !== socket) return;
       this.socket = null;
       if (this.stopped) return;
-      const reason = event.code === 1008 || event.code === 4401 ? '인증 실패 — 토큰을 다시 받습니다' : 'agent hub 연결이 끊겼습니다';
+      const reason = event.code === 1008 || event.code === 4401 ? '인증 실패 — 토큰을 다시 받습니다' : '에이전트 서비스 연결이 끊겼습니다';
       this.scheduleRetry(reason);
     };
     socket.onerror = () => {

@@ -8,6 +8,7 @@
  * runtime.pending.onChange((e) => …); runtime.pending.acceptAll(threadId); runtime.pending.rejectAll(threadId);
  * ```
  */
+import { Engine } from './engine-adapter.ts';
 import { DoogleToolExecutor } from './executor.ts';
 import type { DoogleAgentDeps, DoogleAgentRuntime, ToolContext, ToolResult } from './types.ts';
 
@@ -34,6 +35,12 @@ export function createDoogleAgentRuntime(deps: DoogleAgentDeps): DoogleAgentRunt
       hasPending: (threadId) => executor.staging.hasPending(threadId),
       accept: (id) => executor.staging.accept(id),
       rejectFrom: (id) => executor.staging.rejectFrom(id),
+      hasUserEditsSince: (id) => executor.staging.hasUserEditsSince(id),
+      pageCount: () => {
+        const doc = deps.getDocument();
+        if (!doc) return 0;
+        try { return new Engine(doc).pageCount(); } catch { return 0; }
+      },
     },
     revision: () => executor.revision,
     dispose: () => executor.dispose(),

@@ -6,6 +6,11 @@
  *
  *  - `mountShell()`      : 두글 모드 판정 직후(모듈 로드 시) 한 번. DOM 을 짓고 data-doogle 을 찍는다.
  *  - `attachShellHost()` : 플러그인 활성화 때. 캐럿·이벤트·사이드바 상태처럼 host 가 필요한 것을 잇는다.
+ *
+ * 다른 모듈이 쓸 수 있는 상태(window 이벤트로도 나간다):
+ *  - `doogle:doc-state`   {dirty, format, path, name, savedAt, hasDocument} — doc-state.ts
+ *  - `doogle:agent-state` 를 받아 상태 표시줄 점을 칠한다 — status.ts
+ *  - `doogle:doc-path`    {path} 를 받아 제목 막대 경로·폴더에서 보기를 켠다 — doc-state.ts
  */
 import '../theme/tokens.css';
 import '../theme/overlays.css';
@@ -13,18 +18,27 @@ import '../theme/scrollbar.css';
 import './shell.css';
 
 import type { PluginHost } from '@/plugin/types';
-import { Backstage } from './backstage';
+import { Backstage, setBackstageLoader } from './backstage';
 import { iconSvg } from './icons';
 import { Ribbon } from './ribbon';
 import { StatusAddons } from './status';
 import { installWindowControls, markDragRegion } from './window-controls';
-import { installCloseGuard } from './close-guard';
+import { guardedSave, installCloseGuard } from './close-guard';
 import { installUpdater } from './updater';
+import { getDocState, noteDocumentSwap, onDocState, refreshDocState, type DocState } from './doc-state';
+import { openPopupMenu, type PopupEntry } from './popup-menu';
+import { invoke, isDesk } from '../ui/desk-bridge';
 import { commandShortcut, context, isEnabled, openCommandPalette, run, toggleAgentPanel } from './studio';
 
-export { getPendingCount, setPendingCount, PENDING_COUNT_EVENT } from './status';
+export { getPendingCount, setPendingCount, setAgentState, getAgentState, announceStatus, PENDING_COUNT_EVENT, AGENT_STATE_EVENT } from './status';
+export type { AgentConnState } from './status';
+export { getDocState, onDocState, noteDocumentPath, DOC_STATE_EVENT, DOC_PATH_EVENT } from './doc-state';
+export type { DocState } from './doc-state';
+export { confirmLeaveDocument, guardedSave } from './close-guard';
 
 const AGENT_PANEL_ID = 'agent';
+/** "저장됨 ✓" 표시 시간 */
+const SAVED_FLASH_MS = 1500;
 
 interface ShellState {
   ribbon: Ribbon;
@@ -36,12 +50,7 @@ interface ShellState {
 
 let state: ShellState | null = null;
 
-function docName(): string {
-  const raw = document.title.replace(/ - rhwp-studio$/, '').trim();
-  return !raw || raw === 'rhwp-studio' ? '새 문서' : raw;
-}
-
-function quickButton(id: string, label: string, icon: string): HTMLButtonElement {
+function quickButton(id: string, label: string, icon: string, act?: (b: HTMLButtonElement) => void): HTMLButtonElement {
   const b = document.createElement('button');
   b.type = 'button';
   b.className = 'dg-qa';
@@ -50,9 +59,87 @@ function quickButton(id: string, label: string, icon: string): HTMLButtonElement
   const sc = commandShortcut(id);
   b.title = sc ? `${label} (${sc})` : label;
   b.innerHTML = iconSvg(icon, 15, 2);
-  b.addEventListener('mousedown', (e) => { if (e.button === 0) { e.preventDefault(); if (b.getAttribute('aria-disabled') !== 'true') run(id, { anchorEl: b }); } });
-  b.addEventListener('click', (e) => { if (e.detail === 0 && b.getAttribute('aria-disabled') !== 'true') run(id, { anchorEl: b }); });
+  const fire = () => { if (act) act(b); else run(id, { anchorEl: b }); };
+  b.addEventListener('mousedown', (e) => { if (e.button === 0) { e.preventDefault(); if (b.getAttribute('aria-disabled') !== 'true') fire(); } });
+  b.addEventListener('click', (e) => { if (e.detail === 0 && b.getAttribute('aria-disabled') !== 'true') fire(); });
   return b;
+}
+
+/** 제목: [● 이름 HWPX] 단추 + "저장됨 ✓". 누르면 이름 바꾸기·폴더에서 보기·경로 복사 팝업. */
+function buildDocTitle(): HTMLElement {
+  const wrap = document.createElement('div');
+  wrap.className = 'dg-doctitle';
+
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'dg-doctitle-btn';
+  btn.setAttribute('aria-haspopup', 'menu');
+  btn.setAttribute('aria-expanded', 'false');
+  const dot = document.createElement('span');
+  dot.className = 'dg-dirty-dot';
+  dot.setAttribute('aria-hidden', 'true');
+  const name = document.createElement('span');
+  name.className = 'dg-doctitle-name';
+  const badge = document.createElement('span');
+  badge.className = 'dg-format-badge';
+  const app = document.createElement('span');
+  app.className = 'dg-doctitle-app';
+  app.textContent = ' — 두글';
+  btn.append(dot, name, badge, app);
+
+  const saved = document.createElement('span');
+  saved.className = 'dg-saved';
+  saved.setAttribute('aria-hidden', 'true');
+  saved.innerHTML = `저장됨 ${iconSvg('check', 12, 2.4)}`;
+
+  wrap.append(btn, saved);
+
+  btn.addEventListener('mousedown', (e) => e.preventDefault());
+  btn.addEventListener('dblclick', (e) => e.stopPropagation());
+  btn.addEventListener('click', () => {
+    if (btn.getAttribute('aria-expanded') === 'true') return;
+    const s = getDocState();
+    if (!s.hasDocument) return;
+    const entries: PopupEntry[] = [
+      { label: '이름 바꾸기(다른 이름으로 저장)…', shortcut: commandShortcut('file:save-as'), disabled: !isEnabled('file:save-as'),
+        onPick: (a) => run('file:save-as', { anchorEl: a }) },
+    ];
+    if (isDesk()) {
+      entries.push({ label: '폴더에서 보기', disabled: !s.path, onPick: () => {
+        if (s.path) void invoke<void>('reveal_in_folder', { path: s.path }).catch((error) => console.warn('[doogle] 폴더 열기 실패', error));
+      } });
+    }
+    entries.push({ label: '경로 복사', disabled: !s.path, onPick: () => {
+      if (s.path) void navigator.clipboard?.writeText(s.path).catch(() => {});
+    } });
+    if (!s.path) entries.push({ label: '', separator: true }, { label: '이 문서의 폴더 위치를 알 수 없습니다', heading: true });
+    openPopupMenu(btn, entries, '문서', false);
+  });
+
+  let flashTimer: number | undefined;
+  let lastSavedAt: number | null = null;
+  const render = (s: DocState) => {
+    const display = s.hasDocument ? s.name.replace(/\.(hwpx|hwp|hml|pdf)$/i, '') : '새 문서';
+    name.textContent = display;
+    dot.hidden = !s.dirty;
+    badge.hidden = !s.format;
+    badge.textContent = s.format ? s.format.toUpperCase() : '';
+    btn.classList.toggle('dg-doctitle-btn--static', !s.hasDocument);
+    const status = s.dirty ? '저장 안 한 변경 있음' : '저장됨';
+    btn.title = s.hasDocument ? `${s.path ?? s.name}\n${status}` : '';
+    btn.setAttribute('aria-label', s.hasDocument ? `${display}${s.format ? ` ${s.format.toUpperCase()}` : ''}, ${status}. 문서 메뉴` : '새 문서');
+    if (s.savedAt && s.savedAt !== lastSavedAt) {
+      lastSavedAt = s.savedAt;
+      saved.classList.add('dg-saved--on');
+      window.clearTimeout(flashTimer);
+      flashTimer = window.setTimeout(() => saved.classList.remove('dg-saved--on'), SAVED_FLASH_MS);
+    }
+  };
+  render(getDocState());
+  onDocState(render);
+  const titleEl = document.querySelector('head > title');
+  if (titleEl) new MutationObserver(() => refreshDocState()).observe(titleEl, { childList: true, characterData: true, subtree: true });
+  return wrap;
 }
 
 function buildTitleBar(): { bar: HTMLElement; quick: HTMLButtonElement[] } {
@@ -71,20 +158,14 @@ function buildTitleBar(): { bar: HTMLElement; quick: HTMLButtonElement[] } {
   quickWrap.setAttribute('role', 'toolbar');
   quickWrap.setAttribute('aria-label', '빠른 실행');
   const quick = [
-    quickButton('file:save', '저장', 'save'),
+    quickButton('file:save', '저장', 'save', (b) => { void guardedSave(b); }),
     quickButton('edit:undo', '실행 취소', 'undo'),
     quickButton('edit:redo', '다시 실행', 'redo'),
     quickButton('file:print', '인쇄', 'print'),
   ];
   quickWrap.append(...quick);
 
-  const title = document.createElement('div');
-  title.className = 'dg-doctitle';
-  title.setAttribute('aria-live', 'polite');
-  const renderTitle = () => { title.textContent = `${docName()} — 두글`; };
-  renderTitle();
-  const titleEl = document.querySelector('head > title');
-  if (titleEl) new MutationObserver(renderTitle).observe(titleEl, { childList: true, characterData: true, subtree: true });
+  const title = buildDocTitle();
 
   const chip = document.createElement('button');
   chip.type = 'button';
@@ -100,7 +181,7 @@ function buildTitleBar(): { bar: HTMLElement; quick: HTMLButtonElement[] } {
   // 테두리 없는 창의 끌기 영역(단추·입력에는 달지 않는다). 브라우저에서는 무해하다.
   markDragRegion(bar, app, sep, quickWrap, title);
   installWindowControls(bar);
-  // 업데이트 알약은 창 단추 왼쪽에 들어간다(데스크탑 전용).
+  // 업데이트 아이콘은 창 단추 왼쪽에 들어간다(데스크탑 전용).
   installUpdater(bar);
   return { bar, quick };
 }
@@ -121,6 +202,7 @@ function refreshAll(): void {
     const id = b.dataset.cmd!;
     b.setAttribute('aria-disabled', String(!ctx || !isEnabled(id)));
   }
+  refreshDocState();
   state.ribbon.queueRefresh();
 }
 
@@ -154,7 +236,7 @@ export function mountShell(): void {
   const status = statusBar ? new StatusAddons(statusBar, () => { if (!isAgentOpen()) toggleAgentPanel(); }) : null;
 
   state = { ribbon, status, backstage, quick, host: null };
-  // 창 닫기 → 저장 안 한 문서 확인(데스크탑 전용)
+  // 창 닫기 → 저장 안 한 문서 확인(데스크탑 전용) + 저장 앞 검토 확인
   installCloseGuard();
 
   // host 가 붙기 전에도 사용자의 조작 뒤에는 단추 상태를 다시 본다.
@@ -176,7 +258,8 @@ export function attachShellHost(host: PluginHost): void {
     'edit-mode-changed', 'side-panel-changed']) {
     host.events.on(name, queueRefreshAll);
   }
-  host.onDocumentSwap(queueRefreshAll);
+  host.onDocumentSwap(() => { noteDocumentSwap(); queueRefreshAll(); });
+  setBackstageLoader((bytes, fileName) => host.loadDocument(bytes, fileName));
   state.status?.attach(host);
   queueRefreshAll();
 }

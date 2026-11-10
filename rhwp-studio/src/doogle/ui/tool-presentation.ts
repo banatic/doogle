@@ -396,3 +396,29 @@ export function describeToolCall(rawName: string, rawArgs: unknown): ToolCallVie
   }
   return { name, known: true, category: spec.category, label, summary };
 }
+
+/** 사용자에게 보일 일이 없는 오류 코드 → 한 문장 (코드는 "자세히"/툴팁에만) */
+const FAILURE_TEXT: Record<string, string> = {
+  DOCUMENT_WRITER_BUSY: '다른 편집이 진행 중이라 쓰지 못했습니다. 잠시 뒤 다시 시도하세요.',
+  REVISION_MISMATCH: '그 사이 문서가 바뀌어 적용하지 못했습니다.',
+  STAGING_BASELINE_LOST: '검토 대기 중인 변경의 기준 문서를 잃어 적용하지 못했습니다.',
+  ENGINE_UNSUPPORTED: '이 문서 요소는 아직 편집할 수 없습니다.',
+  RESULT_TOO_LARGE: '결과가 너무 커서 한 번에 읽지 못했습니다.',
+  NOT_IMPLEMENTED: '아직 지원하지 않는 작업입니다.',
+  NO_DOCUMENT: '열린 문서가 없습니다.',
+  TIMEOUT: '시간 안에 끝나지 않았습니다.',
+};
+
+/**
+ * 도구 실패 사유(`tool_result.summary`) → 화면 한 줄 + 코드.
+ * "CODE: 메시지" · "[CODE] 메시지" · "CODE" 꼴을 나눈다. 코드는 화면 본문에 쓰지 않는다 (UI_AUDIT §3.12).
+ */
+export function formatToolFailure(summary: string | undefined): { text: string; code?: string } {
+  const raw = (summary ?? '').trim();
+  if (!raw) return { text: '실패했습니다.' };
+  const match = /^\[?([A-Z][A-Z0-9_]{2,})\]?(?::|\s+-|\s)\s*(.*)$/s.exec(raw) ?? /^([A-Z][A-Z0-9_]{2,})$/.exec(raw);
+  if (!match) return { text: raw };
+  const code = match[1];
+  const rest = (match[2] ?? '').trim();
+  return { text: FAILURE_TEXT[code] ?? (rest || '실패했습니다.'), code };
+}

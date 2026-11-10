@@ -1,36 +1,54 @@
 /* ================================================================
-   두글(doogle) 디자인 토큰 — 시안 F "클래식 블루"
+   두글(doogle) 디자인 토큰 — 시안 F "클래식 블루" (라이트 · 다크)
    ----------------------------------------------------------------
    `<html data-doogle>` 일 때만 살아 있다. 비두글 모드에서는 이 파일 전체가
    매칭되지 않아 upstream 화면이 그대로다.
 
    - `--dg-*`  : 두글 화면(셸·사이드바·검토 팝오버)이 쓰는 이름. 사이드바(agent S)도
-                 같은 이름을 소비하므로 이름을 바꾸지 말 것.
+                 같은 이름을 소비하므로 이름을 바꾸지 말 것. 색 리터럴 대신 이 토큰을 쓴다.
    - 아래쪽 블록: upstream 변수(`--ui-*`, `--accent-*`, `--ruler-*` …)를 토큰으로
                  다시 묶어, 대화상자·메뉴·눈금자 같은 upstream 표면을 TS 수정 없이
                  같은 팔레트로 칠한다.
+
+   테마 전환: upstream `core/theme.ts` 가 사용자 설정(시스템/라이트/다크)을 읽어
+   `<html data-theme-effective="light|dark">` 와 인라인 `color-scheme` 을 정한다.
+   두글은 그 속성만 따라간다 — 별도 설정·TS 가 없다. 기본은 라이트.
+   종이(`--doc-paper`)는 다크에서도 흰색(문서 색은 인쇄 결과).
+
+   대비: 글자 토큰은 바탕 토큰 위에서 WCAG AA 4.5:1 이상(이 파일 끝 측정표).
+   `--dg-disabled-text` 만 예외(WCAG 1.4.3 비활성 예외).
    ================================================================ */
 
+@import './fonts.css';
+@import './a11y.css';
+
 :root[data-doogle] {
-  /* ── 팔레트 ── */
+  /* ── 팔레트: 라이트 ── */
   --dg-title: #1F5FBF;
   --dg-title-text: #FFFFFF;
   --dg-accent: #1F5FBF;
   --dg-accent-hover: #1A51A3;
-  --dg-bg: #E9ECF1;
-  --dg-chrome: #F8FAFC;
-  --dg-panel: #FAFBFC;
-  --dg-surface: #FFFFFF;
+  --dg-on-accent: #FFFFFF;        /* accent 바탕 위 글자·아이콘 */
+  --dg-bg: #E9ECF1;               /* 작업 공간(캔버스 둘레) */
+  --dg-chrome: #F8FAFC;           /* 탭 줄·상태 표시줄 */
+  --dg-panel: #FAFBFC;            /* 사이드바 */
+  --dg-surface: #FFFFFF;          /* 리본·대화상자·카드·입력 */
+  --dg-surface-2: #F4F6F9;        /* 한 단계 들어간 표면(입력 묶음·코드·보조 카드) */
   --dg-border: #DDE2EA;
   --dg-divider: #E5E7EB;
-  --dg-field: #CBD5E1;
+  --dg-field: #CBD5E1;            /* 입력 테두리 */
   --dg-text: #1F2937;
   --dg-text2: #374151;
   --dg-muted: #4B5563;
+  --dg-hint: #6B7280;             /* placeholder·보조 설명(4.5:1 유지) */
+  --dg-disabled-text: #9CA3AF;    /* 비활성 — 대비 예외 */
   --dg-soft: #EFF6FF;
   --dg-soft-border: #BFDBFE;
   --dg-soft-text: #1E3A8A;
   --dg-hover: #F1F5F9;
+  --dg-active: #DBEAFE;           /* 눌림·선택 바탕 */
+  --dg-ink-06: rgba(15, 23, 42, 0.06);  /* 투명 잉크(겹침 hover·구분) */
+  --dg-ink-12: rgba(15, 23, 42, 0.12);
   --dg-ins: #1D4ED8;
   --dg-del: #B91C1C;
   --dg-user-bubble: #EEF1F5;
@@ -38,14 +56,49 @@
   --dg-ai-border: #FCD9A8;
   --dg-ai-text: #92400E;
 
-  /* ── 글꼴 ── 번들 폰트가 없으므로 외부 CDN 없이 시스템 글꼴로 떨어진다 */
-  --dg-font-ui: 'Noto Sans KR', 'Pretendard Variable', Pretendard, 'Malgun Gothic', '맑은 고딕',
-    'Apple SD Gothic Neo', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  /* 상태색 — 글자로 쓸 때 surface·*-soft 위에서 4.5:1 이상 */
+  --dg-warn: #92400E;
+  --dg-warn-soft: #FFF7E6;
+  --dg-warn-border: #FCD9A8;
+  --dg-ok: #15803D;
+  --dg-ok-soft: #F0FDF4;
+  --dg-bad: #B91C1C;
+  --dg-bad-soft: #FEF2F2;
+  --dg-bad-border: #FECACA;
+
+  /* 스크롤바 */
+  --dg-scroll-thumb: #CBD5E1;
+  --dg-scroll-thumb-hover: #94A3B8;
+
+  /* ── 글꼴 ──
+     Pretendard Variable 을 번들한다(fonts.css, SIL OFL 1.1). 실패하면 시스템 글꼴로. */
+  --dg-font-ui: 'Pretendard Variable', Pretendard, 'Malgun Gothic', '맑은 고딕',
+    'Apple SD Gothic Neo', 'Noto Sans KR', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  /* 숫자 표시용(쪽 번호·건수·배율·pt). font-variant-numeric: tabular-nums 와 함께 쓴다 → .dg-tnum */
+  --dg-font-num: var(--dg-font-ui);
+  --dg-font-mono: 'D2Coding', Consolas, 'Courier New', monospace;
+
+  /* ── 글자 크기 단계(P9: 바닥 12px) ── */
+  --dg-fs-caption: 12px;          /* 리본 묶음 캡션(11 → 12) */
+  --dg-fs-kbd: 11.5px;            /* 팝업 단축키 표기(11 → 11.5) — 유일한 12px 미만 */
+  --dg-fs-sm: 12px;               /* 상태 표시줄·탭·보조 */
+  --dg-fs-md: 13px;               /* 리본 단추·검토 행·메뉴 */
+  --dg-fs-body: 14px;             /* 사이드바 산문 */
+  --dg-lh-tight: 1.35;
+  --dg-lh-ui: 1.5;
+  --dg-lh-prose: 1.7;
+  --dg-tracking-caption: -0.01em;
+  --dg-caption-line: 18px;        /* 캡션 줄 높이(20 → 18 로 크기 증가분 흡수) */
 
   /* ── 모서리 ── */
   --dg-r-sm: 4px;
   --dg-r-md: 8px;
   --dg-r-lg: 14px;
+
+  /* ── 움직임 (reduced-motion 에서 0) ── */
+  --dg-dur-fast: 120ms;
+  --dg-dur: 180ms;
+  --dg-ease: cubic-bezier(0.2, 0, 0, 1);
 
   /* ── 유리(떠 있는 표면) ── */
   --dg-glass-bg: rgba(255, 255, 255, 0.58);
@@ -54,36 +107,112 @@
   --dg-glass-shadow: 0 10px 30px rgba(15, 23, 42, 0.16), 0 1px 2px rgba(15, 23, 42, 0.08),
     inset 0 1px 0 rgba(255, 255, 255, 0.9);
 
-  /* ── 그림자·초점 ── */
+  /* ── 그림자·덮개 ── */
   --dg-shadow-pop: 0 8px 24px rgba(15, 23, 42, 0.14), 0 1px 2px rgba(15, 23, 42, 0.06);
   --dg-shadow-dialog: 0 18px 48px rgba(15, 23, 42, 0.22), 0 2px 6px rgba(15, 23, 42, 0.08);
   --dg-shadow-page: 0 1px 4px rgba(15, 23, 42, 0.18);
-  --dg-focus: 0 0 0 2px #FFFFFF, 0 0 0 4px var(--dg-accent);
+  --dg-scrim: rgba(15, 23, 42, 0.28);          /* 모달 뒤 덮개 */
+  --dg-scrim-light: rgba(15, 23, 42, 0.18);    /* 명령 팔레트 뒤 */
+
+  /* ── 초점 ──
+     --dg-focus      : 초점 링 **색**. `outline: 2px solid var(--dg-focus)` 로 쓴다.
+     --dg-focus-ring : 같은 링의 box-shadow 판(overflow:hidden 안·둥근 모서리용).
+     바탕 대비 3:1 이상(WCAG 1.4.11). */
+  --dg-focus: #1F5FBF;
+  --dg-focus-ring: 0 0 0 2px var(--dg-surface), 0 0 0 4px var(--dg-focus);
 }
 
-/* 투명도 줄이기를 원하면 유리를 불투명 표면으로 바꾼다. */
+/* ── 팔레트: 다크 "클래식 블루" ───────────────────────────────
+   감사 문서 3.8 목업(.m-dark) 값. 제목 막대는 채도 낮은 남색에 파랑은 포인트로만,
+   AI 톤은 호박색을 밝혀 대비를 확보. 특이도 (0,3,0) 으로 위 라이트 블록(0,2,0)을 이긴다. */
+:root[data-doogle][data-theme-effective="dark"] {
+  --dg-title: #16233B;
+  --dg-title-text: #E6EAF2;
+  --dg-accent: #8FB6F5;
+  --dg-accent-hover: #A9C8F8;
+  --dg-on-accent: #0F1A2E;
+  --dg-bg: #0F131B;
+  --dg-chrome: #161B26;
+  --dg-panel: #171C27;
+  --dg-surface: #1B2130;
+  --dg-surface-2: #222939;
+  --dg-border: #2A3243;
+  --dg-divider: #252D3C;
+  --dg-field: #56627A;
+  --dg-text: #E6EAF2;
+  --dg-text2: #C9D1DD;
+  --dg-muted: #A3ADBD;
+  --dg-hint: #98A2B3;
+  --dg-disabled-text: #5F6A7D;
+  --dg-soft: #1E2B45;
+  --dg-soft-border: #35507F;
+  --dg-soft-text: #BBD3F8;
+  --dg-hover: #252D3D;
+  --dg-active: #24375A;
+  --dg-ink-06: rgba(255, 255, 255, 0.06);
+  --dg-ink-12: rgba(255, 255, 255, 0.12);
+  --dg-ins: #8FB6F5;
+  --dg-del: #F08A80;
+  --dg-user-bubble: #252D3D;
+  --dg-ai-soft: #2A2113;
+  --dg-ai-border: #6B4A1C;
+  --dg-ai-text: #F5B86B;
+
+  --dg-warn: #F5B86B;
+  --dg-warn-soft: #2A2113;
+  --dg-warn-border: #6B4A1C;
+  --dg-ok: #6FCF97;
+  --dg-ok-soft: #14271D;
+  --dg-bad: #F08A80;
+  --dg-bad-soft: #3A1D1F;
+  --dg-bad-border: #6E2F2F;
+
+  --dg-scroll-thumb: #3B4559;
+  --dg-scroll-thumb-hover: #56627A;
+
+  --dg-glass-bg: rgba(23, 28, 39, 0.72);
+  --dg-glass-border: rgba(255, 255, 255, 0.08);
+  --dg-glass-shadow: 0 10px 30px rgba(0, 0, 0, 0.45), 0 1px 2px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+
+  --dg-shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.45), 0 1px 2px rgba(0, 0, 0, 0.3);
+  --dg-shadow-dialog: 0 18px 48px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.3);
+  --dg-shadow-page: 0 1px 6px rgba(0, 0, 0, 0.5);
+  --dg-scrim: rgba(0, 0, 0, 0.5);
+  --dg-scrim-light: rgba(0, 0, 0, 0.35);
+
+  --dg-focus: #8FB6F5;
+}
+
+/* 투명도 줄이기를 원하면 유리를 불투명 표면으로 바꾼다(라이트·다크 공통 — 토큰이 따라온다). */
 @media (prefers-reduced-transparency: reduce) {
-  :root[data-doogle] {
-    --dg-glass-bg: #FFFFFF;
+  :root[data-doogle],
+  :root[data-doogle][data-theme-effective="dark"] {
+    --dg-glass-bg: var(--dg-surface);
     --dg-glass-border: var(--dg-border);
     --dg-glass-blur: 0px;
   }
 }
 
+/* 움직임 줄이기: 토큰 시간을 0 으로. 개별 규칙의 안전망은 a11y.css. */
+@media (prefers-reduced-motion: reduce) {
+  :root[data-doogle] {
+    --dg-dur-fast: 0ms;
+    --dg-dur: 0ms;
+  }
+}
+
 /* ================================================================
-   upstream 변수 다리 — 두글 모드에서는 라이트 팔레트로 고정한다.
-   특이도 (0,3,1): base.css 다크(0,2,0)·flat 스킨(0,3,0)보다 높아 순서와 무관하게 이긴다.
+   upstream 변수 다리 — 두글 토큰으로 다시 묶는다. 라이트·다크 모두 토큰이 바뀌면 따라온다.
+   특이도 (0,3,1): base.css 다크(0,2,0)·flat/oldschool 스킨(≤0,3,0)보다 높아 순서와 무관하게 이긴다.
+   `color-scheme` 은 고정하지 않는다 — theme.ts 가 인라인으로 `only light|dark` 를 정한다.
    ================================================================ */
 html:root[data-doogle][data-doogle] {
-  /* core/theme.ts 가 root 인라인 style 로 `only dark` 를 박으므로 !important 로 이긴다
-     (안 그러면 시스템 다크 모드에서 스크롤바·폼 컨트롤이 어둡게 그려진다). */
-  color-scheme: light !important;
-
   --ui-bg: var(--dg-chrome);
   --ui-bg-light: var(--dg-chrome);
-  --ui-surface: #FFFFFF;
-  --ui-surface-raised: #FFFFFF;
-  --ui-surface-muted: #F1F5F9;
+  --ui-surface: var(--dg-surface);
+  --ui-surface-raised: var(--dg-surface);
+  --ui-surface-muted: var(--dg-surface-2);
   --ui-border: var(--dg-border);
   --ui-border-light: var(--dg-field);
   --ui-border-subtle: var(--dg-divider);
@@ -91,20 +220,28 @@ html:root[data-doogle][data-doogle] {
   --ui-text: var(--dg-text);
   --ui-text-secondary: var(--dg-text2);
   --ui-text-muted: var(--dg-muted);
-  --ui-text-hint: #6B7280;
-  --ui-text-disabled: #9CA3AF;
-  --ui-text-placeholder: #6B7280;
-  --ui-text-on-accent: #FFFFFF;
+  --ui-text-hint: var(--dg-hint);
+  --ui-text-disabled: var(--dg-disabled-text);
+  --ui-text-placeholder: var(--dg-hint);
+  --ui-text-on-accent: var(--dg-on-accent);
   --ui-hover: var(--dg-hover);
   --ui-hover-strong: var(--dg-soft);
-  --ui-active: #DBEAFE;
+  --ui-active: var(--dg-active);
   --ui-selected: var(--dg-soft);
   --ui-menu-open: var(--dg-accent);
   --ui-menu-open-border: var(--dg-accent);
-  --ui-toolbar-bg-start: #FFFFFF;
-  --ui-toolbar-bg-end: #FFFFFF;
+  --ui-toolbar-bg-start: var(--dg-surface);
+  --ui-toolbar-bg-end: var(--dg-surface);
   --ui-accent-bg: var(--dg-soft);
   --ui-accent-bg-light: var(--dg-soft);
+  --ui-note-bg: var(--dg-surface-2);
+  --ui-note-border: var(--dg-border);
+  --ui-note-text: var(--dg-text2);
+  --ui-warning-bg: var(--dg-warn-soft);
+  --ui-warning-border: var(--dg-warn-border);
+  --ui-warning-text: var(--dg-warn);
+  --ui-danger: var(--dg-bad);
+  --ui-danger-strong: var(--dg-bad);
   --ui-link: var(--dg-ins);
   --ui-focus-soft: rgba(31, 95, 191, 0.18);
 
@@ -112,7 +249,7 @@ html:root[data-doogle][data-doogle] {
   --doc-paper: #FFFFFF;
   --doc-shadow: rgba(15, 23, 42, 0.18);
 
-  --focus-ring: var(--dg-accent);
+  --focus-ring: var(--dg-focus);
   --resize-handle: var(--dg-accent);
 
   --ruler-bg: #F3F5F8;
@@ -130,10 +267,49 @@ html:root[data-doogle][data-doogle] {
   --shadow-dropdown: var(--dg-shadow-pop);
   --shadow-dialog: var(--dg-shadow-dialog);
   --shadow-light: var(--dg-shadow-pop);
-  --overlay-bg: rgba(15, 23, 42, 0.28);
+  --overlay-bg: var(--dg-scrim);
 
   --font-family-ui: var(--dg-font-ui);
   --radius-sm: var(--dg-r-sm);
   --radius-md: 6px;
   --radius-lg: var(--dg-r-md);
 }
+
+/* 다크: 토큰을 거치지 않는 upstream 리터럴만 덮는다. 종이는 흰색 유지.
+   아이콘 스프라이트·정렬 아이콘 필터·캐럿·선택 색은 base.css 다크 값을 그대로 쓴다. */
+html:root[data-doogle][data-doogle][data-theme-effective="dark"] {
+  --ui-focus-soft: rgba(143, 182, 245, 0.24);
+  --ui-danger-soft: rgba(240, 138, 128, 0.22);
+  --doc-paper: #FFFFFF;
+  --doc-shadow: rgba(0, 0, 0, 0.5);
+
+  --ruler-bg: #1B2130;
+  --ruler-body: #222939;
+  --ruler-tick: #8B95A7;
+  --ruler-text: var(--dg-muted);
+
+  --accent-strong: #BBD3F8;
+}
+
+/* ----------------------------------------------------------------
+   대비 측정(WCAG 2.x 상대 휘도, 2026-11-10) — 글자/바탕
+                       라이트   다크
+   text / surface       14.68   13.33
+   text / bg            12.40   15.42
+   text2 / surface      10.31   10.44
+   muted / surface       7.56    7.09
+   muted / bg            6.38    8.21
+   muted / hover         6.90    6.09
+   hint / surface        4.83    6.24
+   title-text / title    6.09   13.02
+   on-accent / accent    6.09    8.43
+   accent / surface      6.09    7.79
+   soft-text / soft      9.52    9.27
+   ins / surface         6.70    7.79
+   del / surface         6.47    6.62
+   ai-text / ai-soft     6.68    9.02
+   warn / warn-soft      6.65    9.02
+   ok / surface          5.02    8.45
+   bad / bad-soft        5.91    6.29
+   focus / surface       6.09    7.79   (비글자 3:1 기준)
+   ---------------------------------------------------------------- */

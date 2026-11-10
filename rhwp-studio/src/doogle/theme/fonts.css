@@ -1,0 +1,21 @@
+/* ================================================================
+   두글 UI 글꼴 — Pretendard Variable 1.3.9 (SIL OFL 1.1)
+   ----------------------------------------------------------------
+   출처: npm `pretendard@1.3.9` dist/web/variable/woff2/PretendardVariable.woff2
+   라이선스 전문: ./fonts/Pretendard-OFL.txt · 고지: docs/doogle/FONTS.md
+   CDN 없이 Vite 가 자산으로 묶는다(데스크탑 앱 오프라인 동작).
+   가변 글꼴 하나(45–920)로 400/500/600/700 을 모두 낸다.
+   이 @font-face 는 이름이 있는 글꼴을 *정의*만 한다 — 실제 사용은
+   `:root[data-doogle]` 안에서 `--dg-font-ui` 를 통해서만 일어나므로 비두글 화면은 영향이 없다
+   (브라우저는 쓰이지 않는 @font-face 를 내려받지 않는다).
+   문서 본문(캔버스) 글꼴과는 무관하다 — 문서는 rhwp 렌더러의 글꼴 해석을 따른다.
+   ================================================================ */
+
+@font-face {
+  font-family: 'Pretendard Variable';
+  font-style: normal;
+  font-weight: 45 920;
+  font-display: swap;
+  src: url('./fonts/PretendardVariable.woff2') format('woff2-variations'),
+    url('./fonts/PretendardVariable.woff2') format('woff2');
+}

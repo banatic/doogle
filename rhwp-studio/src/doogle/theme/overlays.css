@@ -14,11 +14,11 @@
 
 /* ── 대화상자 ─────────────────────────────────────────────── */
 :root[data-doogle] .modal-overlay {
-  background: rgba(15, 23, 42, 0.28);
+  background: var(--dg-scrim);
 }
 
 :root[data-doogle] .dialog-wrap {
-  background: #FFFFFF;
+  background: var(--dg-surface);
   border: 1px solid var(--dg-border);
   border-radius: var(--dg-r-md);
   box-shadow: var(--dg-shadow-dialog);
@@ -28,7 +28,7 @@
 }
 
 :root[data-doogle] .dialog-title {
-  background: #FFFFFF;
+  background: var(--dg-surface);
   color: var(--dg-text);
   font-size: 13px;
   font-weight: 600;
@@ -55,7 +55,7 @@
   padding: 0 14px;
   border: 1px solid var(--dg-field);
   border-radius: 6px;
-  background: #FFFFFF;
+  background: var(--dg-surface);
   color: var(--dg-text);
   font-family: inherit;
   font-size: 12px;
@@ -65,13 +65,13 @@
 :root[data-doogle] .dialog-btn-primary {
   background: var(--dg-accent);
   border-color: var(--dg-accent);
-  color: #FFFFFF;
+  color: var(--dg-on-accent);
   font-weight: 600;
 }
 :root[data-doogle] .dialog-btn-primary:hover { background: var(--dg-accent-hover); border-color: var(--dg-accent-hover); }
 
 :root[data-doogle] .dialog-tabs {
-  background: #FFFFFF;
+  background: var(--dg-surface);
   border-bottom: 1px solid var(--dg-divider);
 }
 :root[data-doogle] .dialog-tab {
@@ -98,7 +98,7 @@
 }
 
 :root[data-doogle] .dialog-wrap :is(button, input, select, textarea):focus-visible {
-  outline: 2px solid var(--dg-accent);
+  outline: 2px solid var(--dg-focus);
   outline-offset: 1px;
 }
 
@@ -120,7 +120,7 @@
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   :root[data-doogle] :is(.context-menu, .tb-split-menu, .sb-dropdown-menu, .sb-hl-palette,
     .font-picker-menu, .bullet-popup, .menu-dropdown, .md-sub-panel) {
-    background: #FFFFFF;
+    background: var(--dg-surface);
   }
 }
 
@@ -140,7 +140,7 @@
 :root[data-doogle] .context-menu .md-sep { border-color: var(--dg-divider); margin: 4px 6px; }
 
 /* ── 명령 팔레트 ─────────────────────────────────────────── */
-:root[data-doogle] .cp-overlay { background: rgba(15, 23, 42, 0.18); }
+:root[data-doogle] .cp-overlay { background: var(--dg-scrim-light); }
 :root[data-doogle] .cp-panel {
   border: 1px solid var(--dg-border);
   border-radius: 12px;

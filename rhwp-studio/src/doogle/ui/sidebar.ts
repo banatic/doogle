@@ -23,10 +23,14 @@ import {
   type ProviderModel,
   type ToolCallMessage,
 } from '../hub-client.ts';
-import { describeChange } from '../review/describe.ts';
+import { impactSentence } from '../review/keys.ts';
+import { mountReviewList, type ReviewListHandle } from '../review/list.ts';
 import { reviewStore, type DecisionReport } from '../review/state.ts';
+import { countdownText, describeConnection, userWords, type DeskHubStatus } from './connection.ts';
+import type { DeskHubEvent } from './desk-bridge.ts';
 import { icon, type IconName } from './icons.ts';
-import { describeToolCall } from './tool-presentation.ts';
+import { SettingsSheet } from './settings-sheet.ts';
+import { describeToolCall, formatToolFailure } from './tool-presentation.ts';
 import './sidebar.css';
 
 export interface SidebarDeps {
@@ -38,6 +42,14 @@ export interface SidebarDeps {
   openExternal(url: string): Promise<void>;
   /** 모드가 바뀌었을 때 (실행기가 다음 도구 호출부터 반영) */
   onModeChange?(mode: AgentMode): void;
+  /** 문서·선택 상황 — 빈 대화의 상황별 제안과 첫 실행 체크리스트 */
+  getDocContext?(): DocContext;
+  /** 문서 열기 (체크리스트 ②, "문서를 열면…" 안내) */
+  openDocument?(): void;
+  /** 데스크탑 앱인가 (연결 카드의 "로그 열기") */
+  isDesk?: boolean;
+  /** 에이전트 서비스 로그를 연다. 실패하면 reject — 로그 경로 복사로 물러선다. */
+  openHubLog?(): Promise<void>;
 }
 
 const STORE_PROVIDER = 'doogle.provider';
@@ -48,15 +60,47 @@ const STORE_MODEL_PREFIX = 'doogle.model.';
 const STORE_MODEL_LABEL = 'doogle.modelLabel';
 const STORE_MODE = 'doogle.mode';
 
-/** API 키로 쓰는 provider → keyring 키 */
-const SECRET_KEY_OF: Record<string, { key: string; placeholder: string }> = {
-  'anthropic-api': { key: 'anthropic-api-key', placeholder: 'sk-ant-…' },
-  'openai-api': { key: 'openai-api-key', placeholder: 'sk-…' },
-};
+/** 첫 실행 체크리스트를 끝냈다(첫 요청을 보냈다) — 다시 보이지 않는다 */
+const STORE_ONBOARDED = 'doogle.onboarded';
 
-const CLAUDE_LOGIN_HINT = '터미널에서 claude 를 실행한 뒤 /login 으로 로그인하세요. 두글은 Claude 로그인 정보를 읽지 않습니다.';
+/** 문서·선택 상황 (상황별 제안 칩·첫 실행 체크리스트) */
+export interface DocContext {
+  hasDocument: boolean;
+  hasSelection: boolean;
+  inTable: boolean;
+  /** 누름틀(양식 칸)이 있다 */
+  hasFields: boolean;
+}
 
-const SUGGESTIONS = ['이 문서를 세 줄로 요약해 줘', '맞춤법과 띄어쓰기를 고쳐 줘', '선택한 문단을 더 간결하게 다듬어 줘'];
+const GENERIC_SUGGESTIONS = ['이 문서를 세 줄로 요약해 줘', '맞춤법과 띄어쓰기를 고쳐 줘'];
+
+/** 상황별 제안: 상황 칩(파란색)이 앞으로, 일반 칩이 뒤로. 문서가 없으면 빈 배열. */
+export function suggestionsFor(ctx: DocContext): Array<{ text: string; contextual: boolean }> {
+  if (!ctx.hasDocument) return [];
+  const out: Array<{ text: string; contextual: boolean }> = [];
+  if (ctx.hasSelection) out.push({ text: '선택한 부분을 더 간결하게 다듬어 줘', contextual: true });
+  if (ctx.inTable) out.push({ text: '이 표에 합계 행을 추가해 줘', contextual: true });
+  if (ctx.hasFields) out.push({ text: '양식의 빈칸을 채워 줘', contextual: true });
+  for (const text of GENERIC_SUGGESTIONS) out.push({ text, contextual: false });
+  return out.slice(0, 4);
+}
+
+/** "2일 3시간 뒤" */
+function relativeUntil(at: Date, now = Date.now()): string {
+  const min = Math.max(0, Math.round((at.getTime() - now) / 60_000));
+  if (min < 1) return '곧';
+  if (min < 60) return `${min}분 뒤`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `${h}시간${min % 60 ? ` ${min % 60}분` : ''} 뒤`;
+  const d = Math.floor(h / 24);
+  return `${d}일${h % 24 ? ` ${h % 24}시간` : ''} 뒤`;
+}
+
+function parseResetAt(value: string | number | undefined): Date | null {
+  if (value === undefined || value === null || value === '') return null;
+  const date = typeof value === 'number' ? new Date(value < 1e12 ? value * 1000 : value) : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
 
 function storeGet(key: string): string | null {
   try { return localStorage.getItem(key); } catch { return null; }
@@ -138,6 +182,8 @@ interface TurnView {
   threadId: string;
   root: HTMLElement;
   userText: string;
+  /** 이 턴을 보낸 AI 계정 (한도 카드의 "다른 계정으로 보내기") */
+  providerId: string;
   /** 도구 칩 (턴당 하나) */
   chip: HTMLButtonElement | null;
   chipText: HTMLElement | null;
@@ -184,9 +230,12 @@ export class DoogleSidebar {
   private renderFrame = 0;
   private openMenuKind: MenuKind | null = null;
   private menuTrigger: HTMLElement | null = null;
-  /** 모델 메뉴 안에서 펼친 API 키 입력 (provider id) */
-  private keyFormFor: string | null = null;
-  private keyNote = '';
+  /** 데스크 hub 이벤트(hub.rs)로 안 원인·재시작 예정 */
+  private readonly desk: DeskHubStatus = { failure: '', restartAt: 0 };
+  private connTimer: ReturnType<typeof setInterval> | null = null;
+  private contextFrame = 0;
+  private sheet!: SettingsSheet;
+  private gearBtn!: HTMLButtonElement;
 
   // 화면 부품
   private titleBtn!: HTMLButtonElement;
@@ -196,6 +245,7 @@ export class DoogleSidebar {
   private conn!: HTMLElement;
   private scroller!: HTMLElement;
   private review!: HTMLElement;
+  private reviewList: ReviewListHandle | null = null;
   private live!: HTMLElement;
   private input!: HTMLTextAreaElement;
   private modeBtn!: HTMLButtonElement;
@@ -216,7 +266,8 @@ export class DoogleSidebar {
   mount(container: HTMLElement): void {
     const root = el('div', 'dg-panel');
     this.root = root;
-    root.append(this.buildHead(), this.buildBody(), this.buildComposer());
+    this.sheet = this.buildSheet();
+    root.append(this.buildHead(), this.buildBody(), this.buildComposer(), this.sheet.root);
     container.append(root);
     this.showThread(this.thread);
 
@@ -239,9 +290,19 @@ export class DoogleSidebar {
       hub.on('auth_done', (message) => this.handleAuthDone(message)),
       hub.on('auth_logout_done', (message) => {
         const { ok, error } = message as { ok?: unknown; error?: unknown };
-        this.addNotice(ok === true ? '로그아웃했습니다.' : `로그아웃하지 못했습니다: ${errorText(error)}`, ok === true ? 'info' : 'error');
+        if (this.sheet.isOpen) this.announce(ok === true ? '로그아웃했습니다' : `로그아웃하지 못했습니다: ${errorText(error)}`);
+        else this.addNotice(ok === true ? '로그아웃했습니다.' : `로그아웃하지 못했습니다: ${errorText(error)}`, ok === true ? 'info' : 'error');
       }),
     );
+    // 열려 있는 동안 선택·커서가 바뀌면 빈 대화의 제안 칩을 다시 고른다
+    const onFocusIn = () => this.refreshContext();
+    root.addEventListener('pointerenter', onFocusIn);
+    root.addEventListener('focusin', onFocusIn);
+    this.offs.push(() => {
+      if (this.connTimer) clearInterval(this.connTimer);
+      this.connTimer = null;
+      if (this.contextFrame) cancelAnimationFrame(this.contextFrame);
+    });
     if (this.deps.pending) {
       // 실행기가 있으면 검토 막(runtime-wiring)이 이미 붙였다. 없을 때를 대비해 여기서도 붙인다.
       if (!reviewStore.pending) reviewStore.attach(this.deps.pending);
@@ -262,15 +323,42 @@ export class DoogleSidebar {
   setVisible(open: boolean): void {
     if (open) {
       if (this.deps.hub.state === 'open' && this.providers.length === 0) void this.refreshProviders();
+      this.refreshContext();
       requestAnimationFrame(() => this.input?.focus());
     } else {
       this.closeMenu(false);
     }
   }
 
+  /** 문서·선택이 바뀌었다 — 빈 대화의 제안 칩·체크리스트를 다시 그린다(한 프레임에 한 번). */
+  refreshContext(): void {
+    if (this.contextFrame || !this.root) return;
+    this.contextFrame = requestAnimationFrame(() => {
+      this.contextFrame = 0;
+      this.renderEmpty();
+    });
+  }
+
+  /** doogle-desk `doogle://hub` 이벤트 (hub.rs: ready · exited{restartInMs} · failed{message}) */
+  noteDeskHubEvent(event: DeskHubEvent): void {
+    if (!event) return;
+    if (event.state === 'ready') {
+      this.desk.failure = '';
+      this.desk.restartAt = 0;
+    } else if (event.state === 'exited') {
+      this.desk.restartAt = Date.now() + Math.max(0, Number(event.restartInMs) || 0);
+    } else if (event.state === 'failed') {
+      this.desk.failure = String(event.message ?? '');
+      this.desk.restartAt = 0;
+    }
+    this.renderConnection(this.deps.hub.state, this.deps.hub.detail);
+  }
+
   dispose(): void {
     for (const off of this.offs) off();
     this.offs = [];
+    this.reviewList?.dispose();
+    this.reviewList = null;
     if (this.renderFrame) cancelAnimationFrame(this.renderFrame);
     this.root?.remove();
     this.root = null;
@@ -285,9 +373,55 @@ export class DoogleSidebar {
     this.appendToLog(row);
   }
 
-  /** (호환) 예전 설정 화면 — 이제 모델 메뉴가 로그인·API 키를 맡는다. */
-  openSettings(): void {
-    this.openMenu('model', this.modelBtn);
+  /** 설정 시트 (AI 계정 · 기본 적용 방식 · 에이전트 서비스 · 데이터 안내) */
+  openSettings(focus?: 'accounts' | 'api'): void {
+    if (!this.sheet) return;
+    this.closeMenu(false);
+    this.sheet.open(focus);
+    this.gearBtn?.setAttribute('aria-expanded', 'true');
+  }
+
+  private buildSheet(): SettingsSheet {
+    return new SettingsSheet({
+      hub: this.deps.hub,
+      providers: () => this.providers,
+      mode: () => this.mode,
+      setMode: (mode) => {
+        this.setMode(mode);
+        this.sheet.render();
+      },
+      busy: () => this.busy,
+      loginPending: () => this.loginPending,
+      startLogin: (id) => {
+        this.startLogin(id);
+        this.sheet.render();
+      },
+      cancelLogin: (id) => {
+        this.deps.hub.cancelLogin(id);
+        this.loginPending = null;
+        this.sheet.render();
+      },
+      refreshProviders: () => this.refreshProviders(),
+      announce: (text) => this.announce(text),
+      connection: () => {
+        const state = this.deps.hub.state;
+        if (state === 'open') return { ok: true, text: `연결됨${this.deps.hub.version ? ` · v${this.deps.hub.version}` : ''}` };
+        const view = describeConnection(state, this.deps.hub.detail, this.desk, { isDesk: !!this.deps.isDesk, nextRetryAt: 0 });
+        return { ok: false, text: view?.title ?? '연결되지 않음' };
+      },
+      retryConnection: () => this.retryConnection(),
+      onClosed: () => {
+        this.gearBtn?.setAttribute('aria-expanded', 'false');
+        this.gearBtn?.focus();
+      },
+    });
+  }
+
+  private retryConnection(): void {
+    this.desk.failure = '';
+    this.desk.restartAt = 0;
+    this.deps.hub.reconnectNow();
+    this.renderConnection(this.deps.hub.state, this.deps.hub.detail);
   }
 
   // ─── 머리 ──────────────────────────────────────────────
@@ -305,6 +439,7 @@ export class DoogleSidebar {
     this.historyBtn.setAttribute('aria-expanded', 'false');
 
     this.threadMenu = el('div', 'dg-menu dg-thread-menu');
+    this.threadMenu.dataset.dgFloating = '';
     this.threadMenu.setAttribute('role', 'menu');
     this.threadMenu.setAttribute('aria-label', '대화 목록');
     this.threadMenu.hidden = true;
@@ -388,7 +523,6 @@ export class DoogleSidebar {
     if (restoreFocus) this.menuTrigger?.focus();
     this.openMenuKind = null;
     this.menuTrigger = null;
-    this.keyFormFor = null;
   }
 
   private menuItems(menu: HTMLElement): HTMLElement[] {
@@ -453,18 +587,98 @@ export class DoogleSidebar {
 
   private buildEmpty(): HTMLElement {
     const box = el('div', 'dg-empty');
-    box.append(el('p', 'dg-empty-title', '무엇을 도와드릴까요?'), el('p', 'dg-empty-sub', '열린 문서를 읽고, 고칠 곳은 검토할 수 있게 제안해요.'));
+    this.fillEmpty(box);
+    return box;
+  }
+
+  /** 지금 대화가 비어 있으면 그 빈 상태를 상황에 맞게 다시 채운다 */
+  private renderEmpty(): void {
+    const box = this.thread?.log.querySelector<HTMLElement>(':scope > .dg-empty');
+    if (box) this.fillEmpty(box);
+  }
+
+  private docContext(): DocContext {
+    try {
+      return this.deps.getDocContext?.() ?? { hasDocument: true, hasSelection: false, inTable: false, hasFields: false };
+    } catch {
+      return { hasDocument: true, hasSelection: false, inTable: false, hasFields: false };
+    }
+  }
+
+  private fillEmpty(box: HTMLElement): void {
+    const ctx = this.docContext();
+    const onboarded = storeGet(STORE_ONBOARDED) === '1';
+    const account = this.providers.find((p) => p.available)?.id ?? '';
+    // 바뀐 것이 없으면 다시 그리지 않는다 — 칩에 있던 키보드 포커스를 잃지 않게
+    const sig = [ctx.hasDocument, ctx.hasSelection, ctx.inTable, ctx.hasFields, onboarded, account, this.providerId, this.deps.hub.state].join('|');
+    if (box.dataset.sig === sig) return;
+    box.dataset.sig = sig;
+    const parts: HTMLElement[] = [
+      el('p', 'dg-empty-title', '무엇을 도와드릴까요?'),
+      el('p', 'dg-empty-sub', '열린 문서를 읽고, 고칠 곳은 검토할 수 있게 제안해요.'),
+    ];
+    if (!onboarded) parts.push(this.buildChecklist(ctx));
+
     const chips = el('div', 'dg-suggest');
-    for (const text of SUGGESTIONS) {
-      chips.append(button('dg-suggest-chip', text, () => {
-        this.input.value = text;
+    const list = suggestionsFor(ctx);
+    if (list.length === 0) {
+      const none = el('p', 'dg-suggest-none', '문서를 열면 시작할 수 있어요.');
+      chips.append(none);
+      if (this.deps.openDocument) {
+        const open = button('dg-btn', '', () => this.deps.openDocument?.());
+        open.append(icon('folder', 13), el('span', '', '문서 열기…'));
+        chips.append(open);
+      }
+    }
+    for (const item of list) {
+      chips.append(button(`dg-suggest-chip${item.contextual ? ' dg-suggest-ctx' : ''}`, item.text, () => {
+        this.input.value = item.text;
         this.renderComposer();
         if (!this.sendBtn.disabled) this.submit();
         else this.input.focus();
       }));
     }
-    box.append(chips);
-    return box;
+    parts.push(chips);
+    box.replaceChildren(...parts);
+  }
+
+  /** 첫 실행 체크리스트: ① AI 계정 연결 → ② 문서 열기 → ③ 첫 요청. 첫 요청을 보내면 다시 보이지 않는다. */
+  private buildChecklist(ctx: DocContext): HTMLElement {
+    const card = el('div', 'dg-card dg-start');
+    card.append(el('div', 'dg-card-title', '시작하기'));
+    const account = this.providers.find((p) => p.available && p.id === this.providerId) ?? this.providers.find((p) => p.available);
+    const steps: Array<{ done: boolean; title: string; sub: string; act?: () => void }> = [
+      {
+        done: !!account,
+        title: 'AI 계정 연결',
+        sub: account ? `${account.label} 사용 가능` : this.deps.hub.state === 'open' ? 'Claude Code · ChatGPT · API 키 중 하나' : '에이전트 서비스에 연결되면 확인합니다',
+        act: () => this.openSettings('accounts'),
+      },
+      {
+        done: ctx.hasDocument,
+        title: '문서 열기',
+        sub: ctx.hasDocument ? '문서가 열려 있습니다' : '파일 › 열기 또는 끌어다 놓기',
+        ...(this.deps.openDocument ? { act: () => this.deps.openDocument?.() } : {}),
+      },
+      { done: false, title: '첫 요청 보내기', sub: '예: "맞춤법을 고쳐 줘"', act: () => this.input.focus() },
+    ];
+    const ol = el('ol', 'dg-steps');
+    let current = steps.findIndex((s) => !s.done);
+    if (current === -1) current = steps.length - 1;
+    steps.forEach((step, index) => {
+      const li = el('li', '');
+      const row = button('dg-step', '', () => step.act?.());
+      row.dataset.state = step.done ? 'done' : index === current ? 'now' : 'todo';
+      row.disabled = step.done || !step.act;
+      row.setAttribute('aria-label', `${index + 1}단계 ${step.title}${step.done ? ' (완료)' : ''}`);
+      const text = el('span', 'dg-step-text');
+      text.append(el('span', 'dg-step-title', step.title), el('span', 'dg-step-sub', step.sub));
+      row.append(el('span', 'dg-step-n', step.done ? '✓' : String(index + 1)), text);
+      li.append(row);
+      ol.append(li);
+    });
+    card.append(ol);
+    return card;
   }
 
   private showThread(view: ThreadView): void {
@@ -521,44 +735,147 @@ export class DoogleSidebar {
     node.setAttribute('role', kind === 'error' ? 'alert' : 'status');
     if (kind !== 'info') node.append(icon('alert', 13));
     node.append(el('span', '', text));
-    const turn = this.turn;
+    this.placeInTurn(node);
+  }
+
+  /** 진행 중인 턴이 있으면 그 안(생각 중 줄 앞)에, 아니면 대화 끝에 */
+  private placeInTurn(node: HTMLElement, turn: TurnView | null = this.turn): void {
     if (turn && !turn.done) {
       turn.root.insertBefore(node, turn.thinking ?? null);
-      turn.text = null;
+      if (turn === this.turn) turn.text = null;
     } else {
       this.appendToLog(node);
     }
+  }
+
+  /**
+   * 오류 카드 — 무엇이(제목) + 왜(한 문장) + 다음 행동(단추). 코드는 "자세히"에만 (UI_AUDIT §3.12).
+   */
+  private buildCard(spec: {
+    tone: 'warn' | 'bad';
+    iconName: IconName;
+    title: string;
+    body?: string;
+    code?: string;
+    actions?: Array<{ label: string; primary?: boolean; run: () => void }>;
+  }): HTMLElement {
+    const card = el('div', 'dg-card');
+    card.dataset.tone = spec.tone;
+    card.setAttribute('role', spec.tone === 'bad' ? 'alert' : 'status');
+    const title = el('div', 'dg-card-title');
+    title.append(icon(spec.iconName, 14, 2), el('span', '', spec.title));
+    card.append(title);
+    if (spec.body) card.append(el('p', 'dg-card-sub', spec.body));
+    if (spec.actions?.length) {
+      const acts = el('div', 'dg-card-acts');
+      for (const action of spec.actions) {
+        acts.append(button(action.primary ? 'dg-btn dg-btn-primary' : 'dg-btn', action.label, action.run));
+      }
+      card.append(acts);
+    }
+    if (spec.code) {
+      const details = el('details', '');
+      details.append(el('summary', '', '자세히'), el('code', '', spec.code));
+      card.append(details);
+    }
+    return card;
   }
 
   // ─── 연결 / provider / 로그인 ──────────────────────────
 
   private renderConnection(state: HubConnectionState, detail: string): void {
     if (!this.conn) return;
-    const text: Record<HubConnectionState, string> = {
-      open: '',
-      connecting: 'agent hub 에 연결하는 중…',
-      retrying: `agent hub 에 다시 연결하는 중…${detail ? ` (${detail})` : ''}`,
-      unavailable: `agent hub 를 쓸 수 없습니다${detail ? `: ${detail}` : ''}`,
-      stopped: 'agent hub 연결을 닫았습니다',
-    };
-    this.conn.textContent = text[state];
-    this.conn.hidden = state === 'open';
-    this.conn.dataset.state = state;
+    const view = describeConnection(state, detail, this.desk, {
+      isDesk: !!this.deps.isDesk,
+      nextRetryAt: this.deps.hub.nextRetryAt,
+    });
+    if (this.connTimer) {
+      clearInterval(this.connTimer);
+      this.connTimer = null;
+    }
+    if (!view) {
+      this.conn.hidden = true;
+      this.conn.replaceChildren();
+    } else {
+      this.conn.hidden = false;
+      this.conn.dataset.state = state;
+      this.conn.dataset.tone = view.tone;
+      if (view.tone === 'quiet') {
+        this.conn.className = 'dg-conn';
+        this.conn.replaceChildren(el('span', '', view.title));
+      } else {
+        this.conn.className = 'dg-conn dg-card';
+        const title = el('div', 'dg-card-title');
+        title.append(icon('alert', 14, 2), el('span', '', view.title));
+        const parts: HTMLElement[] = [title];
+        if (view.body) parts.push(el('p', 'dg-card-sub', view.body));
+        let countdown: HTMLElement | null = null;
+        if (view.retryAt) {
+          countdown = el('p', 'dg-card-sub dg-countdown', countdownText(view.retryAt));
+          parts.push(countdown);
+        }
+        const acts = el('div', 'dg-card-acts');
+        if (view.canRetry) acts.append(button('dg-btn dg-btn-primary', '다시 시도', () => this.retryConnection()));
+        if (view.canOpenLog) acts.append(button('dg-btn', '로그 열기', () => this.openLog(view.logPath)));
+        if (view.help) {
+          const help = view.help;
+          acts.append(button('dg-btn dg-btn-quiet', help.label, () => { void this.deps.openExternal(help.url); }));
+        }
+        if (acts.childElementCount) parts.push(acts);
+        if (view.raw && view.tone === 'bad') {
+          const details = el('details', '');
+          details.append(el('summary', '', '자세히'), el('code', '', userWords(view.raw)));
+          parts.push(details);
+        }
+        this.conn.replaceChildren(...parts);
+        if (countdown && view.retryAt > Date.now()) {
+          const node = countdown;
+          const at = view.retryAt;
+          this.connTimer = setInterval(() => {
+            node.textContent = countdownText(at);
+            if (Date.now() >= at && this.connTimer) {
+              clearInterval(this.connTimer);
+              this.connTimer = null;
+            }
+          }, 1000);
+        }
+      }
+    }
     if (state === 'open') void this.refreshProviders();
     this.renderModelButton();
     if (state !== 'open' && this.busy) {
-      this.addNotice('연결이 끊겨 응답을 더 받지 못했습니다.', 'error');
+      this.addNotice('에이전트 서비스 연결이 끊겨 응답을 더 받지 못했습니다.', 'error');
       this.endTurn();
     }
     this.renderComposer();
+    this.sheet?.render();
+    this.refreshContext();
+  }
+
+  private openLog(logPath: string): void {
+    const fallback = () => {
+      if (logPath && navigator.clipboard?.writeText) {
+        navigator.clipboard.writeText(logPath).then(
+          () => this.addNotice(`로그를 열지 못해 파일 경로를 복사했습니다: ${logPath}`, 'info'),
+          () => this.addNotice(`로그 파일: ${logPath}`, 'info'),
+        );
+      } else {
+        this.addNotice('로그를 열지 못했습니다. 앱 로그 폴더의 hub.log 를 확인하세요.', 'error');
+      }
+    };
+    if (!this.deps.openHubLog) {
+      fallback();
+      return;
+    }
+    this.deps.openHubLog().catch(fallback);
   }
 
   private async refreshProviders(): Promise<void> {
     try {
       this.setProviders(await this.deps.hub.queryProviders());
     } catch (error) {
-      this.conn.textContent = `모델 목록을 받지 못했습니다: ${error instanceof Error ? error.message : String(error)}`;
-      this.conn.hidden = false;
+      if (this.deps.hub.state !== 'open') return; // 연결 카드가 이미 말한다
+      this.addNotice(`AI 계정 목록을 받지 못했습니다: ${userWords(error instanceof Error ? error.message : String(error))}`, 'error');
     }
   }
 
@@ -577,6 +894,8 @@ export class DoogleSidebar {
     this.renderModelButton();
     if (this.openMenuKind === 'model') this.renderModelMenu();
     this.renderComposer();
+    this.sheet?.render();
+    this.refreshContext();
   }
 
   private currentProvider(): ProviderInfo | undefined {
@@ -605,7 +924,7 @@ export class DoogleSidebar {
 
   private requestModelRefresh(providerId: string): void {
     if (!this.deps.hub.refreshModels(providerId)) {
-      this.addNotice('agent hub 에 연결되어 있지 않습니다.', 'error');
+      this.addNotice('에이전트 서비스에 연결되어 있지 않습니다.', 'error');
       return;
     }
     this.refreshingModels.add(providerId);
@@ -622,153 +941,77 @@ export class DoogleSidebar {
       label = modelDisplayName(model, provider.models);
       storeSet(STORE_MODEL_LABEL, label);
     } else if (provider) {
-      label = provider.available ? '모델 고르기' : `${provider.label} · 사용 불가`;
+      label = provider.available ? '모델 고르기' : 'AI 계정 연결 필요';
     } else {
       label = storeGet(STORE_MODEL_LABEL) || (this.deps.hub.state === 'open' ? '모델 불러오는 중…' : '연결 대기 중');
     }
     this.modelText.textContent = label;
-    const title = provider ? `${provider.label} · ${label}${provider.available ? '' : ' (사용 불가)'}` : label;
+    const title = provider ? (provider.available ? `${provider.label} · ${label}` : `${provider.label}: 연결되지 않음`) : label;
     this.modelBtn.title = title;
     this.modelBtn.setAttribute('aria-label', `모델: ${title}`);
     this.modelBtn.classList.toggle('dg-warn', !!provider && !provider.available);
   }
 
+  /** 모델 메뉴: 쓸 수 있는 AI 계정의 모델 + 새로고침. 계정 연결·키·로그아웃은 설정 시트에서. */
   private renderModelMenu(): void {
     const parts: HTMLElement[] = [];
+    const usable = this.providers.filter((p) => p.available);
     if (this.providers.length === 0) {
-      parts.push(el('p', 'dg-menu-hint', this.deps.hub.state === 'open' ? '모델 목록을 받는 중…' : 'agent hub 에 연결되면 모델을 고를 수 있습니다.'));
+      parts.push(el('p', 'dg-menu-hint', this.deps.hub.state === 'open' ? '모델 목록을 받는 중…' : '에이전트 서비스에 연결되면 모델을 고를 수 있습니다.'));
+    } else if (usable.length === 0) {
+      parts.push(el('p', 'dg-menu-hint', '사용할 수 있는 AI 계정이 없습니다. 설정에서 계정을 연결하세요.'));
     }
-    for (const provider of this.providers) {
+    for (const provider of usable) {
       const group = el('div', 'dg-menu-group');
       group.setAttribute('role', 'group');
       group.setAttribute('aria-label', provider.label);
-      const heading = el('div', 'dg-menu-heading', provider.label);
-      if (!provider.available) heading.append(el('span', 'dg-menu-tag', '사용 불가'));
-      group.append(heading);
-
-      if (provider.available) {
-        for (const model of provider.models) {
-          const on = provider.id === this.providerId && model.id === this.model;
-          const item = button('dg-menu-item dg-model-item', '', () => {
-            this.selectModel(provider.id, model.id);
-            this.closeMenu(true);
-          });
-          item.setAttribute('role', 'menuitemradio');
-          item.setAttribute('aria-checked', String(on));
-          item.disabled = this.busy;
-          const text = el('span', 'dg-model-item-text');
-          const name = modelDisplayName(model, provider.models);
-          text.append(el('span', 'dg-menu-label', name));
-          const desc = model.description || (model.id !== name && model.id !== 'default' ? model.id : '');
-          if (desc) text.append(el('span', 'dg-menu-desc', desc));
-          item.title = model.resolvedModel && model.resolvedModel !== model.id ? `${name} → ${model.resolvedModel}` : model.id;
-          item.append(el('span', 'dg-menu-check', on ? '✓' : ''), text);
-          group.append(item);
-        }
-        const refreshing = this.refreshingModels.has(provider.id);
-        const foot = el('div', 'dg-models-foot');
-        const note = modelsFreshnessNote(provider);
-        if (note) {
-          const noteEl = el('span', 'dg-models-note', note);
-          if (provider.modelsError) noteEl.title = provider.modelsError;
-          foot.append(noteEl);
-        }
-        const refresh = button('dg-models-refresh', refreshing ? '새로고침 중…' : '새로고침', () => this.requestModelRefresh(provider.id));
-        refresh.setAttribute('role', 'menuitem');
-        refresh.disabled = refreshing;
-        refresh.setAttribute('aria-label', `${provider.label} 모델 목록 새로고침`);
-        foot.append(refresh);
-        group.append(foot);
-        if (provider.id === 'openai-siwc') {
-          const logout = button('dg-menu-item dg-menu-minor', '로그아웃', () => {
-            this.closeMenu(true);
-            if (!this.deps.hub.logout(provider.id)) this.addNotice('agent hub 에 연결되어 있지 않습니다.', 'error');
-          });
-          logout.setAttribute('role', 'menuitem');
-          group.append(logout);
-        }
-        if (SECRET_KEY_OF[provider.id]) {
-          if (this.keyFormFor === provider.id) group.append(this.buildKeyForm(provider.id));
-          else {
-            const change = button('dg-menu-item dg-menu-minor', 'API 키 바꾸기', () => {
-              this.keyFormFor = provider.id;
-              this.keyNote = '';
-              this.renderModelMenu();
-              this.modelMenu.querySelector<HTMLInputElement>('input')?.focus();
-            });
-            change.setAttribute('role', 'menuitem');
-            group.append(change);
-          }
-        }
-      } else {
-        const hint = provider.id === 'claude-sdk'
-          ? provider.authHint || CLAUDE_LOGIN_HINT
-          : provider.authHint || provider.reason || '';
-        if (hint) group.append(el('p', 'dg-menu-hint', hint));
-        if (provider.id === 'openai-siwc') {
-          const pendingLogin = this.loginPending === provider.id;
-          const login = button('dg-menu-item dg-menu-action', pendingLogin ? '로그인 취소' : 'ChatGPT로 로그인', () => {
-            if (pendingLogin) {
-              this.deps.hub.cancelLogin(provider.id);
-              this.loginPending = null;
-            } else {
-              this.startLogin(provider.id);
-            }
-            this.renderModelMenu();
-          });
-          login.setAttribute('role', 'menuitem');
-          group.append(login);
-          if (pendingLogin) group.append(el('p', 'dg-menu-hint', '브라우저에서 로그인을 마치세요…'));
-        } else if (SECRET_KEY_OF[provider.id]) {
-          group.append(this.buildKeyForm(provider.id));
-        }
+      group.append(el('div', 'dg-menu-heading', provider.label));
+      for (const model of provider.models) {
+        const on = provider.id === this.providerId && model.id === this.model;
+        const item = button('dg-menu-item dg-model-item', '', () => {
+          this.selectModel(provider.id, model.id);
+          this.closeMenu(true);
+        });
+        item.setAttribute('role', 'menuitemradio');
+        item.setAttribute('aria-checked', String(on));
+        item.disabled = this.busy;
+        const text = el('span', 'dg-model-item-text');
+        const name = modelDisplayName(model, provider.models);
+        text.append(el('span', 'dg-menu-label', name));
+        const desc = model.description || (model.id !== name && model.id !== 'default' ? model.id : '');
+        if (desc) text.append(el('span', 'dg-menu-desc', desc));
+        item.title = model.resolvedModel && model.resolvedModel !== model.id ? `${name} → ${model.resolvedModel}` : model.id;
+        item.append(el('span', 'dg-menu-check', on ? '✓' : ''), text);
+        group.append(item);
       }
+      const refreshing = this.refreshingModels.has(provider.id);
+      const foot = el('div', 'dg-models-foot');
+      const note = modelsFreshnessNote(provider);
+      if (note) {
+        const noteEl = el('span', 'dg-models-note', note);
+        if (provider.modelsError) noteEl.title = provider.modelsError;
+        foot.append(noteEl);
+      }
+      const refresh = button('dg-models-refresh', refreshing ? '새로고침 중…' : '새로고침', () => this.requestModelRefresh(provider.id));
+      refresh.setAttribute('role', 'menuitem');
+      refresh.disabled = refreshing;
+      refresh.setAttribute('aria-label', `${provider.label} 모델 목록 새로고침`);
+      foot.append(refresh);
+      group.append(foot);
       parts.push(group);
     }
+    const manage = button('dg-menu-item dg-menu-minor', '', () => this.openSettings('accounts'));
+    manage.setAttribute('role', 'menuitem');
+    manage.append(icon('gear', 13), el('span', '', 'AI 계정 관리…'));
+    const foot = el('div', usable.length ? 'dg-menu-foot' : '');
+    foot.append(manage);
+    parts.push(foot);
     this.modelMenu.replaceChildren(...parts);
-  }
-
-  private buildKeyForm(providerId: string): HTMLElement {
-    const spec = SECRET_KEY_OF[providerId];
-    const form = el('form', 'dg-key-form');
-    const id = `dg-key-${providerId}`;
-    const label = el('label', 'dg-sr-only', 'API 키');
-    label.htmlFor = id;
-    const input = el('input', 'dg-key-input');
-    input.id = id;
-    input.type = 'password';
-    input.autocomplete = 'off';
-    input.spellcheck = false;
-    input.placeholder = spec.placeholder;
-    const save = el('button', 'dg-key-save', '저장');
-    save.type = 'submit';
-    const note = el('p', 'dg-menu-hint', this.keyNote || 'OS 보안 저장소(keyring)에 저장되며 다시 표시되지 않습니다.');
-    note.setAttribute('aria-live', 'polite');
-    form.append(label, input, save, note);
-    form.addEventListener('submit', (event) => {
-      event.preventDefault();
-      const value = input.value.trim();
-      if (!value) {
-        note.textContent = '키를 입력하세요.';
-        return;
-      }
-      note.textContent = '저장하는 중…';
-      this.deps.hub.setSecret(spec.key, value).then(() => {
-        input.value = '';
-        this.keyNote = '저장했습니다.';
-        this.keyFormFor = null;
-        note.textContent = '저장했습니다.';
-        void this.refreshProviders();
-      }).catch((error: unknown) => {
-        note.textContent = `저장하지 못했습니다: ${error instanceof Error ? error.message : String(error)}`;
-      });
-    });
-    return form;
   }
 
   private startLogin(providerId: string): void {
     if (!this.deps.hub.startLogin(providerId)) {
-      this.addNotice('agent hub 에 연결되어 있지 않아 로그인을 시작할 수 없습니다.', 'error');
+      this.addNotice('에이전트 서비스에 연결되어 있지 않아 로그인을 시작할 수 없습니다.', 'error');
       return;
     }
     this.loginPending = providerId;
@@ -778,7 +1021,7 @@ export class DoogleSidebar {
     const { url, providerId } = message as { url?: unknown; providerId?: unknown };
     if (typeof url !== 'string') return;
     this.loginPending = typeof providerId === 'string' ? providerId : this.loginPending;
-    if (this.openMenuKind === 'model') this.renderModelMenu();
+    this.sheet?.render();
     this.deps.openExternal(url).catch((error) => {
       this.addNotice(`브라우저를 열지 못했습니다: ${error instanceof Error ? error.message : String(error)}`, 'error');
     });
@@ -787,9 +1030,10 @@ export class DoogleSidebar {
   private handleAuthDone(message: HubMessage): void {
     const { ok, error } = message as { ok?: unknown; error?: unknown };
     this.loginPending = null;
-    if (ok === true) this.addNotice('로그인했습니다.', 'info');
-    else this.addNotice(`로그인하지 못했습니다: ${errorText(error) || '알 수 없는 오류'}`, 'error');
-    if (this.openMenuKind === 'model') this.renderModelMenu();
+    const text = ok === true ? '로그인했습니다.' : `로그인하지 못했습니다: ${errorText(error) || '알 수 없는 오류'}`;
+    if (this.sheet?.isOpen) this.announce(text);
+    else this.addNotice(text, ok === true ? 'info' : 'error');
+    this.sheet?.render();
     // hub 가 새 providers 를 보내지만, 놓쳤을 때를 대비해 한 번 더 묻는다.
     void this.refreshProviders();
   }
@@ -838,13 +1082,20 @@ export class DoogleSidebar {
     this.modelBtn.append(this.modelText, icon('chevronDown', 12, 2));
 
     this.modelMenu = el('div', 'dg-menu dg-model-menu');
+    this.modelMenu.dataset.dgFloating = '';
     this.modelMenu.setAttribute('role', 'menu');
     this.modelMenu.setAttribute('aria-label', '모델 고르기');
     this.modelMenu.hidden = true;
 
+    this.gearBtn = iconButton('dg-gear', 'gear', '설정 (AI 계정 · 적용 방식)', () => {
+      if (this.sheet.isOpen) this.sheet.close();
+      else this.openSettings();
+    }, 16);
+    this.gearBtn.setAttribute('aria-expanded', 'false');
+
     this.sendBtn = button('dg-send', '', () => (this.busy ? this.cancel() : this.submit()));
 
-    row.append(attach, this.modeBtn, el('div', 'dg-grow'), this.modelBtn, this.sendBtn);
+    row.append(attach, this.modeBtn, el('div', 'dg-grow'), this.modelBtn, this.gearBtn, this.sendBtn);
     box.append(label, this.input, row);
     wrap.append(this.modelMenu, box);
     return wrap;
@@ -889,7 +1140,7 @@ export class DoogleSidebar {
     } else {
       this.sendBtn.replaceChildren(icon('send', 16, 2.2));
       this.sendBtn.setAttribute('aria-label', '보내기');
-      this.sendBtn.title = ready ? '보내기 (Enter)' : provider ? `${provider.label}: 사용할 수 없습니다` : '모델을 고르세요';
+      this.sendBtn.title = ready ? '보내기 (Enter)' : this.deps.hub.state !== 'open' ? '에이전트 서비스에 연결되어 있지 않습니다' : provider ? `${provider.label}: AI 계정을 연결하세요` : '모델을 고르세요';
       this.sendBtn.disabled = !ready || this.input.value.trim() === '';
       this.sendBtn.classList.remove('dg-send-stop');
     }
@@ -903,8 +1154,12 @@ export class DoogleSidebar {
     if (!text || this.busy) return;
     const provider = this.currentProvider();
     if (!provider?.available) {
-      this.addNotice('사용할 수 있는 모델을 고르세요.', 'error');
-      this.openMenu('model', this.modelBtn);
+      if (this.providers.some((p) => p.available)) {
+        this.addNotice('사용할 수 있는 모델을 고르세요.', 'error');
+        this.openMenu('model', this.modelBtn);
+      } else {
+        this.openSettings('accounts');
+      }
       return;
     }
     const sent = this.deps.hub.sendChat({
@@ -916,9 +1171,10 @@ export class DoogleSidebar {
       context: this.deps.getContext(),
     });
     if (!sent) {
-      this.addNotice('agent hub 에 연결되어 있지 않습니다.', 'error');
+      this.addNotice('에이전트 서비스에 연결되어 있지 않습니다.', 'error');
       return;
     }
+    storeSet(STORE_ONBOARDED, '1');
     if (textOverride === undefined) {
       this.input.value = '';
       this.autosize();
@@ -930,9 +1186,11 @@ export class DoogleSidebar {
     }
     // 이전 턴의 "다시 시도" 는 마지막 턴에서만
     for (const t of this.thread.turns) t.actions?.querySelector('.dg-act-retry')?.setAttribute('hidden', '');
-    this.appendToLog(el('div', 'dg-user', text));
+    const bubble = el('div', 'dg-user', text);
+    bubble.classList.add('dg-keep-all');
+    this.appendToLog(bubble);
     this.scrollToBottom();
-    this.startTurn(text);
+    this.startTurn(text, provider.id);
   }
 
   private cancel(): void {
@@ -941,12 +1199,12 @@ export class DoogleSidebar {
     if (this.turn?.thinking) this.turn.thinking.textContent = '중지하는 중…';
   }
 
-  private startTurn(userText: string): void {
+  private startTurn(userText: string, providerId = this.providerId): void {
     const root = el('div', 'dg-turn');
     const thinking = el('div', 'dg-thinking', '생각하는 중…');
     root.append(thinking);
     const turn: TurnView = {
-      threadId: this.thread.id, root, userText, chip: null, chipText: null, toolList: null, tools: new Map(),
+      threadId: this.thread.id, root, userText, providerId, chip: null, chipText: null, toolList: null, tools: new Map(),
       text: null, prose: [], thinking, actions: null, changeIds: new Set(), done: false,
     };
     this.turn = turn;
@@ -1028,7 +1286,7 @@ export class DoogleSidebar {
       case 'text_delta': {
         const turn = this.ensureTurn();
         if (!turn.text) {
-          const node = el('div', 'dg-prose dg-streaming');
+          const node = el('div', 'dg-prose dg-keep-all dg-streaming');
           turn.root.insertBefore(node, turn.thinking ?? null);
           turn.text = { node, raw: '' };
         }
@@ -1064,7 +1322,17 @@ export class DoogleSidebar {
           entry.li.dataset.state = event.ok ? 'done' : 'error';
           const status = entry.li.querySelector('.dg-tool-status');
           if (status) status.setAttribute('aria-label', event.ok ? '완료' : '실패');
-          if (!event.ok && event.summary) entry.li.title = event.summary;
+          if (!event.ok) {
+            // 실패 사유는 툴팁이 아니라 항목 아래 한 줄로, 칩은 자동으로 펼친다 (UI_AUDIT §3.12)
+            const failure = formatToolFailure(event.summary);
+            const reason = el('span', 'dg-tool-reason', failure.text);
+            if (failure.code) reason.title = failure.code;
+            entry.li.append(reason);
+            if (turn.chip && turn.toolList) {
+              turn.chip.setAttribute('aria-expanded', 'true');
+              turn.toolList.hidden = false;
+            }
+          }
           this.updateChip(turn);
         }
         if (turn?.thinking) turn.thinking.textContent = '생각하는 중…';
@@ -1079,12 +1347,11 @@ export class DoogleSidebar {
         break;
       }
       case 'limit': {
-        const reset = formatResetAt(event.resetAt);
-        this.addNotice(`${event.message}${reset ? ` — ${reset}에 다시 쓸 수 있습니다` : ''}`, 'limit');
+        this.addLimitCard(this.turn, event.message, event.resetAt);
         break;
       }
       case 'error': {
-        this.addNotice(event.message || event.code, 'error');
+        this.addErrorCard(this.turn, event.code, event.message);
         break;
       }
       case 'turn_end': {
@@ -1095,6 +1362,61 @@ export class DoogleSidebar {
       default:
         break;
     }
+  }
+
+  // ─── 한도·오류 카드 (UI_AUDIT §3.12) ───────────────────
+
+  private addLimitCard(turn: TurnView | null, message: string, resetAt: string | number | undefined): void {
+    const providerId = turn?.providerId ?? this.providerId;
+    const provider = this.providers.find((p) => p.id === providerId);
+    const reset = parseResetAt(resetAt);
+    const body = reset
+      ? `${formatResetAt(resetAt)}에 다시 쓸 수 있습니다 (${relativeUntil(reset)}).`
+      : '한도가 다시 채워지면 이어서 쓸 수 있습니다.';
+    const actions: Array<{ label: string; primary?: boolean; run: () => void }> = [];
+    const userText = turn?.userText ?? '';
+    if (userText) {
+      const others = this.providers.filter((p) => p.available && p.id !== providerId).slice(0, 2);
+      others.forEach((other, index) => {
+        actions.push({ label: `${other.label}로 보내기`, primary: index === 0, run: () => this.resendWith(other.id, userText) });
+      });
+    }
+    if (!this.providers.some((p) => p.available && (p.id === 'anthropic-api' || p.id === 'openai-api'))) {
+      actions.push({ label: 'API 키 추가', run: () => this.openSettings('api') });
+    }
+    const title = message?.trim() || `${provider?.label ?? 'AI 계정'} 사용 한도를 다 썼습니다`;
+    this.placeInTurn(this.buildCard({ tone: 'warn', iconName: 'clock', title, body, actions }), turn);
+  }
+
+  private addErrorCard(turn: TurnView | null, code: string, message: string): void {
+    const actions: Array<{ label: string; primary?: boolean; run: () => void }> = [];
+    if (turn?.userText) actions.push({ label: '다시 시도', run: () => this.retry(turn) });
+    this.placeInTurn(this.buildCard({
+      tone: 'bad',
+      iconName: 'alert',
+      title: '요청을 끝내지 못했습니다',
+      body: message ? userWords(message) : '잠시 뒤 다시 시도하세요.',
+      ...(code ? { code } : {}),
+      actions,
+    }), turn);
+  }
+
+  /** 한도 카드: 같은 요청을 다른 AI 계정으로 다시 보낸다 */
+  private resendWith(providerId: string, text: string): void {
+    if (this.busy) {
+      this.announce('응답이 끝난 뒤 다시 누르세요');
+      return;
+    }
+    const provider = this.providers.find((p) => p.id === providerId && p.available);
+    if (!provider) return;
+    const stored = storeGet(`${STORE_MODEL_PREFIX}${provider.id}`);
+    const model = provider.models.some((m) => m.id === stored)
+      ? stored!
+      : provider.defaultModel && provider.models.some((m) => m.id === provider.defaultModel)
+        ? provider.defaultModel
+        : provider.models[0]?.id ?? '';
+    this.selectModel(provider.id, model);
+    this.submit(text);
   }
 
   // ─── 도구 칩 ───────────────────────────────────────────
@@ -1162,6 +1484,16 @@ export class DoogleSidebar {
     revert.append(icon('undo', 14), el('span', '', '요청 전으로 되돌리기'));
     revert.classList.add('dg-act-revert');
     row.append(copy, retry, revert);
+    // 실패한 도구가 있으면 그것만 다시 해 달라고 요청한다(도구 재생은 프로토콜에 없어 같은 대화의 새 요청으로)
+    const failed = [...new Set([...turn.tools.values()].filter((e) => e.li.dataset.state === 'error').map((e) => e.label))];
+    if (failed.length > 0 && turn.userText) {
+      const again = button('dg-act dg-act-text dg-act-failed', '', () => {
+        if (this.busy) return;
+        this.submit(`방금 실패한 작업(${failed.join(', ')})만 원인을 확인해 다시 시도해 줘.`);
+      });
+      again.append(icon('retry', 14), el('span', '', '실패한 도구만 다시 시도'));
+      row.append(again);
+    }
     this.renderTurnActions(turn, row);
     return row;
   }
@@ -1174,13 +1506,9 @@ export class DoogleSidebar {
     revert.hidden = pendingIds.length === 0;
     revert.disabled = this.busy;
     if (pendingIds.length > 0) {
-      const span = reviewStore.rejectSpan(pendingIds[0]);
-      revert.title = span > pendingIds.length
-        ? `이 요청의 변경과 그 뒤 변경까지 ${span}건을 되돌립니다`
-        : `이 요청의 변경 ${span}건을 되돌립니다`;
+      revert.title = impactSentence(reviewStore.rejectImpact(pendingIds[0]));
     }
-    const retry = row?.querySelector<HTMLButtonElement>('.dg-act-retry');
-    if (retry) retry.disabled = this.busy;
+    for (const b of row?.querySelectorAll<HTMLButtonElement>('.dg-act-retry, .dg-act-failed') ?? []) b.disabled = this.busy;
   }
 
   private pendingIdsOf(turn: TurnView): string[] {
@@ -1226,81 +1554,32 @@ export class DoogleSidebar {
     for (const t of this.thread.turns) if (t.done) this.renderTurnActions(t);
   }
 
+  /**
+   * 검토 목록은 review/list.ts(mountReviewList)가 그린다 — reviewStore 를 스스로 구독하고 비면 숨는다.
+   * 여기서는 목록 상자를 변경을 만든 턴 안의 알맞은 자리에 놓기만 한다.
+   */
   private renderReview(): void {
     const review = this.review;
-    if (!review) return;
-    const rows = this.deps.pending ? reviewStore.rows() : [];
-    if (rows.length === 0) {
-      review.hidden = true;
-      review.replaceChildren();
-      for (const t of this.thread?.turns ?? []) if (t.done) this.renderTurnActions(t);
-      return;
-    }
-    // 다른 대화의 변경이면 이 대화 끝에 붙인다
-    if (!this.thread.log.contains(review)) {
+    if (!review || !this.deps.pending) return;
+    const rows = reviewStore.rows();
+    if (rows.length > 0 && !this.thread.log.contains(review)) {
+      // 다른 대화의 변경이면 이 대화 끝에 붙인다
       const owner = rows.map((r) => this.changeTurn.get(r.id)).find((t) => t && this.thread.turns.includes(t));
       if (owner) owner.root.insertBefore(review, owner.actions ?? owner.thinking ?? null);
       else this.thread.log.append(review);
     }
-    review.hidden = false;
-    const current = reviewStore.currentId;
-    const foreign = rows.some((r) => r.threadId !== this.thread.id && !this.changeTurn.has(r.id));
-
-    const head = el('div', 'dg-review-head');
-    const count = el('span', 'dg-count', String(rows.length));
-    count.setAttribute('aria-label', `${rows.length}건`);
-    const rejectAll = button('dg-review-reject', '모두 거절', () => this.decideAll('reject'));
-    const acceptAll = button('dg-review-accept', '모두 적용', () => this.decideAll('accept'));
-    acceptAll.append(el('span', 'dg-kbd', 'Ctrl ↵'));
-    acceptAll.setAttribute('aria-keyshortcuts', 'Control+Enter');
-    rejectAll.disabled = this.busy;
-    acceptAll.disabled = this.busy;
-    head.append(el('span', 'dg-review-title', foreign ? '변경 (다른 대화)' : '변경'), count, el('div', 'dg-grow'), rejectAll, acceptAll);
-
-    const list = el('ul', 'dg-review-list');
-    for (const row of rows) {
-      const view = describeChange(row);
-      const li = el('li', 'dg-review-row');
-      const on = row.id === current;
-      li.classList.toggle('dg-current', on);
-      const loc = view.location;
-
-      const go = button('dg-review-go', '', () => reviewStore.focus(row.id, true));
-      if (on) go.setAttribute('aria-current', 'true');
-      go.setAttribute('aria-label', `${loc} 변경으로 이동`);
-      const where = el('span', 'dg-review-loc', loc);
-      const what = el('span', 'dg-review-what');
-      if (view.del || view.ins) {
-        if (view.del) what.append(el('del', 'dg-del', view.del));
-        if (view.del && view.ins) what.append(' ');
-        if (view.ins) what.append(el('ins', 'dg-ins', view.ins));
-        if (view.summary) what.append(el('span', 'dg-review-more', ` ${view.summary}`));
-      } else {
-        what.textContent = view.summary;
-      }
-      go.append(where, what);
-
-      const btns = el('span', 'dg-review-btns');
-      const ok = iconButton('dg-review-ok', 'check', `${loc} 변경 적용`, () => this.decideOne('accept', row.id), 14);
-      const span = reviewStore.rejectSpan(row.id);
-      const no = iconButton('dg-review-no', 'close', `${loc} 변경 거절`, () => this.decideOne('reject', row.id), 13);
-      if (span > 1) no.title = `${loc} 변경 거절 — 그 뒤 변경 ${span - 1}건도 함께 되돌아갑니다`;
-      ok.disabled = this.busy;
-      no.disabled = this.busy;
-      btns.append(ok, no);
-      li.append(go, btns);
-      list.append(li);
-    }
-    review.replaceChildren(head, list);
-    for (const t of this.thread.turns) if (t.done) this.renderTurnActions(t);
-  }
-
-  private decideOne(kind: 'accept' | 'reject', id: string): void {
-    if (this.busy) return;
-    try {
-      reviewStore.decide(kind, id);
-    } catch (error) {
-      this.addNotice(`검토를 처리하지 못했습니다: ${error instanceof Error ? error.message : String(error)}`, 'error');
+    if (!this.reviewList) {
+      this.reviewList = mountReviewList(review, {
+        onError: (message) => this.addNotice(message, 'error'),
+        title: (list) => list.some((r) => r.threadId !== this.thread.id && !this.changeTurn.has(r.id))
+          ? '검토 대기 중인 변경 (다른 대화)'
+          : '검토 대기 중인 변경',
+        onRender: () => {
+          for (const t of this.thread?.turns ?? []) if (t.done) this.renderTurnActions(t);
+        },
+      });
+    } else {
+      this.reviewList.render();
     }
   }
 

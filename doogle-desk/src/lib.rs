@@ -140,6 +140,25 @@ async fn pick_save_file(window: WebviewWindow, app: AppHandle, suggested_name: O
     .await
 }
 
+/// 파일 탐색기에서 문서 위치를 연다(제목 막대 '폴더에서 보기').
+#[tauri::command]
+async fn reveal_in_folder(path: String) -> CmdResult<()> {
+    blocking(move || files::reveal_in_folder(&path)).await
+}
+
+/// 최근 문서 카드의 파일 정보(있는지·수정 시각).
+#[tauri::command]
+async fn file_stat(path: String) -> CmdResult<files::FileStat> {
+    blocking(move || files::file_stat(&path)).await
+}
+
+/// 백스테이지 '새로 만들기' 템플릿 — 리소스 `templates/*.hwpx`.
+#[tauri::command]
+async fn list_templates(app: AppHandle) -> CmdResult<Vec<files::TemplateInfo>> {
+    let dir = app.path().resource_dir().map(|dir| dir.join("templates")).map_err(|error| error.to_string())?;
+    blocking(move || Ok(files::list_templates(&dir))).await
+}
+
 /// 로그인 페이지 등 외부 주소를 시스템 브라우저로 연다. https 만 허용한다
 /// (loopback 콜백 주소 `http://127.0.0.1:*` 도 허용 — SIWC PKCE 흐름).
 #[tauri::command]
@@ -234,14 +253,37 @@ fn hub_event_payload(event: &HubEvent) -> serde_json::Value {
     }
 }
 
+/// hub 표준 출력·오류가 쌓이는 로그 파일(hub.rs 가 줄마다 덧붙인다).
+fn hub_log_path(app: &AppHandle) -> PathBuf {
+    app.path().app_log_dir().unwrap_or_else(|_| std::env::temp_dir().join("doogle")).join("hub.log")
+}
+
+/// 에이전트 서비스 로그를 OS 기본 프로그램으로 연다. 파일이 없으면 만든다. 연 경로를 돌려준다.
+#[tauri::command]
+async fn open_hub_log(app: AppHandle) -> CmdResult<String> {
+    let path = hub_log_path(&app);
+    let opened = path.clone();
+    blocking(move || {
+        if let Some(parent) = opened.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| format!("로그 폴더를 만들 수 없습니다: {error}"))?;
+        }
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&opened)
+            .map_err(|error| format!("로그 파일을 열 수 없습니다: {error}"))?;
+        app.opener()
+            .open_path(opened.to_string_lossy().to_string(), None::<&str>)
+            .map_err(|error| format!("로그를 열 수 없습니다: {error}"))
+    })
+    .await?;
+    Ok(path.to_string_lossy().to_string())
+}
+
 fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let handle = app.handle().clone();
     let dir = agent_dir(&handle);
-    let log_path = handle
-        .path()
-        .app_log_dir()
-        .unwrap_or_else(|_| std::env::temp_dir().join("doogle"))
-        .join("hub.log");
+    let log_path = hub_log_path(&handle);
     let hub = HubOwner::new(HubConfig { script: dir.join("bin").join("doogle-hub.mjs"), cwd: dir, log_path });
     let emitter = handle.clone();
     hub.set_listener(move |event| {
@@ -287,6 +329,10 @@ pub fn run() {
             pick_save_file,
             take_open_requests,
             open_external,
+            reveal_in_folder,
+            file_stat,
+            list_templates,
+            open_hub_log,
             set_close_guard,
             confirm_close,
             updater::update_check,

@@ -9,7 +9,7 @@
  *  - 메서드 존재를 실행 시점에 확인해 없으면 ENGINE_UNSUPPORTED (docs/doogle/ENGINE_GAPS.md)
  *  - "\n" 이 든 삽입을 문단 나누기로 푼다
  */
-import { DoogleToolError, scalarLength, type CellAddr, type CellPathEntry, type EngineDoc, type SelectionRect } from './types.ts';
+import { DoogleToolError, scalarLength, type CellAddr, type CellPathEntry, type EngineDoc, type FormatDiff, type SelectionRect } from './types.ts';
 
 export interface ObjectRef {
   sectionIdx: number;
@@ -22,6 +22,18 @@ export interface TableDims { rowCount: number; colCount: number; cellCount: numb
 export interface CellInfo { row: number; col: number; rowSpan: number; colSpan: number }
 export interface CharShapeRun { startOffset: number; endOffset: number; charShapeId: number }
 
+/** 서식 diff 를 남기는 최대 곳 수 (한 쓰기당) */
+const FORMAT_LOG_LIMIT = 4;
+
+function safeRead(read: () => Record<string, unknown>): Record<string, unknown> | null {
+  try {
+    const value = read();
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 function engineMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   if (typeof error === 'string') return error;
@@ -31,6 +43,11 @@ function engineMessage(error: unknown): string {
 export class Engine {
   readonly doc: EngineDoc;
   private objectsMemo: ObjectRef[] | null = null;
+  /**
+   * (검토) 켜 두면 applyCharFormat/applyParaFormat 이 바뀐 속성의 전·후를 남긴다 — 스테이징 행이
+   * 서식 diff 를 그린다. 읽기에 실패해도 쓰기는 그대로 진행한다.
+   */
+  formatLog: FormatDiff[] | null = null;
 
   constructor(doc: EngineDoc) {
     this.doc = doc;
@@ -263,6 +280,14 @@ export class Engine {
 
   applyCharFormat(sectionIdx: number, paraIdx: number, start: number, end: number, props: Record<string, unknown>, cell?: CellAddr): void {
     if (end <= start) return;
+    const read = this.formatLog && this.formatLog.length < FORMAT_LOG_LIMIT
+      ? () => this.charPropsAt(sectionIdx, paraIdx, start, cell) : null;
+    const before = read ? safeRead(read) : null;
+    this.applyCharFormatRaw(sectionIdx, paraIdx, start, end, props, cell);
+    if (read && before) this.logFormat('char', props, before, safeRead(read));
+  }
+
+  private applyCharFormatRaw(sectionIdx: number, paraIdx: number, start: number, end: number, props: Record<string, unknown>, cell?: CellAddr): void {
     const json = JSON.stringify(props);
     if (cell) {
       this.json('applyCharFormatInCellByPath', sectionIdx, cell.paraIdx, this.pathJson(cell, paraIdx), start, end, json);
@@ -272,6 +297,29 @@ export class Engine {
   }
 
   applyParaFormat(sectionIdx: number, paraIdx: number, props: Record<string, unknown>, cell?: CellAddr): void {
+    const read = this.formatLog && this.formatLog.length < FORMAT_LOG_LIMIT
+      ? () => this.paraPropsAt(sectionIdx, paraIdx, cell) : null;
+    const before = read ? safeRead(read) : null;
+    this.applyParaFormatRaw(sectionIdx, paraIdx, props, cell);
+    if (read && before) this.logFormat('para', props, before, safeRead(read));
+  }
+
+  private logFormat(kind: 'char' | 'para', props: Record<string, unknown>, before: Record<string, unknown>, after: Record<string, unknown> | null): void {
+    const keys = Object.keys(props);
+    const pick = (src: Record<string, unknown> | null, fallback: boolean): Record<string, unknown> => {
+      const out: Record<string, unknown> = {};
+      for (const key of keys) {
+        if (src && key in src) out[key] = src[key];
+        else if (fallback) out[key] = props[key];
+      }
+      // 글꼴은 번호보다 이름이 읽힌다
+      if (keys.includes('fontId') && src && typeof src['fontFamily'] === 'string') out['fontFamily'] = src['fontFamily'];
+      return out;
+    };
+    this.formatLog?.push({ kind, keys, before: pick(before, false), after: pick(after, true) });
+  }
+
+  private applyParaFormatRaw(sectionIdx: number, paraIdx: number, props: Record<string, unknown>, cell?: CellAddr): void {
     const json = JSON.stringify(props);
     if (cell) {
       this.json('applyParaFormatInCellByPath', sectionIdx, cell.paraIdx, this.pathJson(cell, paraIdx), json);

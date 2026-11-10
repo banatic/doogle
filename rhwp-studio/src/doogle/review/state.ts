@@ -10,6 +10,18 @@ import type { PendingApi, PendingChangeSet } from '../agent/types.ts';
 export type ReviewListener = () => void;
 export type ExplainListener = (changeId: string) => void;
 
+/** 거절의 파급 — 검토 UI 가 거절 전에 본문에 보여 준다 */
+export interface RejectImpact {
+  /** 함께 되돌아가는 행 수 (자신 포함, 적용 표시한 뒤 행 포함) */
+  count: number;
+  /** 자신을 뺀 뒤 행 수 */
+  later: number;
+  /** later 중 이미 적용 표시(kept)한 행 수 */
+  kept: number;
+  /** 그 사이 사용자가 직접 고친 내용도 함께 되돌아가는가 */
+  userEdits: boolean;
+}
+
 export interface DecisionReport {
   kind: 'accept' | 'reject';
   /** one = 행 하나(거절은 뒤 행 포함일 수 있다), all = 전체 */
@@ -19,7 +31,7 @@ export interface DecisionReport {
   userEditsReverted: boolean;
 }
 
-class ReviewStore {
+export class ReviewStore {
   private api: PendingApi | null = null;
   private offApi: (() => void) | null = null;
   private current: string | null = null;
@@ -135,6 +147,60 @@ class ReviewStore {
     const index = all.findIndex((c) => c.id === id);
     if (index < 0) return 0;
     return this.api?.rejectFrom ? all.length - index : all.length;
+  }
+
+  /**
+   * 거절의 파급. id 가 없으면 모두 거절. 스냅샷 모델이라 중간 행 거절은 뒤 행을 함께 되돌린다
+   * (행 단위 API 가 없는 실행기면 행 거절도 전체 거절이다).
+   */
+  rejectImpact(id?: string): RejectImpact {
+    const all = this.api?.list() ?? [];
+    if (all.length === 0) return { count: 0, later: 0, kept: 0, userEdits: false };
+    let index = id === undefined || !this.api?.rejectFrom ? 0 : all.findIndex((c) => c.id === id);
+    if (index < 0) index = 0;
+    const span = all.slice(index);
+    const self = id !== undefined ? span.find((c) => c.id === id) : undefined;
+    const others = self ? span.filter((c) => c !== self) : span.slice(1);
+    const userEdits = this.api?.hasUserEditsSince?.(index === 0 ? undefined : all[index].id) ?? false;
+    return {
+      count: span.length,
+      later: others.length,
+      kept: others.filter((c) => c.kept).length,
+      userEdits,
+    };
+  }
+
+  /** 이 거절은 확인을 받아야 하는가 — 뒤 행이나 사용자 편집이 함께 되돌아갈 때 */
+  needsConfirm(id?: string): boolean {
+    const impact = this.rejectImpact(id);
+    return id === undefined ? impact.userEdits : impact.later > 0 || impact.userEdits;
+  }
+
+  /** 대기 중 사용자 편집이 끼었는가 (알약의 "직접 편집 포함") */
+  hasUserEdits(): boolean {
+    return this.api?.hasUserEditsSince?.() ?? false;
+  }
+
+  /** 이 행 바로 앞(앞 행과의 사이)에 사용자 편집이 있었는가 */
+  userEditsBefore(id: string): boolean {
+    return this.api?.list().find((c) => c.id === id)?.userEditsBefore === true;
+  }
+
+  /** 마지막 변경 뒤에 사용자 편집이 있는가 */
+  trailingUserEdits(): boolean {
+    const all = this.api?.list() ?? [];
+    const last = all[all.length - 1];
+    return last ? this.api?.hasUserEditsSince?.(last.id) ?? false : false;
+  }
+
+  /** 문서 쪽 수 (실행기가 알려 주면) */
+  pageCount(): number {
+    try { return this.api?.pageCount?.() ?? 0; } catch { return 0; }
+  }
+
+  /** 문서가 실행기 밖에서 바뀌었다(사용자 편집) — 표면들이 다시 그린다 */
+  refresh(): void {
+    this.changed();
   }
 
   onDecision(cb: (report: DecisionReport) => void): () => void {

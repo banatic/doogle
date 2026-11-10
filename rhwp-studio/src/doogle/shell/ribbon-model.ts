@@ -26,20 +26,35 @@ export interface CmdItem {
   textClass?: string;
   /** 눌림 상태 — 컨텍스트 또는 upstream 요소의 active 클래스에서 읽는다 */
   pressed?: (ctx: EditorContext) => boolean;
+  /** 간소화 리본(한 줄 48px)에도 보이는가 */
+  simple?: boolean;
 }
 
 export interface SlotItem {
   kind: 'slot';
   slot: SlotName;
+  simple?: boolean;
 }
+
+/**
+ * 셸 자신의 동작(커맨드 레지스트리 밖).
+ *  - palette: 명령 입력 열기
+ *  - review-*: 검토 대기 중인 에이전트 변경 탐색·결정(review/state.ts 의 reviewStore)
+ *  - ribbon-collapse / ribbon-simple: 리본 표시 방식
+ */
+export type ShellAction =
+  | 'palette'
+  | 'review-prev' | 'review-next' | 'review-accept-all' | 'review-reject-all'
+  | 'ribbon-collapse' | 'ribbon-simple';
 
 export interface ActionItem {
   kind: 'action';
-  action: 'ai' | 'palette';
+  action: ShellAction;
   label: string;
   icon: string;
   size: ItemSize;
   tone?: 'ai';
+  simple?: boolean;
 }
 
 export interface MenuEntry { id: string; label: string; params?: Record<string, unknown> }
@@ -51,6 +66,7 @@ export interface MenuItem {
   size: ItemSize;
   text?: string;
   entries: MenuEntry[];
+  simple?: boolean;
 }
 
 export type RibbonItem = CmdItem | SlotItem | ActionItem | MenuItem;
@@ -71,9 +87,10 @@ export interface RibbonTab {
   /** '더보기' 에 펼칠 upstream 메뉴(`#menu-bar [data-menu]`) */
   menuId?: string;
   groups: RibbonGroup[];
-  tone?: 'ai';
   /** 커서가 표 안일 때만 보이는 상황 탭 */
   contextual?: 'table';
+  /** 키팁 — Alt/F10 뒤 누르는 두벌식 한 글자(같은 자리의 영문 키도 받는다) */
+  key?: string;
 }
 
 /** slot 이름 → upstream 요소 찾기. `move` 는 실제로 옮길 바깥 요소다. */
@@ -105,13 +122,16 @@ const cmd = (id: string, label: string, icon: string, size: ItemSize, extra: Par
 const slot = (name: SlotName): SlotItem => ({ kind: 'slot', slot: name });
 const activeIn = (selector: string) => () => !!document.querySelector(`${selector}.active`);
 
-const AI_TOGGLE: ActionItem = { kind: 'action', action: 'ai', label: 'AI 도우미', icon: 'sparkle', size: 'lg', tone: 'ai' };
+const simple = <T extends RibbonItem>(item: T): T => ({ ...item, simple: true });
+const action = (a: ShellAction, label: string, icon: string, size: ItemSize, extra: Partial<ActionItem> = {}): ActionItem =>
+  ({ kind: 'action', action: a, label, icon, size, ...extra });
 
 export const RIBBON_TABS: RibbonTab[] = [
   {
     id: 'edit',
     label: '편집',
     menuId: 'edit',
+    key: 'ㅎ',
     groups: [
       {
         id: 'clipboard', caption: '클립보드', priority: 6,
@@ -125,13 +145,13 @@ export const RIBBON_TABS: RibbonTab[] = [
       {
         id: 'char', caption: '글자 모양', priority: Infinity,
         rows: [
-          [slot('style-name'), slot('font-name'), slot('font-size')],
+          [simple(slot('style-name')), simple(slot('font-name')), simple(slot('font-size'))],
           [
-            slot('bold'), slot('italic'), slot('underline'), slot('strike'),
+            simple(slot('bold')), simple(slot('italic')), simple(slot('underline')), simple(slot('strike')),
             cmd('format:superscript', '위 첨자', '', 'ico', {
               text: '가²', pressed: activeIn('#charfx-menu [data-format="superscript"]'),
             }),
-            slot('text-color'), slot('highlight'), slot('charfx'),
+            simple(slot('text-color')), slot('highlight'), slot('charfx'),
             {
               kind: 'menu', label: '장평·자간', icon: 'ratio', size: 'ico', text: '↔가',
               entries: [
@@ -148,7 +168,7 @@ export const RIBBON_TABS: RibbonTab[] = [
       {
         id: 'para', caption: '문단 모양', priority: Infinity,
         rows: [
-          [slot('align-justify'), slot('align-left'), slot('align-center'), slot('align-right'), slot('align-distribute')],
+          [simple(slot('align-justify')), simple(slot('align-left')), simple(slot('align-center')), simple(slot('align-right')), slot('align-distribute')],
           [
             slot('bullet'), slot('numbering'), slot('line-spacing'),
             cmd('format:level-decrease', '한 수준 감소', 'outdent', 'ico'),
@@ -159,26 +179,26 @@ export const RIBBON_TABS: RibbonTab[] = [
       {
         id: 'insert', caption: '입력', priority: 3,
         items: [
-          cmd('table:create', '표', 'table', 'lg', { iconColor: 'var(--dg-accent)' }),
-          cmd('insert:image', '그림', 'image', 'lg', { iconColor: '#059669' }),
-          cmd('insert:shape', '도형', 'shape', 'lg', { iconColor: '#7C3AED' }),
+          cmd('table:create', '표', 'table', 'lg', { iconColor: 'var(--dg-accent)', simple: true }),
+          cmd('insert:image', '그림', 'image', 'lg', { iconColor: 'var(--dg-icon-image, #059669)', simple: true }),
+          cmd('insert:shape', '도형', 'shape', 'lg', { iconColor: 'var(--dg-icon-shape, #7C3AED)' }),
           cmd('insert:field', '누름틀', 'field', 'lg', { iconColor: 'var(--dg-ai-text)' }),
         ],
       },
       {
         id: 'find', caption: '찾기', priority: 4,
         items: [
-          cmd('edit:find', '찾기', 'find', 'lg', { iconColor: 'var(--dg-text2)' }),
+          cmd('edit:find', '찾기', 'find', 'lg', { iconColor: 'var(--dg-text2)', simple: true }),
           cmd('edit:find-replace', '바꾸기', 'replace', 'lg', { iconColor: 'var(--dg-text2)' }),
         ],
       },
-      { id: 'ai', caption: 'AI', priority: 9, items: [AI_TOGGLE] },
     ],
   },
   {
     id: 'view',
     label: '보기',
     menuId: 'view',
+    key: 'ㅂ',
     groups: [
       {
         id: 'zoom', caption: '확대/축소', priority: 5,
@@ -202,20 +222,35 @@ export const RIBBON_TABS: RibbonTab[] = [
           cmd('view:grid-settings', '격자 설정', 'gridSettings', 'sm'),
         ],
       },
-      { id: 'ai', caption: 'AI', priority: 9, items: [AI_TOGGLE] },
+      {
+        id: 'theme', caption: '테마', priority: 3,
+        items: [
+          cmd('view:theme-system', '시스템 설정 따름', 'monitor', 'sm'),
+          cmd('view:theme-light', '밝게', 'sun', 'sm'),
+          cmd('view:theme-dark', '어둡게', 'moon', 'sm'),
+        ],
+      },
+      {
+        id: 'ribbon', caption: '리본', priority: 2,
+        items: [
+          action('ribbon-collapse', '리본 접기', 'chevronUp', 'sm'),
+          action('ribbon-simple', '간소화 리본', 'ribbonSimple', 'sm'),
+        ],
+      },
     ],
   },
   {
     id: 'insert',
     label: '입력',
     menuId: 'insert',
+    key: 'ㅇ',
     groups: [
       { id: 'table', caption: '표', priority: 8, items: [cmd('table:create', '표', 'table', 'lg', { iconColor: 'var(--dg-accent)' })] },
       {
         id: 'objects', caption: '개체', priority: 7,
         items: [
-          cmd('insert:image', '그림', 'image', 'lg', { iconColor: '#059669' }),
-          cmd('insert:shape', '도형', 'shape', 'lg', { iconColor: '#7C3AED' }),
+          cmd('insert:image', '그림', 'image', 'lg', { iconColor: 'var(--dg-icon-image, #059669)' }),
+          cmd('insert:shape', '도형', 'shape', 'lg', { iconColor: 'var(--dg-icon-shape, #7C3AED)' }),
           cmd('insert:textbox', '글상자', 'textbox', 'lg'),
           cmd('insert:equation', '수식', 'equation', 'lg'),
         ],
@@ -243,6 +278,7 @@ export const RIBBON_TABS: RibbonTab[] = [
     id: 'format',
     label: '서식',
     menuId: 'format',
+    key: 'ㅅ',
     groups: [
       {
         id: 'char', caption: '글자', priority: 8,
@@ -281,6 +317,7 @@ export const RIBBON_TABS: RibbonTab[] = [
     id: 'page',
     label: '쪽',
     menuId: 'page',
+    key: 'ㅉ',
     groups: [
       {
         id: 'setup', caption: '쪽 설정', priority: 8,
@@ -320,6 +357,7 @@ export const RIBBON_TABS: RibbonTab[] = [
   {
     id: 'security',
     label: '보안',
+    key: 'ㄴ',
     groups: [
       {
         id: 'form', caption: '양식', priority: 8,
@@ -337,11 +375,16 @@ export const RIBBON_TABS: RibbonTab[] = [
   {
     id: 'review',
     label: '검토',
+    key: 'ㄱ',
     groups: [
       {
-        id: 'changes', caption: '변경 검토', priority: 9,
+        // 'AI 도우미' 탭을 합쳤다 — 에이전트가 만든 변경을 문서에서 탐색하고 한꺼번에 결정한다.
+        id: 'changes', caption: '에이전트 변경', priority: 9,
         items: [
-          { ...AI_TOGGLE, label: '에이전트 변경' },
+          action('review-accept-all', '모두 적용', 'checkAll', 'lg', { tone: 'ai' }),
+          action('review-reject-all', '모두 거절', 'xAll', 'lg'),
+          action('review-prev', '이전 변경', 'prev', 'sm'),
+          action('review-next', '다음 변경', 'next', 'sm'),
         ],
       },
       {
@@ -365,6 +408,7 @@ export const RIBBON_TABS: RibbonTab[] = [
     id: 'tool',
     label: '도구',
     menuId: 'tool',
+    key: 'ㄷ',
     groups: [
       {
         id: 'settings', caption: '설정', priority: 8,
@@ -372,9 +416,8 @@ export const RIBBON_TABS: RibbonTab[] = [
       },
       {
         id: 'command', caption: '명령', priority: 7,
-        items: [{ kind: 'action', action: 'palette', label: '명령 입력', icon: 'command', size: 'lg' }],
+        items: [action('palette', '명령 입력', 'command', 'lg')],
       },
-      { id: 'ai', caption: 'AI', priority: 9, items: [AI_TOGGLE] },
     ],
   },
   {
@@ -382,6 +425,7 @@ export const RIBBON_TABS: RibbonTab[] = [
     label: '표',
     menuId: 'table',
     contextual: 'table',
+    key: 'ㅌ',
     groups: [
       {
         id: 'props', caption: '표', priority: 9,
@@ -418,22 +462,6 @@ export const RIBBON_TABS: RibbonTab[] = [
           cmd('table:block-sum', '블록 합계', 'sum', 'sm'),
           cmd('table:block-avg', '블록 평균', 'sum', 'sm'),
           cmd('table:thousand-sep', '1,000 단위 쉼표', 'sum', 'sm'),
-        ],
-      },
-    ],
-  },
-  {
-    id: 'ai',
-    label: 'AI 도우미',
-    tone: 'ai',
-    groups: [
-      { id: 'assistant', caption: 'AI', priority: 9, items: [AI_TOGGLE] },
-      {
-        id: 'review', caption: '검토', priority: 7,
-        items: [
-          cmd('edit:document-history', '문서 이력', 'history', 'lg'),
-          cmd('edit:undo', '되돌리기', 'undo', 'sm'),
-          cmd('edit:redo', '다시 실행', 'redo', 'sm'),
         ],
       },
     ],

@@ -1,0 +1,3 @@
+# 글꼴 바이너리와 라이선스 전문은 공식 배포본의 바이트를 그대로 보존한다.
+*.woff2 binary
+*-OFL.txt -text -whitespace

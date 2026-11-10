@@ -1,0 +1,175 @@
+/* 문서 없음 — 캔버스 빈 상태 (UI_AUDIT §3.5). 색은 --dg-* 토큰만. */
+
+:root[data-doogle] #scroll-container.dg-has-empty {
+  position: relative;
+}
+
+.dg-canvas-empty {
+  --dg-ce-accent: var(--dg-accent, #1f5fbf);
+  --dg-ce-surface: var(--dg-surface, #ffffff);
+  --dg-ce-border: var(--dg-border, #dde2ea);
+  --dg-ce-text: var(--dg-text, #1f2937);
+  --dg-ce-muted: var(--dg-muted, #4b5563);
+  --dg-ce-soft: var(--dg-soft, #eff6ff);
+  --dg-ce-soft-border: var(--dg-soft-border, #bfdbfe);
+  --dg-ce-hover: var(--dg-hover, rgba(15, 23, 42, 0.06));
+  --dg-ce-on-accent: var(--dg-on-accent, #ffffff);
+  --dg-ce-focus: var(--dg-focus, var(--dg-ce-accent));
+
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+  overflow: auto;
+  font-family: var(--dg-font-ui, system-ui, sans-serif);
+  color: var(--dg-ce-text);
+}
+
+.dg-ce-box {
+  width: min(420px, 100%);
+  padding: 28px 28px 22px;
+  background: var(--dg-ce-surface);
+  border: 1px solid var(--dg-ce-border);
+  border-radius: var(--dg-r-lg, 16px);
+  box-shadow: var(--dg-shadow-pop, 0 8px 24px rgba(15, 23, 42, 0.08));
+  box-sizing: border-box;
+}
+
+.dg-ce-title {
+  margin: 0 0 4px;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.dg-ce-sub {
+  margin: 0 0 18px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--dg-ce-muted);
+}
+
+.dg-ce-acts {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.dg-ce-btn {
+  height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--dg-ce-border);
+  border-radius: var(--dg-r-md, 8px);
+  background: transparent;
+  color: var(--dg-ce-text);
+  font: inherit;
+  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.dg-ce-btn:hover {
+  background: var(--dg-ce-hover);
+}
+
+.dg-ce-primary {
+  border-color: transparent;
+  background: var(--dg-ce-accent);
+  color: var(--dg-ce-on-accent);
+  font-weight: 600;
+}
+
+.dg-ce-primary:hover {
+  background: var(--dg-accent-hover, var(--dg-ce-accent));
+}
+
+.dg-ce-recent-head {
+  margin: 22px 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dg-ce-muted);
+}
+
+.dg-ce-recent {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.dg-ce-recent-item {
+  width: 100%;
+  min-height: 34px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--dg-r-sm, 6px);
+  background: transparent;
+  color: var(--dg-ce-text);
+  font: inherit;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dg-ce-recent-item:hover {
+  background: var(--dg-ce-hover);
+}
+
+.dg-ce-recent-item svg {
+  flex-shrink: 0;
+  color: var(--dg-ce-muted);
+}
+
+.dg-ce-recent-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dg-ce-recent-meta {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--dg-ce-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.dg-ce-drop {
+  margin: 18px 0 0;
+  padding: 14px 12px;
+  border: 1.5px dashed var(--dg-ce-border);
+  border-radius: var(--dg-r-md, 8px);
+  font-size: 12px;
+  text-align: center;
+  color: var(--dg-ce-muted);
+}
+
+/* upstream 이 끌어다 놓는 동안 #scroll-container 에 .drag-over 를 붙인다 */
+#scroll-container.drag-over .dg-ce-drop {
+  border-color: var(--dg-ce-accent);
+  background: var(--dg-ce-soft);
+  color: var(--dg-ce-accent);
+}
+
+.dg-canvas-empty button:focus-visible {
+  outline: 2px solid var(--dg-ce-focus);
+  outline-offset: 2px;
+}
+
+.dg-canvas-empty [hidden] {
+  display: none !important;
+}
+
+@media (forced-colors: active) {
+  .dg-ce-box,
+  .dg-ce-btn {
+    border-color: CanvasText;
+  }
+}

@@ -30,7 +30,7 @@ import {
 import type { ResolvedAnchor } from './anchor.ts';
 import {
   DoogleToolError, asRecord, colorRef, huToMm, invalidArgs, mmToPx, pxToMm, scalarLength, scalarSlice,
-  type CellAddr, type DoogleAgentDeps, type PendingChangeTarget, type PngImage, type SelectionPoint, type SelectionRect, type ToolContext, type ToolResult,
+  type CellAddr, type DoogleAgentDeps, type FormatDiff, type PendingChangeTarget, type PngImage, type SelectionPoint, type SelectionRect, type ToolContext, type ToolResult,
 } from './types.ts';
 
 /** read_batch 항목 — definitions.mjs BATCHABLE_READ_TOOL_NAMES 와 같아야 한다 */
@@ -291,9 +291,12 @@ export class DoogleToolExecutor {
     if (staged) this.staging.beginWrite(thread, pre);
     let touches: Touch[] = [];
     let result: Record<string, unknown>;
+    const formatLog: FormatDiff[] = [];
     try {
       result = this.deps.transaction(`doogle:${tool}`, (doc) => {
-        const w = this.scope(new Engine(doc));
+        const scoped = new Engine(doc);
+        if (staged) scoped.formatLog = formatLog;
+        const w = this.scope(scoped);
         const r = body(w);
         touches = w.touches;
         return r;
@@ -316,6 +319,7 @@ export class DoogleToolExecutor {
       const cs = this.staging.record(thread, tool, summarize(tool, args), after.pages as number[], revAfter, {
         targets: reviewTargets(engine, tool, args, touches),
         args: clipArgs(args),
+        formats: formatLog,
       });
       out['changeSetId'] = cs.id;
       out['staged'] = true;
