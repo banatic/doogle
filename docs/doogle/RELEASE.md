@@ -32,23 +32,12 @@
 4. **fork에서 Actions 켜기** — banatic/doogle → Actions 탭 → "I understand my workflows, go ahead and enable them".
    Settings → Actions → General → Workflow permissions는 기본값이어도 된다(workflow가 `contents: write`를 직접 요청한다).
 
-### upstream workflow 정리 (권장)
+### upstream workflow
 
-Actions를 켜면 upstream rhwp workflow도 fork에서 돌 수 있다. `release`·`doogle` 브랜치 push로
-실행되는 upstream workflow는 **없다**(upstream push 트리거는 `devel`·`main`·`task_m100_*` 브랜치와 `v*` 태그뿐).
-그래도 다음은 fork에서 실행될 수 있으니 Actions 화면에서 **Disable workflow**를 권장한다.
-
-| workflow | fork에서 실행되는 경우 |
-| --- | --- |
-| `ci.yml`, `release-binary.yml` | `v*` 태그 push (release-binary는 GitHub 릴리스·npm 배포까지 시도) |
-| `deploy-pages.yml` | `main` push |
-| `close-issues-on-devel-push.yml`, `refresh-nextest-duration.yml` | `devel` push |
-| `cache-generation-sweep.yml`, `fuzz-smoke.yml`, `layout-anomaly-advisory.yml`, `codeql.yml` | 기본 브랜치(`main`)의 schedule |
-| `adapter-diff.yml`, `proptest-roundtrip.yml`, `codeql.yml`, `ci.yml`, `render-diff.yml`, `skill-router-gate.yml`, `gym-release-gate.yml`, `cancel-stale-pr-runs.yml`, `ci-impact-policy.yml` | fork 안에서 `main`/`devel` 대상 PR |
-
-`issue-form-labels.yml`과 `run-nextest-archives.yml`의 일부 단계만 `edwardkim/rhwp` 가드가 있다.
-두글 릴리스 태그는 `doogle-v{version}`이라 upstream의 `v*` 태그 트리거를 건드리지 않는다
-(fork에는 upstream 태그 `v0.5.0`…`v0.9.x`가 이미 있어 `v{version}`을 쓰면 버전이 겹친다).
+upstream rhwp 의 workflow 는 저장소에서 지웠다(`.doogle-prune` 의 `.github`). `.github/workflows/` 에는
+`doogle-release.yml` 만 남는다. upstream 을 merge 해도 동기화 스크립트(아래)가 새 workflow 를 다시 지운다.
+두글 릴리스 태그는 `doogle-v{version}`이다(fork 에는 upstream 태그 `v0.5.0`…`v0.9.x`가 이미 있어
+`v{version}`을 쓰면 버전이 겹친다).
 
 ## 릴리스 절차
 
@@ -91,3 +80,25 @@ Actions를 켜면 upstream rhwp workflow도 fork에서 돌 수 있다. `release`
   `hub.rs`가 묶인 런타임을 먼저 찾게 한다(설치본 크기 +30~40 MB, Node 보안 업데이트도 앱 릴리스로 따라가야 한다).
 - macOS·Linux 빌드는 workflow matrix에 주석으로만 있다. macOS는 서명·notarization이 필요하다.
 - macOS에서 Cmd+Q(앱 종료)는 창 닫기 확인을 거치지 않는다(`ExitRequested` 미처리).
+
+## upstream 동기화
+
+두글은 upstream(edwardkim/rhwp)에서 엔진·편집기만 쓰고 나머지(mydocs, tests, 확장 프로그램, CLI 바이너리,
+upstream CI 등)는 지웠다. 지운 경로는 저장소 루트의 `.doogle-prune` 에 있다(디렉터리 접두 일치, `!` 는 남길 예외).
+
+```powershell
+scripts/doogle-sync-upstream.ps1              # git fetch upstream → merge upstream/main → .doogle-prune 경로 git rm → 충돌 없으면 commit
+scripts/doogle-sync-upstream.ps1 -NoCommit    # commit 하지 않고 멈춘다
+scripts/doogle-sync-upstream.ps1 -PruneOnly   # merge 없이 prune 만
+```
+
+POSIX 셸은 `scripts/doogle-sync-upstream.sh [브랜치] [--no-commit|--prune-only]`.
+
+- upstream 이 지운 경로의 파일을 고치면(modify/delete 충돌) 또는 그 아래에 새 파일을 더하면 스크립트가 다시 `git rm` 한다.
+- 그 밖의 충돌은 목록만 출력하고 멈춘다. 직접 해결하고 `git add` → `git commit`.
+- `Cargo.toml` 은 자주 충돌한다. 두글 쪽에는 `[[bin]]`·`[[test]]`·`[[example]]` 과 `tools/*`·`bindings/*` workspace member 가 없다.
+  upstream 이 이런 항목을 더하면 지운 파일을 가리키므로 빼고, `Cargo.lock` 은 `cargo metadata --offline` 으로 다시 맞춘다.
+  스크립트가 지운 경로를 가리키는 `Cargo.toml` 줄을 경고로 보여 준다.
+- upstream lib 이 새 `include_str!`/`include_bytes!` 로 지운 경로(예: `samples/`, `tests/fixtures/`)의 파일을 읽기 시작하면
+  WASM 빌드가 깨진다. 그 파일을 `.doogle-prune` 에 `!경로` 로 추가하고 `git checkout upstream/main -- 경로` 로 되살린다.
+- merge 뒤 `cargo check --lib --target wasm32-unknown-unknown`, rhwp-studio `npm run build`, doogle-agent `npm test` 로 확인한다.
