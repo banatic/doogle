@@ -519,9 +519,9 @@ export class Ribbon {
     if (size === 'lg') {
       b.innerHTML = `${iconSvg(icon, 28, 1.5, iconColor)}<span class="dg-btn-label">${label}</span>`;
     } else if (size === 'sm') {
-      b.innerHTML = `${iconSvg(icon, 14, 1.8)}<span class="dg-btn-label">${label}</span>`;
+      b.innerHTML = `${iconSvg(icon, 18, 1.8)}<span class="dg-btn-label">${label}</span>`;
     } else {
-      b.innerHTML = text ? `<span class="dg-btn-text">${text}</span>` : iconSvg(icon, 16, 2);
+      b.innerHTML = text ? `<span class="dg-btn-text">${text}</span>` : iconSvg(icon, 18, 1.8);
       b.setAttribute('aria-label', label);
     }
     return b;
@@ -646,7 +646,7 @@ export class Ribbon {
       holder.appendChild(node);
       if (name === 'bullet' || name === 'numbering') {
         const label = name === 'bullet' ? '글머리표' : '문단 번호';
-        node.innerHTML = iconSvg(name === 'bullet' ? 'bullets' : 'numbering', 16, 2);
+        node.innerHTML = iconSvg(name === 'bullet' ? 'bullets' : 'numbering', 18, 1.8);
         node.setAttribute('aria-label', label);
         node.title = label;
         node.classList.add('dg-slot-btn');

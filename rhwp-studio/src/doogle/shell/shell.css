@@ -343,6 +343,9 @@
 
 /* ── 리본 패널 ───────────────────────────────────────── */
 .dg-ribbon {
+  /* 리본 아이콘 크기는 이 둘뿐이다. 큰 단추 = lg, 그 밖(작은 단추·아이콘 단추·옮겨 온 upstream 단추·간소화 모드) = sm */
+  --dg-ribbon-icon-lg: 28px;
+  --dg-ribbon-icon-sm: 18px;
   height: 104px;
   box-sizing: border-box;
   background: var(--dg-surface, #FFFFFF);
@@ -377,7 +380,6 @@
   flex-direction: row;
   gap: 6px;
 }
-.dg-ribbon--simple .dg-btn--lg svg { width: 18px; height: 18px; }
 .dg-ribbon--simple .dg-more { height: 36px; flex-direction: row; min-width: 0; padding: 0 8px; }
 .dg-ribbon--simple .dg-more span { display: none; }
 
@@ -525,9 +527,34 @@
 /* 좁은 폭: 큰 단추를 줄이고 작은 단추는 아이콘만 */
 .dg-rpanel--compact .dg-group { padding: 0 5px; }
 .dg-rpanel--compact .dg-btn--lg { min-width: 44px; font-size: var(--dg-fs-caption, 12px); gap: 4px; }
-.dg-rpanel--compact .dg-btn--lg svg { width: 22px; height: 22px; }
 .dg-rpanel--compact .dg-btn--sm { padding: 0 6px; }
 .dg-rpanel--compact .dg-btn--sm .dg-btn-label { display: none; }
+
+/* 아이콘 크기 통일 — iconSvg 의 width 속성은 기본값일 뿐, 실제 크기는 여기서 정한다.
+   flex 안에서 줄어들지 않게 flex-shrink 를 막는다. */
+.dg-ribbon .dg-btn svg,
+.dg-ribbon .dg-more svg,
+.dg-ribbon .tb-btn.dg-slot-btn svg {
+  width: var(--dg-ribbon-icon-sm);
+  height: var(--dg-ribbon-icon-sm);
+  flex-shrink: 0;
+}
+.dg-ribbon .dg-btn--lg svg {
+  width: var(--dg-ribbon-icon-lg);
+  height: var(--dg-ribbon-icon-lg);
+}
+.dg-ribbon--simple .dg-btn--lg svg {
+  width: var(--dg-ribbon-icon-sm);
+  height: var(--dg-ribbon-icon-sm);
+}
+/* upstream 정렬 단추(마스크 아이콘)도 같은 작은 크기 */
+.dg-ribbon .sb-align {
+  width: var(--dg-ribbon-icon-sm);
+  height: var(--dg-ribbon-icon-sm);
+  -webkit-mask-size: var(--dg-ribbon-icon-sm) var(--dg-ribbon-icon-sm);
+  mask-size: var(--dg-ribbon-icon-sm) var(--dg-ribbon-icon-sm);
+  flex-shrink: 0;
+}
 
 /* ── 리본으로 옮겨 온 upstream 서식 요소 ──────────────── */
 .dg-slot { display: inline-flex; align-items: center; }
