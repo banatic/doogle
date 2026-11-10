@@ -71,6 +71,30 @@ function cellJson(cell?: CellAddr): Record<string, unknown> {
   };
 }
 
+/**
+ * studio 명령 경계(`StudioCommandError`)는 진짜 원인을 `cause` 에 감추고 롤백 확인을 비동기 `report` 로 낸다.
+ * 1) 보고가 끝나기 전에 다음 쓰기를 하면 '복구 중' 세션이 같은 오류로 거절하므로 기다리고,
+ * 2) 모델·화면에는 감춰진 원인(예: BATCH_FAILED 항목별 사유)을 그대로 돌려준다.
+ * upstream 클래스를 import 하지 않고 모양으로 판별한다(실행기는 node 테스트에서도 돈다).
+ */
+async function settleCommandError(error: unknown): Promise<unknown> {
+  const e = error as { name?: unknown; cause?: unknown; report?: unknown } | null;
+  if (!e || e.name !== 'StudioCommandError') return error;
+  let recovery: unknown = 'unknown';
+  if (e.report && typeof (e.report as Promise<unknown>).then === 'function') {
+    try { recovery = ((await e.report) as { recovery?: unknown } | null)?.recovery; } catch { /* 보고 실패 = 확인 못 함 */ }
+  }
+  if (recovery !== 'succeeded') {
+    const why = e.cause instanceof Error ? e.cause.message : typeof e.cause === 'string' ? e.cause : '';
+    return new DoogleToolError(
+      'EDITOR_BLOCKED',
+      `The edit failed and the editor could not confirm the rollback, so further edits are blocked for this document. `
+        + `Stop editing and tell the user to undo (Ctrl+Z) or reopen the document.${why ? ` Cause: ${why}` : ''}`,
+    );
+  }
+  return e.cause ?? error;
+}
+
 function errorPayload(error: unknown): ToolResult {
   if (error instanceof DoogleToolError) {
     return { ok: false, error: { code: error.code, message: error.message, ...(error.data !== undefined ? { data: error.data } : {}) } };
@@ -303,7 +327,7 @@ export class DoogleToolExecutor {
       });
     } catch (error) {
       if (staged) this.staging.abortWrite(pre);
-      throw error;
+      throw await settleCommandError(error);
     }
     const revAfter = this.tracker.noteWrite(revBefore);
     const precise = touches.length > 0 && touches.every((t) => !t.wholeSection);

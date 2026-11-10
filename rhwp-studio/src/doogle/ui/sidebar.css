@@ -1187,6 +1187,31 @@
   flex-wrap: wrap;
 }
 
+.dg-tool-items {
+  flex-basis: 100%;
+  margin: 2px 0 2px 20px;
+  padding: 0 0 0 10px;
+  border-left: 1px solid var(--dg-x-border);
+  list-style: none;
+  font-size: 12px;
+}
+
+.dg-tool-item {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  padding: 1px 0;
+}
+
+.dg-tool-item .dg-tool-reason {
+  padding-left: 0;
+}
+
+.dg-tool-item[data-state='error'] > .dg-tool-label {
+  color: var(--dg-x-bad);
+}
+
 .dg-tool-reason {
   flex-basis: 100%;
   padding-left: 20px;

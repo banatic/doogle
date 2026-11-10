@@ -8,6 +8,7 @@ import { RevisionTracker } from '../revision.ts';
 import { createDoogleAgentRuntime } from '../runtime.ts';
 import { describeChange, formatChips } from '../../review/describe.ts';
 import { ReviewStore } from '../../review/state.ts';
+import { describeToolCall, parseBatchFailures } from '../../ui/tool-presentation.ts';
 import { matchReviewKey, impactSentence, chainSentence, gutterPositions } from '../../review/keys.ts';
 
 // ─── 가짜 원천 / 엔진 ──────────────────────────────────
@@ -187,6 +188,37 @@ test('executor: apply_edits is atomic and reports every failing item', async () 
   }, ctx);
   assert.ok(ok.ok, JSON.stringify(ok));
   assert.deepEqual(doc.paras, ['ALPHA', 'beta!']);
+});
+
+test('executor: studio command boundary wrapper is unwrapped after its report settles', async () => {
+  const doc = new FakeDoc(['alpha', 'beta']);
+  const deps = fakeDeps(doc);
+  const inner = deps.transaction;
+  let recovery = 'succeeded';
+  // upstream StudioCommandError 흉내: 원인을 cause 에 감추고 롤백 확인을 비동기 report 로 낸다
+  deps.transaction = (label, fn) => {
+    try { return inner(label, fn); } catch (cause) {
+      const e = new Error('Studio 편집 명령을 완료하지 못했습니다.', { cause });
+      e.name = 'StudioCommandError';
+      e.report = Promise.resolve({ recovery });
+      throw e;
+    }
+  };
+  const rt = createDoogleAgentRuntime(deps);
+  const ctx = { origin: 'mcp', mode: 'full' };
+  const r = await rt.executeTool('apply_edits', {
+    expectedRevision: rt.revision(),
+    edits: [{ tool: 'replace_range', find: 'alpha', text: 'A' }, { tool: 'replace_range', find: 'missing', text: 'x' }],
+  }, ctx);
+  assert.equal(r.ok, false);
+  assert.equal(r.error.code, 'BATCH_FAILED', r.error.message);
+  const failures = parseBatchFailures(`${r.error.code}: ${r.error.message}`);
+  assert.deepEqual([...failures.keys()], [1]);
+  recovery = 'failed';
+  const blocked = await rt.executeTool('replace_range', { expectedRevision: rt.revision(), find: 'missing', text: 'x' }, ctx);
+  assert.equal(blocked.error.code, 'EDITOR_BLOCKED');
+  const view = describeToolCall('apply_edits', { edits: [{ tool: 'insert_text', find: '발표한다.', text: '- 예시' }, { tool: 'replace_range', find: 'a', text: 'b' }] });
+  assert.deepEqual(view.items.map((i) => i.label), ['텍스트 삽입', '텍스트 바꾸기']);
 });
 
 test('executor: agent mode stages edits; reject restores; other thread is busy', async () => {

@@ -57,7 +57,8 @@ function send(ws, obj) {
 }
 
 function summarize(r) {
-  if (!r.ok) return `${r.error?.code ?? 'ERROR'}: ${r.error?.message ?? ''}`.slice(0, 300);
+  // 실패 사유는 화면에 항목별로 풀어 보이므로(apply_edits) 넉넉히 둔다
+  if (!r.ok) return `${r.error?.code ?? 'ERROR'}: ${r.error?.message ?? ''}`.slice(0, 2000);
   let s;
   try {
     s = typeof r.result === 'string' ? r.result : JSON.stringify(r.result);

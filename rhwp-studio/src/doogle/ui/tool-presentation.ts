@@ -14,6 +14,8 @@ export interface ToolCallView {
   category: ToolCategory;
   label: string;
   summary: string;
+  /** 묶음 편집(apply_edits)·묶음 읽기(read_batch)의 하위 항목 — 무엇을 하려는지 한 줄씩 */
+  items?: Array<{ label: string; summary: string }>;
 }
 
 type Args = Record<string, unknown>;
@@ -394,7 +396,36 @@ export function describeToolCall(rawName: string, rawArgs: unknown): ToolCallVie
   } catch {
     label = typeof spec.label === 'string' ? spec.label : name;
   }
-  return { name, known: true, category: spec.category, label, summary };
+  const items = batchItems(name, args);
+  return { name, known: true, category: spec.category, label, summary, ...(items ? { items } : {}) };
+}
+
+/** apply_edits.edits[] / read_batch.reads[] → 하위 항목 설명. 옛 꼴 {tool, args:{…}} 도 받는다. */
+function batchItems(name: string, args: Args): Array<{ label: string; summary: string }> | null {
+  const key = name === 'apply_edits' ? 'edits' : name === 'read_batch' ? 'reads' : null;
+  const list = key ? args[key] : null;
+  if (!Array.isArray(list)) return null;
+  return list.map((raw) => {
+    const r = rec(raw);
+    const tool = str(r['tool']);
+    const flat = r['args'] && typeof r['args'] === 'object' ? { ...rec(r['args']), ...r } : r;
+    const view = tool && SPECS[tool] && tool !== 'apply_edits' && tool !== 'read_batch' ? describeToolCall(tool, flat) : null;
+    return view ? { label: view.label, summary: view.summary } : { label: tool || '알 수 없는 항목', summary: '' };
+  });
+}
+
+/**
+ * 묶음 실패 사유 → 항목별 사유. executor 의 BATCH_FAILED 메시지
+ * `… edits[2] insert_text: ANCHOR_NOT_FOUND 메시지 | edits[5] …` 를 나눈다.
+ */
+export function parseBatchFailures(summary: string | undefined): Map<number, { code: string; text: string }> {
+  const out = new Map<number, { code: string; text: string }>();
+  const re = /(?:edits|reads)\[(\d+)\] [a-z_]+: ([A-Z][A-Z0-9_]+) (.*?)(?= \| (?:edits|reads)\[\d+\]|$)/gs;
+  for (const m of (summary ?? '').matchAll(re)) {
+    const code = m[2];
+    out.set(Number(m[1]), { code, text: FAILURE_TEXT[code] ?? m[3].trim() });
+  }
+  return out;
 }
 
 /** 사용자에게 보일 일이 없는 오류 코드 → 한 문장 (코드는 "자세히"/툴팁에만) */
@@ -406,6 +437,8 @@ const FAILURE_TEXT: Record<string, string> = {
   RESULT_TOO_LARGE: '결과가 너무 커서 한 번에 읽지 못했습니다.',
   NOT_IMPLEMENTED: '아직 지원하지 않는 작업입니다.',
   NO_DOCUMENT: '열린 문서가 없습니다.',
+  BATCH_FAILED: '일부 항목이 실패해 이 묶음은 하나도 적용하지 않았습니다.',
+  EDITOR_BLOCKED: '편집기가 되돌리기를 확인하지 못해 편집을 멈췄습니다. 실행 취소(Ctrl+Z)하거나 문서를 다시 여세요.',
   TIMEOUT: '시간 안에 끝나지 않았습니다.',
 };
 

@@ -30,7 +30,7 @@ import { countdownText, describeConnection, userWords, type DeskHubStatus } from
 import type { DeskHubEvent } from './desk-bridge.ts';
 import { icon, type IconName } from './icons.ts';
 import { SettingsSheet } from './settings-sheet.ts';
-import { describeToolCall, formatToolFailure } from './tool-presentation.ts';
+import { describeToolCall, formatToolFailure, parseBatchFailures } from './tool-presentation.ts';
 import './sidebar.css';
 
 export interface SidebarDeps {
@@ -176,6 +176,8 @@ function clipTitle(text: string): string {
 interface ToolEntry {
   li: HTMLLIElement;
   label: string;
+  /** 묶음 도구의 하위 항목 줄 (apply_edits.edits[i] 순서) */
+  items?: HTMLLIElement[];
 }
 
 interface TurnView {
@@ -1306,7 +1308,7 @@ export class DoogleSidebar {
         const turn = this.ensureTurn();
         this.closeTextBlock();
         const view = describeToolCall(event.name, event.args);
-        this.addTool(turn, event.callId, view.label, view.summary);
+        this.addTool(turn, event.callId, view.label, view.summary, view.items);
         if (!turn.thinking) {
           turn.thinking = el('div', 'dg-thinking');
           turn.root.append(turn.thinking);
@@ -1325,9 +1327,22 @@ export class DoogleSidebar {
           if (!event.ok) {
             // 실패 사유는 툴팁이 아니라 항목 아래 한 줄로, 칩은 자동으로 펼친다 (UI_AUDIT §3.12)
             const failure = formatToolFailure(event.summary);
-            const reason = el('span', 'dg-tool-reason', failure.text);
+            const byItem = entry.items ? parseBatchFailures(event.summary) : new Map<number, { code: string; text: string }>();
+            const reason = el('span', 'dg-tool-reason', byItem.size > 0
+              ? `${entry.items!.length}곳 중 ${byItem.size}곳이 실패해 하나도 적용하지 않았습니다.`
+              : failure.text);
             if (failure.code) reason.title = failure.code;
-            entry.li.append(reason);
+            // 사유 줄은 하위 항목 목록보다 위에 둔다
+            const list = entry.li.querySelector('.dg-tool-items');
+            if (list) list.before(reason); else entry.li.append(reason);
+            for (const [index, item] of byItem) {
+              const row = entry.items?.[index];
+              if (!row) continue;
+              row.dataset.state = 'error';
+              const why = el('span', 'dg-tool-reason', item.text);
+              why.title = item.code;
+              row.append(why);
+            }
             if (turn.chip && turn.toolList) {
               turn.chip.setAttribute('aria-expanded', 'true');
               turn.toolList.hidden = false;
@@ -1421,7 +1436,10 @@ export class DoogleSidebar {
 
   // ─── 도구 칩 ───────────────────────────────────────────
 
-  private addTool(turn: TurnView, callId: string, label: string, summary: string): void {
+  private addTool(
+    turn: TurnView, callId: string, label: string, summary: string,
+    items?: Array<{ label: string; summary: string }>,
+  ): void {
     if (!turn.chip) {
       const chip = button('dg-tools-chip', '', () => {
         const open = chip.getAttribute('aria-expanded') !== 'true';
@@ -1450,8 +1468,21 @@ export class DoogleSidebar {
     status.setAttribute('aria-label', '진행 중');
     li.append(status, el('span', 'dg-tool-label', label));
     if (summary) li.append(el('span', 'dg-tool-summary', summary));
+    // 묶음 편집은 무엇을 바꾸려는지 항목마다 한 줄씩 보인다
+    let itemRows: HTMLLIElement[] | undefined;
+    if (items && items.length > 0) {
+      const ol = el('ol', 'dg-tool-items');
+      itemRows = items.map((item) => {
+        const row = el('li', 'dg-tool-item');
+        row.append(el('span', 'dg-tool-label', item.label));
+        if (item.summary) row.append(el('span', 'dg-tool-summary', item.summary));
+        ol.append(row);
+        return row;
+      });
+      li.append(ol);
+    }
     turn.toolList!.append(li);
-    turn.tools.set(callId, { li, label });
+    turn.tools.set(callId, { li, label, ...(itemRows ? { items: itemRows } : {}) });
     this.updateChip(turn);
   }
 
