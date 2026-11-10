@@ -46,7 +46,13 @@
     toolbarFormat = true;
   }
   // [doogle] 두글 모드(Tauri 또는 ?doogle=1)는 첫 페인트부터 셸 스타일을 쓴다 — src/doogle/index.ts isDoogleMode 와 같은 판정.
-  if (window.__TAURI_INTERNALS__ || /[?&]doogle=1(?:&|$)/.test(location.search)) root.setAttribute('data-doogle', '');
+  // [doogle] 셸(제목 막대·리본)과 두글 CSS 는 JS 가 올린다. 그 전에 upstream 메뉴·도구 모음이 잠깐 보이지 않게
+  // data-doogle-booting 동안 body 를 감춘다(src/style.css 끝). src/doogle/index.ts 가 셸을 올린 첫 프레임에 지운다.
+  if (window.__TAURI_INTERNALS__ || /[?&]doogle=1(?:&|$)/.test(location.search)) {
+    root.setAttribute('data-doogle', '');
+    root.setAttribute('data-doogle-booting', '');
+    setTimeout(() => root.removeAttribute('data-doogle-booting'), 4000); // 안전장치
+  }
   root.dataset.toolboxBasic = toolbarBasic ? 'shown' : 'hidden';
   root.dataset.toolboxFormat = toolbarFormat ? 'shown' : 'hidden';
 })();

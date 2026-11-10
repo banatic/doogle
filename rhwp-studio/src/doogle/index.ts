@@ -41,7 +41,9 @@ if (isDoogleMode()) {
   document.documentElement.setAttribute('data-doogle', '');
   void import('./shell/index.ts')
     .then((shell) => shell.mountShell())
-    .catch((error) => console.error('[doogle] 셸을 올리지 못했습니다', error));
+    .catch((error) => console.error('[doogle] 셸을 올리지 못했습니다', error))
+    // 부팅 가림막(public/theme-init.js)을 걷는다 — 셸이 붙은 뒤 첫 프레임에서. 실패해도 걷는다.
+    .finally(() => requestAnimationFrame(() => document.documentElement.removeAttribute('data-doogle-booting')));
 }
 
 export const dooglePlugin: StudioPlugin = {

@@ -49,3 +49,10 @@
    토글은 view/busy-cursor.ts. */
 :root.rhwp-busy,
 :root.rhwp-busy * { cursor: wait !important; }
+
+/* [doogle] 부팅 가림막 — public/theme-init.js 가 두글 모드에서 data-doogle-booting 을 찍고,
+   src/doogle/index.ts 가 셸을 올린 첫 프레임에 지운다. 그동안 upstream 크롬을 그리지 않고
+   바탕만 셸 작업 공간색(doogle/theme/tokens.css --dg-bg)으로 칠한다. 두글 모드가 아니면 매칭되지 않는다. */
+html[data-doogle-booting] { background: #E9ECF1; }
+html[data-doogle-booting][data-theme-effective="dark"] { background: #0F131B; }
+html[data-doogle-booting] body { visibility: hidden; }
