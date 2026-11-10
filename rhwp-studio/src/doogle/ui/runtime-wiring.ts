@@ -13,6 +13,28 @@ import type {
   SelectionPoint,
 } from '../agent/types.ts';
 
+/**
+ * 문서 위 검토 막(유리 팝오버·하단 알약)을 실행기와 함께 올리고 내린다.
+ * 진입점(index.ts)을 고치지 않으려고 여기서 붙인다 — runtime.dispose 가 막도 걷는다.
+ */
+async function withReviewOverlay(host: PluginHost, runtime: DoogleAgentRuntime): Promise<DoogleAgentRuntime> {
+  let overlay: { dispose(): void } | null = null;
+  try {
+    const { mountReviewOverlay } = await import('../review/overlay.ts');
+    overlay = mountReviewOverlay(host, runtime.pending);
+  } catch (error) {
+    console.error('[doogle] 문서 위 검토 막을 올리지 못했습니다', error);
+  }
+  return {
+    ...runtime,
+    pending: runtime.pending,
+    dispose: () => {
+      overlay?.dispose();
+      runtime.dispose();
+    },
+  };
+}
+
 type RuntimeFactory = (deps: DoogleAgentDeps) => DoogleAgentRuntime | Promise<DoogleAgentRuntime>;
 
 const runtimeModules = import.meta.glob<Record<string, unknown>>([
@@ -60,7 +82,8 @@ export async function createRuntime(host: PluginHost): Promise<DoogleAgentRuntim
       const mod = await load();
       const factory = mod['createDoogleAgentRuntime'];
       if (typeof factory === 'function') {
-        return await (factory as RuntimeFactory)(depsFromHost(host));
+        const runtime = await (factory as RuntimeFactory)(depsFromHost(host));
+        return withReviewOverlay(host, runtime);
       }
     } catch (error) {
       console.error(`[doogle] 실행기(${path})를 만들지 못했습니다`, error);

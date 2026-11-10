@@ -7,12 +7,18 @@
  * 편집"(전체 승인/전체 거절)이므로 첫 스테이징 쓰기 직전 문서 스냅샷 하나를 기준점으로 잡는다:
  *  - acceptAll: 기준점을 버린다 (문서는 그대로).
  *  - rejectAll: 기준점으로 복원한다 — transaction 안에서 하므로 거절 자체도 undo 한 단계다.
+ *
+ * (추가) 행 단위 검토: 스테이징 쓰기마다 직전 스냅샷도 남긴다(첫 쓰기의 것은 기준점과 같다).
+ *  - accept(id): 행에 kept 표시. 맨 앞부터 연속된 kept 행은 확정하고 기준점을 다음 행 직전으로 옮긴다.
+ *  - rejectFrom(id): 그 행 직전 스냅샷으로 복원 — 그 행과 뒤 행이 함께 되돌아간다(마지막 행이면 그 행만).
+ *    중간 행만 빼고 뒤 행을 다시 적용하는 재생(replay)은 하지 않는다.
  * 한 문서의 편집 스레드는 하나뿐이다: 다른 스레드의 편집이 검토를 기다리는 동안의 쓰기는
  * DOCUMENT_WRITER_BUSY 로 거절한다(rhwp-x claimDocumentWrite 와 같은 규칙).
  */
 import { Engine } from './engine-adapter.ts';
 import {
   DoogleToolError, type DoogleAgentDeps, type PendingApi, type PendingChangeEvent, type PendingChangeSet,
+  type PendingChangeTarget,
 } from './types.ts';
 
 export interface StagingHooks {
@@ -42,6 +48,10 @@ export class PendingStaging implements PendingApi {
   private lastStagedRevision = 0;
   private listeners = new Set<(e: PendingChangeEvent) => void>();
   private seq = 0;
+  /** 행 id → 그 행 직전 스냅샷 (첫 행은 기준점) */
+  private befores = new Map<string, number>();
+  /** beginWrite 가 잡고 record 가 행에 붙일 스냅샷 */
+  private pendingBefore: number | null = null;
 
   constructor(deps: DoogleAgentDeps, hooks: StagingHooks) {
     this.deps = deps;
@@ -61,11 +71,16 @@ export class PendingStaging implements PendingApi {
     if (this.baseline === null) {
       this.baseline = engine.saveSnapshot();
       this.owner = threadId;
+      this.pendingBefore = this.baseline;
+    } else {
+      try { this.pendingBefore = engine.saveSnapshot(); } catch { this.pendingBefore = null; }
     }
   }
 
   /** 쓰기가 실패해 문서가 그대로면 — 대기 중 편집이 없으면 기준점을 버린다. */
   abortWrite(engine: Engine): void {
+    if (this.pendingBefore !== null && this.pendingBefore !== this.baseline) engine.discardSnapshot(this.pendingBefore);
+    this.pendingBefore = null;
     if (this.entries.length === 0 && this.baseline !== null) {
       engine.discardSnapshot(this.baseline);
       this.baseline = null;
@@ -73,7 +88,10 @@ export class PendingStaging implements PendingApi {
     }
   }
 
-  record(threadId: string, tool: string, summary: string, pages: number[], revision: number): PendingChangeSet {
+  record(
+    threadId: string, tool: string, summary: string, pages: number[], revision: number,
+    extra?: { targets?: PendingChangeTarget[]; args?: Record<string, unknown> },
+  ): PendingChangeSet {
     const entry: PendingChangeSet = {
       id: `cs${++this.seq}`,
       threadId,
@@ -82,7 +100,12 @@ export class PendingStaging implements PendingApi {
       pages: [...new Set(pages)].sort((a, b) => a - b),
       revision,
       createdAt: this.deps.now?.() ?? Date.now(),
+      ...(extra?.targets ? { targets: extra.targets } : {}),
+      ...(extra?.args ? { args: extra.args } : {}),
     };
+    const before = this.pendingBefore ?? (this.entries.length === 0 ? this.baseline : null);
+    if (before !== null) this.befores.set(entry.id, before);
+    this.pendingBefore = null;
     this.entries.push(entry);
     this.lastStagedRevision = revision;
     this.emit({ kind: 'added', threadId, changeSets: [entry] });
@@ -90,7 +113,11 @@ export class PendingStaging implements PendingApi {
   }
 
   list(threadId?: string): PendingChangeSet[] {
-    return this.entries.filter((e) => threadId === undefined || e.threadId === threadId).map((e) => ({ ...e, pages: [...e.pages] }));
+    return this.entries.filter((e) => threadId === undefined || e.threadId === threadId).map((e) => ({
+      ...e,
+      pages: [...e.pages],
+      ...(e.targets ? { targets: e.targets.map((t) => ({ ...t })) } : {}),
+    }));
   }
 
   hasPending(threadId?: string): boolean {
@@ -150,15 +177,89 @@ export class PendingStaging implements PendingApi {
     return { rejected: rejected.length, userEditsReverted };
   }
 
+  /** 행 하나 적용 (kept 표시 → 앞에서부터 연속된 kept 행 확정) */
+  accept(id: string): { accepted: number } {
+    const entry = this.entries.find((e) => e.id === id);
+    if (!entry || entry.kept) return { accepted: 0 };
+    entry.kept = true;
+    const thread = entry.threadId;
+    this.settleKeptPrefix();
+    if (this.entries.length === 0) {
+      this.hooks.noteReview(thread, { decision: 'accepted', changeSets: 1 });
+    }
+    this.emit({ kind: 'accepted', threadId: thread, changeSets: [{ ...entry, pages: [...entry.pages] }] });
+    return { accepted: 1 };
+  }
+
+  /** 이 행과 그 뒤 행을 거절 — 이 행 직전 스냅샷으로 복원한다 */
+  rejectFrom(id: string): { rejected: number; userEditsReverted: boolean } {
+    const index = this.entries.findIndex((e) => e.id === id);
+    if (index < 0) return { rejected: 0, userEditsReverted: false };
+    if (index === 0) return this.rejectAll();
+    const snapshot = this.befores.get(id);
+    if (snapshot === undefined) {
+      throw new DoogleToolError('STAGING_BASELINE_LOST', 'The snapshot before this edit is missing; use undo to revert it.');
+    }
+    const userEditsReverted = this.hooks.revision() !== this.lastStagedRevision;
+    const revBefore = this.hooks.revision();
+    try {
+      this.deps.transaction('doogle:reject-staged-edit', (doc) => {
+        new Engine(doc).restoreSnapshot(snapshot);
+      });
+    } catch (error) {
+      throw new DoogleToolError(
+        'STAGING_REJECT_FAILED',
+        `Could not restore the document to its state before this edit (${error instanceof Error ? error.message : String(error)}). Use undo instead.`,
+      );
+    }
+    this.lastStagedRevision = this.hooks.noteWrite(revBefore);
+    const rejected = this.entries.splice(index);
+    const doc = this.deps.getDocument();
+    for (const e of rejected) {
+      const snap = this.befores.get(e.id);
+      this.befores.delete(e.id);
+      if (doc && snap !== undefined && snap !== this.baseline) new Engine(doc).discardSnapshot(snap);
+    }
+    const thread = rejected[0].threadId;
+    this.hooks.noteReview(thread, {
+      decision: 'partially_rejected',
+      changeSets: rejected.length,
+      remaining: this.entries.length,
+      note: `The user rejected ${rejected.length} of your staged edit(s) (the most recent ones); the document was restored to its state before them. Re-read before editing again.`,
+    });
+    this.emit({ kind: 'rejected', threadId: thread, changeSets: rejected });
+    this.settleKeptPrefix();
+    return { rejected: rejected.length, userEditsReverted };
+  }
+
+  /** 맨 앞부터 연속된 kept 행을 확정하고 기준점을 그 다음 행 직전 스냅샷으로 옮긴다 */
+  private settleKeptPrefix(): void {
+    const doc = this.deps.getDocument();
+    while (this.entries.length > 0 && this.entries[0].kept) {
+      const first = this.entries.shift()!;
+      this.befores.delete(first.id);
+      const next = this.entries[0];
+      const old = this.baseline;
+      this.baseline = next ? this.befores.get(next.id) ?? null : null;
+      if (doc && old !== null && old !== this.baseline) new Engine(doc).discardSnapshot(old);
+    }
+    if (this.entries.length === 0) {
+      this.dropBaseline();
+      this.owner = null;
+    }
+  }
+
   onChange(cb: (e: PendingChangeEvent) => void): () => void {
     this.listeners.add(cb);
     return () => { this.listeners.delete(cb); };
   }
 
   private dropBaseline(): void {
-    if (this.baseline === null) return;
     const doc = this.deps.getDocument();
-    if (doc) new Engine(doc).discardSnapshot(this.baseline);
+    const ids = new Set<number>(this.befores.values());
+    if (this.baseline !== null) ids.add(this.baseline);
+    if (doc) for (const id of ids) new Engine(doc).discardSnapshot(id);
+    this.befores.clear();
     this.baseline = null;
   }
 
@@ -167,6 +268,8 @@ export class PendingStaging implements PendingApi {
     const had = this.entries;
     this.entries = [];
     this.baseline = null;
+    this.befores.clear();
+    this.pendingBefore = null;
     this.owner = null;
     if (had.length > 0) this.emit({ kind: 'rejected', threadId: null, changeSets: had });
   }

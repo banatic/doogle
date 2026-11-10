@@ -203,3 +203,29 @@ test('executor: agent mode stages edits; reject restores; other thread is busy',
   const next = await rt.executeTool('get_text_range', { paraIdx: 0 }, ctx);
   assert.equal(next.result.editReport.decision, 'rejected');
 });
+
+test('executor: per-change review — accept keeps, rejectFrom restores that change and later ones', async () => {
+  const doc = new FakeDoc(['하나', '둘', '셋']);
+  const rt = createDoogleAgentRuntime(fakeDeps(doc));
+  const ctx = { origin: 'agent', threadId: 'A', mode: 'agent' };
+  for (const [paraIdx, text] of [[0, '1'], [1, '2'], [2, '3']]) {
+    const r = await rt.executeTool('insert_text', { expectedRevision: rt.revision(), paraIdx, text }, ctx);
+    assert.ok(r.ok, JSON.stringify(r));
+  }
+  const list = rt.pending.list('A');
+  assert.equal(list.length, 3);
+  assert.equal(list[0].targets?.[0]?.paraIdx, 0);
+  assert.equal(list[0].args?.text, '1');
+  // 마지막 행만 거절
+  assert.equal(rt.pending.rejectFrom(list[2].id).rejected, 1);
+  assert.deepEqual(doc.paras, ['하나1', '둘2', '셋']);
+  // 두 번째 행 적용(kept) → 첫 행이 대기 중이라 남아 있다
+  rt.pending.accept(list[1].id);
+  assert.equal(rt.pending.list('A').length, 2);
+  assert.equal(rt.pending.list('A')[1].kept, true);
+  // 첫 행 적용 → 모두 확정
+  rt.pending.accept(list[0].id);
+  assert.equal(rt.pending.hasPending(), false);
+  assert.deepEqual(doc.paras, ['하나1', '둘2', '셋']);
+  assert.equal(doc.snaps.size, 0, 'all review snapshots discarded');
+});

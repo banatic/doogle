@@ -1,463 +1,907 @@
-/* 두글 에이전트 사이드바 — 접두어 dg- (upstream ai-panel.css 의 토큰·밀도를 따른다) */
+/* 두글 에이전트 사이드바 (시안 F). 색·글꼴·반경은 doogle/theme/tokens.css 의 --dg-* (없으면 '클래식 블루' 기본값). */
+
+/* 패널 껍데기의 머리줄은 숨긴다 — 이 사이드바가 제목·닫기를 직접 그린다. */
+.spl-header:has(~ .spl-body > .spl-panel:not([hidden]) > .dg-panel) {
+  display: none;
+}
 
 .dg-panel {
-  position: relative;
+  --dg-x-accent: var(--dg-accent, #1f5fbf);
+  --dg-x-panel: var(--dg-panel, #fafbfc);
+  --dg-x-border: var(--dg-border, #dde2ea);
+  --dg-x-divider: var(--dg-divider, #e5e7eb);
+  --dg-x-text: var(--dg-text, #1f2937);
+  --dg-x-text2: var(--dg-text2, #374151);
+  --dg-x-muted: var(--dg-muted, #4b5563);
+  --dg-x-soft: var(--dg-soft, #eff6ff);
+  --dg-x-soft-border: var(--dg-soft-border, #bfdbfe);
+  --dg-x-soft-text: var(--dg-soft-text, #1e3a8a);
+  --dg-x-ins: var(--dg-ins, #1d4ed8);
+  --dg-x-del: var(--dg-del, #b91c1c);
+  --dg-x-bubble: var(--dg-user-bubble, #eef1f5);
+  --dg-x-r-sm: var(--dg-r-sm, 6px);
+  --dg-x-r-md: var(--dg-r-md, 8px);
+  --dg-x-r-lg: var(--dg-r-lg, 20px);
+
   display: flex;
   flex-direction: column;
   height: 100%;
-  padding: 10px 12px 12px;
+  min-height: 0;
+  background: var(--dg-x-panel);
+  color: var(--dg-x-text);
+  font-family: var(--dg-font-ui, 'Noto Sans KR', system-ui, sans-serif);
+  font-size: 13px;
   box-sizing: border-box;
-  font-size: var(--font-size-base);
-  color: var(--color-text);
-  gap: 8px;
+}
+
+.dg-panel *,
+.dg-panel *::before,
+.dg-panel *::after {
+  box-sizing: border-box;
+}
+
+.dg-panel button {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.dg-panel button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.dg-panel button:focus-visible,
+.dg-panel input:focus-visible,
+.dg-panel [tabindex]:focus-visible {
+  outline: 2px solid var(--dg-x-accent);
+  outline-offset: 1px;
 }
 
 .dg-panel [hidden] {
   display: none !important;
 }
 
-/* 머리 */
+.dg-grow {
+  flex-grow: 1;
+}
+
+.dg-sr-only {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ─── 머리 ─────────────────────────────────────────── */
+
 .dg-head {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  flex: none;
-}
-
-.dg-pickers {
-  display: flex;
-  gap: 4px;
-}
-
-.dg-select {
-  flex: 1;
-  min-width: 0;
-  height: var(--control-height-md);
-  border: 1px solid var(--color-border-input);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
-  color: var(--color-text);
-  font-size: var(--font-size-sm);
-  padding: 0 4px;
-}
-
-.dg-head-row {
+  position: relative;
+  flex-shrink: 0;
+  height: 48px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 6px;
+  gap: 4px;
+  padding: 0 10px 0 18px;
 }
 
-.dg-mode {
-  display: inline-flex;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  overflow: hidden;
-}
-
-.dg-mode-btn {
+.dg-title {
+  height: 32px;
+  max-width: 260px;
+  margin-left: -8px;
+  padding: 0 8px;
   border: 0;
   background: transparent;
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-sm);
-  padding: 3px 8px;
-  cursor: pointer;
-}
-
-.dg-mode-btn + .dg-mode-btn {
-  border-left: 1px solid var(--color-border);
-}
-
-.dg-mode-btn.dg-on {
-  background: var(--color-selected-bg);
-  color: var(--color-text);
-  font-weight: 600;
-}
-
-.dg-mode-btn:disabled {
-  cursor: default;
-  opacity: 0.6;
-}
-
-.dg-head-tools {
+  border-radius: var(--dg-x-r-md);
+  font-size: 14px !important;
+  font-weight: 500;
   display: flex;
-  gap: 2px;
-}
-
-.dg-icon-btn {
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-sm);
-  padding: 2px 6px;
-  cursor: pointer;
-}
-
-.dg-icon-btn:hover,
-.dg-mode-btn:not(:disabled):hover {
-  background: var(--color-hover-bg);
-}
-
-.dg-icon-btn:focus-visible,
-.dg-mode-btn:focus-visible,
-.dg-btn:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
-/* 연결·로그인 안내 */
-.dg-conn {
-  flex: none;
-  padding: 4px 8px;
-  border-radius: var(--radius-md);
-  background: var(--color-bg-light);
-  color: var(--color-text-muted);
-  font-size: var(--font-size-sm);
-}
-
-.dg-conn[data-state='unavailable'] {
-  background: var(--ui-warning-bg);
-  color: var(--ui-warning-text);
-}
-
-.dg-auth {
-  flex: none;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
+  align-items: center;
   gap: 6px;
-  padding: 8px;
-  border: 1px solid var(--ui-warning-border);
-  border-radius: var(--radius-md);
-  background: var(--ui-warning-bg);
-  color: var(--ui-warning-text);
-  line-height: 1.5;
+  min-width: 0;
 }
 
-.dg-auth p {
-  margin: 0;
-}
-
-.dg-auth-hint {
-  font-size: var(--font-size-sm);
-}
-
-/* 단추 */
-.dg-btn {
-  height: var(--control-height-md);
-  padding: 0 10px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
-  color: var(--color-text);
-  font-size: var(--font-size-sm);
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.dg-btn:hover:not(:disabled) {
-  background: var(--color-hover-bg);
-}
-
-.dg-btn:disabled {
-  opacity: 0.55;
-  cursor: default;
-}
-
-.dg-btn-primary {
-  border-color: var(--color-primary);
-  background: var(--color-primary);
-  color: #fff;
-}
-
-.dg-btn-primary:hover:not(:disabled) {
-  background: var(--color-primary-dark);
-}
-
-.dg-btn-danger,
-.dg-btn-danger:hover:not(:disabled) {
-  border-color: var(--ui-danger-strong);
-  background: var(--ui-danger-strong);
-  color: #fff;
-}
-
-/* 대화 */
-.dg-chat {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-  gap: 8px;
-}
-
-.dg-log {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding-right: 2px;
-}
-
-.dg-empty {
-  margin: 0;
-  color: var(--color-text-muted);
-  font-size: var(--font-size-sm);
-  line-height: 1.5;
-}
-
-.dg-msg {
-  line-height: 1.55;
-  overflow-wrap: anywhere;
-}
-
-.dg-msg-user {
-  align-self: flex-end;
-  max-width: 88%;
-  padding: 6px 10px;
-  border-radius: var(--radius-md);
-  background: var(--color-selected-bg);
-  white-space: pre-wrap;
-}
-
-.dg-msg-assistant {
-  align-self: stretch;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.dg-msg-assistant[data-usage]::after {
-  content: attr(data-usage);
-  color: var(--color-text-hint);
-  font-size: var(--font-size-xs);
-}
-
-.dg-msg-body.dg-streaming {
-  white-space: pre-wrap;
-}
-
-.dg-msg-body > :first-child { margin-top: 0; }
-.dg-msg-body > :last-child { margin-bottom: 0; }
-
-.dg-msg-body p,
-.dg-msg-body ul,
-.dg-msg-body ol,
-.dg-msg-body pre {
-  margin: 0 0 8px;
-}
-
-.dg-msg-body ul,
-.dg-msg-body ol {
-  padding-left: 20px;
-}
-
-.dg-msg-body code {
-  font-family: var(--font-family-mono);
-  font-size: 0.92em;
-  padding: 0 3px;
-  border-radius: 3px;
-  background: var(--color-bg-light);
-}
-
-.dg-msg-body pre {
-  padding: 8px;
-  border-radius: var(--radius-sm);
-  background: var(--color-bg-light);
-  overflow-x: auto;
-}
-
-.dg-status {
-  color: var(--color-text-muted);
-  font-size: var(--font-size-sm);
-}
-
-.dg-status:empty {
-  display: none;
-}
-
-.dg-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
-.dg-chip {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 4px;
-  max-width: 100%;
-  padding: 1px 8px;
-  border: 1px solid var(--color-border);
-  border-radius: 999px;
-  font-size: var(--font-size-xs);
-  color: var(--color-text-secondary);
-}
-
-.dg-chip[data-category='edit'] {
-  border-color: var(--color-primary-subtle);
-}
-
-.dg-chip-summary {
+.dg-title-text {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--color-text-muted);
 }
 
-.dg-chip[data-state='running'] .dg-chip-label::after {
-  content: ' …';
+.dg-title:hover,
+.dg-icon-btn:hover {
+  background: rgba(15, 23, 42, 0.06);
 }
 
-.dg-chip[data-state='done'] .dg-chip-label::before {
-  content: '✓ ';
+.dg-icon-btn {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border: 0;
+  background: transparent;
+  border-radius: var(--dg-x-r-md);
+  color: var(--dg-x-muted) !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
-.dg-chip[data-state='error'] {
-  border-color: var(--ui-danger-strong);
-  color: var(--ui-danger-strong);
+/* ─── 메뉴 ─────────────────────────────────────────── */
+
+.dg-menu {
+  position: absolute;
+  z-index: 20;
+  min-width: 240px;
+  max-width: calc(100% - 24px);
+  max-height: 420px;
+  overflow-y: auto;
+  padding: 6px;
+  background: #fff;
+  border: 1px solid var(--dg-x-border);
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.16);
 }
 
-.dg-chip[data-state='error'] .dg-chip-label::before {
-  content: '✕ ';
+.dg-thread-menu {
+  top: 44px;
+  left: 10px;
 }
 
-.dg-msg-external {
+.dg-model-menu {
+  right: 16px;
+  bottom: calc(100% - 8px);
+  width: 300px;
+}
+
+.dg-menu-heading {
   display: flex;
   align-items: center;
   gap: 6px;
+  padding: 8px 8px 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dg-x-muted);
 }
 
-.dg-external-tag {
-  color: var(--color-text-muted);
-  font-size: var(--font-size-xs);
+.dg-menu-tag {
+  font-weight: 500;
+  font-size: 11px;
+  padding: 0 6px;
+  border-radius: 9px;
+  background: var(--dg-x-bubble);
 }
 
-.dg-notice {
-  padding: 4px 8px;
-  border-radius: var(--radius-md);
-  font-size: var(--font-size-sm);
-  line-height: 1.5;
+.dg-menu-group + .dg-menu-group {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--dg-x-divider);
 }
 
-.dg-notice-info {
-  color: var(--color-text-muted);
-}
-
-.dg-notice-limit {
-  border: 1px solid var(--ui-warning-border);
-  background: var(--ui-warning-bg);
-  color: var(--ui-warning-text);
-}
-
-.dg-notice-error {
-  background: var(--ui-danger-soft);
-  color: var(--ui-danger-strong);
-}
-
-/* 검토 대기 막대 */
-.dg-review {
-  flex: none;
+.dg-menu-item {
+  width: 100%;
+  min-height: 32px;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  border-radius: var(--dg-x-r-sm);
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 8px;
-  border: 1px solid var(--color-primary-subtle);
-  border-radius: var(--radius-md);
-  background: var(--color-accent-bg-light);
+  gap: 8px;
+  text-align: left;
+  font-size: 13px !important;
 }
 
-.dg-review-count {
-  flex: 1;
+.dg-menu-item:hover:not(:disabled),
+.dg-menu-item:focus-visible {
+  background: var(--dg-x-soft);
+}
+
+.dg-menu-check {
+  width: 14px;
+  flex-shrink: 0;
+  color: var(--dg-x-accent);
+  font-size: 12px;
+}
+
+.dg-menu-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dg-menu-minor {
+  color: var(--dg-x-muted) !important;
+  font-size: 12px !important;
+  padding-left: 30px;
+}
+
+.dg-menu-action {
+  color: var(--dg-x-accent) !important;
   font-weight: 600;
 }
 
-/* 입력 */
-.dg-composer {
-  flex: none;
+.dg-menu-hint {
+  margin: 2px 8px 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--dg-x-muted);
+}
+
+.dg-key-form {
   display: flex;
-  align-items: flex-end;
+  flex-wrap: wrap;
   gap: 6px;
+  padding: 4px 8px 2px;
 }
 
-.dg-input {
-  flex: 1;
+.dg-key-input {
+  flex: 1 1 140px;
   min-width: 0;
-  resize: vertical;
-  min-height: 52px;
-  max-height: 40vh;
-  padding: 6px 8px;
-  border: 1px solid var(--color-border-input);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
-  color: var(--color-text);
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--dg-field, #cbd5e1);
+  border-radius: var(--dg-x-r-sm);
   font: inherit;
-  line-height: 1.45;
+  font-size: 12px;
+  background: #fff;
+  color: var(--dg-x-text);
 }
 
-.dg-input:focus {
-  outline: none;
-  border-color: var(--color-primary);
+.dg-key-save {
+  height: 30px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--dg-x-r-sm);
+  background: var(--dg-x-accent);
+  color: #fff !important;
+  font-size: 12px !important;
+  font-weight: 600;
 }
 
-/* 설정 */
-.dg-settings {
-  flex: 1;
+.dg-key-form .dg-menu-hint {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+/* ─── 본문 ─────────────────────────────────────────── */
+
+.dg-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.dg-conn {
+  margin: 0 22px 6px;
+  font-size: 12px;
+  color: var(--dg-x-muted);
+}
+
+.dg-scroll {
+  flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.dg-log {
+  padding: 8px 22px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.dg-empty {
+  margin-top: 28px;
+}
+
+.dg-empty-title {
+  margin: 0 0 4px;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.dg-empty-sub {
+  margin: 0 0 16px;
+  font-size: 13px;
+  color: var(--dg-x-muted);
+  line-height: 1.6;
+}
+
+.dg-suggest {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.dg-suggest-chip {
+  min-height: 32px;
+  padding: 6px 12px;
+  border: 1px solid var(--dg-x-border);
+  background: #fff;
+  border-radius: 16px;
+  font-size: 13px !important;
+  color: var(--dg-x-text2) !important;
+  text-align: left;
+}
+
+.dg-suggest-chip:hover {
+  border-color: var(--dg-x-soft-border);
+  background: var(--dg-x-soft);
+  color: var(--dg-x-soft-text) !important;
+}
+
+.dg-user {
+  align-self: flex-end;
+  max-width: 300px;
+  padding: 11px 15px;
+  background: var(--dg-x-bubble);
+  border-radius: 18px;
+  font-size: 14px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.dg-turn {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  font-size: 14px;
+  line-height: 1.7;
 }
 
-.dg-settings-title {
-  margin: 0;
-  font-size: var(--font-size-md);
+.dg-prose {
+  overflow-wrap: anywhere;
+  border-radius: var(--dg-x-r-sm);
+  transition: background-color 0.6s ease;
 }
 
-.dg-field {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+.dg-prose > :first-child {
+  margin-top: 0;
 }
 
-.dg-field-label {
+.dg-prose > :last-child {
+  margin-bottom: 0;
+}
+
+.dg-prose p {
+  margin: 0 0 10px;
+}
+
+.dg-prose ul,
+.dg-prose ol {
+  margin: 0 0 10px;
+  padding-left: 20px;
+}
+
+.dg-prose li + li {
+  margin-top: 2px;
+}
+
+.dg-prose h3,
+.dg-prose h4,
+.dg-prose h5 {
+  margin: 4px 0 6px;
+  font-size: 14px;
   font-weight: 600;
-  font-size: var(--font-size-sm);
 }
 
-.dg-field-row {
-  display: flex;
-  gap: 4px;
+.dg-prose code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--dg-x-bubble);
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 12.5px;
 }
 
-.dg-field-input {
-  flex: 1;
-  min-width: 0;
-  height: var(--control-height-md);
-  padding: 0 6px;
-  border: 1px solid var(--color-border-input);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
-  color: var(--color-text);
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-sm);
-}
-
-.dg-field-note:empty {
-  display: none;
-}
-
-.dg-field-note,
-.dg-hint {
-  margin: 0;
-  color: var(--color-text-muted);
-  font-size: var(--font-size-sm);
+.dg-prose pre {
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  border-radius: var(--dg-x-r-md);
+  background: var(--dg-x-bubble);
+  overflow-x: auto;
+  font-size: 12.5px;
   line-height: 1.5;
 }
 
-.dg-settings-close {
+.dg-prose pre code {
+  padding: 0;
+  background: none;
+}
+
+.dg-prose.dg-flash {
+  animation: dg-flash 1.6s ease;
+}
+
+@keyframes dg-flash {
+  0%, 30% { background: var(--dg-x-soft); }
+  100% { background: transparent; }
+}
+
+.dg-thinking {
+  font-size: 13px;
+  color: var(--dg-x-muted);
+  background: linear-gradient(90deg, var(--dg-x-muted) 0%, var(--dg-x-muted) 40%, #c4cad4 50%, var(--dg-x-muted) 60%, var(--dg-x-muted) 100%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: dg-shimmer 1.8s linear infinite;
+}
+
+@keyframes dg-shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+
+/* 도구 칩 */
+.dg-tools-chip {
   align-self: flex-start;
+  max-width: 100%;
+  min-height: 30px;
+  padding: 0 10px 0 8px;
+  border: 1px solid var(--dg-x-border);
+  background: transparent;
+  border-radius: var(--dg-x-r-md);
+  font-size: 13px !important;
+  color: var(--dg-x-muted) !important;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dg-tools-chip:hover {
+  background: rgba(15, 23, 42, 0.04);
+}
+
+.dg-tools-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dg-tools-chev {
+  flex-shrink: 0;
+  transition: transform 0.15s ease;
+}
+
+.dg-tools-chip[aria-expanded='true'] .dg-tools-chev {
+  transform: rotate(90deg);
+}
+
+.dg-tools-list {
+  list-style: none;
+  margin: -6px 0 0;
+  padding: 6px 0 6px 12px;
+  border-left: 2px solid var(--dg-x-divider);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.dg-tool {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.dg-tool-status {
+  position: relative;
+  top: 1px;
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  border-radius: 50%;
+}
+
+.dg-tool[data-state='running'] .dg-tool-status {
+  border: 2px solid var(--dg-x-divider);
+  border-top-color: var(--dg-x-accent);
+  animation: dg-spin 0.8s linear infinite;
+}
+
+.dg-tool[data-state='done'] .dg-tool-status {
+  background: var(--dg-x-soft);
+  box-shadow: inset 0 0 0 4px var(--dg-x-accent);
+  transform: scale(0.75);
+}
+
+.dg-tool[data-state='error'] .dg-tool-status {
+  background: var(--dg-x-del);
+  transform: scale(0.7);
+}
+
+@keyframes dg-spin {
+  to { transform: rotate(360deg); }
+}
+
+.dg-tool-label {
+  flex-shrink: 0;
+  color: var(--dg-x-text2);
+}
+
+.dg-tool-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dg-x-muted);
+}
+
+/* 알림 */
+.dg-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--dg-x-muted);
+}
+
+.dg-notice svg {
+  flex-shrink: 0;
+  margin-top: 3px;
+}
+
+.dg-notice-error {
+  color: var(--dg-x-del);
+}
+
+.dg-notice-limit {
+  color: var(--dg-ai-text, #92400e);
+}
+
+/* 검토할 변경 */
+.dg-review {
+  display: flex;
+  flex-direction: column;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.dg-review-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 2px 8px;
+}
+
+.dg-review-title {
+  font-weight: 600;
+}
+
+.dg-count {
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 10px;
+  background: var(--dg-x-text);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dg-review-reject {
+  height: 28px;
+  padding: 0 10px;
+  border: 0;
+  background: transparent;
+  border-radius: 7px;
+  font-size: 12px !important;
+  color: var(--dg-x-muted) !important;
+}
+
+.dg-review-reject:hover:not(:disabled) {
+  background: rgba(15, 23, 42, 0.06);
+}
+
+.dg-review-accept {
+  height: 28px;
+  padding: 0 12px;
+  border: 0;
+  background: var(--dg-x-accent);
+  border-radius: 7px;
+  font-size: 12px !important;
+  font-weight: 600;
+  color: #fff !important;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dg-review-accept:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.dg-kbd {
+  font-size: 11px;
+  font-weight: 500;
+  opacity: 0.8;
+}
+
+.dg-review-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--dg-x-divider);
+  border-bottom: 1px solid var(--dg-x-divider);
+}
+
+.dg-review-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0 -6px;
+  padding: 0 6px;
+  border-radius: var(--dg-x-r-md);
+}
+
+.dg-review-row + .dg-review-row {
+  border-top: 1px solid var(--dg-x-divider);
+}
+
+.dg-review-row.dg-current {
+  background: var(--dg-x-soft);
+  border-top-color: transparent;
+}
+
+.dg-review-row.dg-current + .dg-review-row {
+  border-top-color: transparent;
+}
+
+.dg-review-go {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 10px 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  font-size: 13px !important;
+  line-height: 1.5;
+}
+
+.dg-review-loc {
+  padding-top: 1px;
+  font-size: 12px;
+  color: var(--dg-x-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dg-review-what {
+  color: var(--dg-x-text);
+  overflow-wrap: anywhere;
+}
+
+.dg-del {
+  color: var(--dg-x-del);
+  text-decoration: line-through;
+}
+
+.dg-ins {
+  color: var(--dg-x-ins);
+  text-decoration: none;
+}
+
+.dg-review-more {
+  color: var(--dg-x-muted);
+}
+
+.dg-review-btns {
+  display: flex;
+  gap: 2px;
+  padding-top: 7px;
+  flex-shrink: 0;
+}
+
+.dg-review-ok,
+.dg-review-no {
+  width: 26px;
+  height: 26px;
+  border: 0;
+  background: transparent;
+  border-radius: var(--dg-x-r-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dg-review-ok {
+  color: var(--dg-x-text) !important;
+}
+
+.dg-review-no {
+  color: var(--dg-x-muted) !important;
+}
+
+.dg-review-ok:hover:not(:disabled),
+.dg-review-no:hover:not(:disabled) {
+  background: rgba(15, 23, 42, 0.07);
+}
+
+/* 메시지 동작 */
+.dg-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-top: -4px;
+  color: var(--dg-x-muted);
+}
+
+.dg-act {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  background: transparent;
+  border-radius: var(--dg-x-r-sm);
+  color: inherit !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dg-act-text {
+  width: auto;
+  padding: 0 8px;
+  gap: 6px;
+  font-size: 12px !important;
+}
+
+.dg-act:hover:not(:disabled) {
+  background: rgba(15, 23, 42, 0.06);
+  color: var(--dg-x-text) !important;
+}
+
+/* ─── 입력 상자 ───────────────────────────────────── */
+
+.dg-composer-wrap {
+  position: relative;
+  flex-shrink: 0;
+  padding: 0 16px 16px;
+}
+
+.dg-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 14px 10px;
+  background: #fff;
+  border: 1px solid var(--dg-x-border);
+  border-radius: var(--dg-x-r-lg);
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.06);
+}
+
+.dg-composer:focus-within {
+  border-color: var(--dg-x-soft-border);
+}
+
+.dg-input {
+  width: 100%;
+  min-height: 44px;
+  max-height: 180px;
+  padding: 0 2px;
+  border: 0;
+  outline: none;
+  resize: none;
+  background: transparent;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--dg-x-text);
+}
+
+.dg-input::placeholder {
+  color: var(--dg-x-muted);
+  opacity: 0.8;
+}
+
+.dg-composer-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dg-comp-btn {
+  height: 32px;
+  border: 1px solid var(--dg-x-border);
+  background: transparent;
+  border-radius: 9px;
+  color: var(--dg-x-muted) !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dg-comp-square {
+  width: 32px;
+}
+
+.dg-mode-chip {
+  padding: 0 10px;
+  gap: 6px;
+  font-size: 12px !important;
+  white-space: nowrap;
+}
+
+.dg-mode-chip:hover:not(:disabled),
+.dg-model-btn:hover:not(:disabled) {
+  background: rgba(15, 23, 42, 0.05);
+}
+
+.dg-mode-chip.dg-mode-full {
+  border-color: var(--dg-ai-border, #fcd9a8);
+  background: var(--dg-ai-soft, #fff7ed);
+  color: var(--dg-ai-text, #92400e) !important;
+}
+
+.dg-model-btn {
+  height: 32px;
+  max-width: 150px;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  border-radius: var(--dg-x-r-md);
+  font-size: 13px !important;
+  color: var(--dg-x-muted) !important;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.dg-model-btn.dg-warn {
+  color: var(--dg-x-del) !important;
+}
+
+.dg-model-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dg-send {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border: 0;
+  background: var(--dg-x-accent);
+  border-radius: 9px;
+  color: #fff !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dg-send:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.dg-send.dg-send-stop {
+  background: var(--dg-x-text);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dg-thinking,
+  .dg-tool[data-state='running'] .dg-tool-status,
+  .dg-prose.dg-flash {
+    animation: none;
+  }
 }

@@ -30,7 +30,7 @@ import {
 import type { ResolvedAnchor } from './anchor.ts';
 import {
   DoogleToolError, asRecord, colorRef, huToMm, invalidArgs, mmToPx, pxToMm, scalarLength, scalarSlice,
-  type CellAddr, type DoogleAgentDeps, type PngImage, type SelectionPoint, type SelectionRect, type ToolContext, type ToolResult,
+  type CellAddr, type DoogleAgentDeps, type PendingChangeTarget, type PngImage, type SelectionPoint, type SelectionRect, type ToolContext, type ToolResult,
 } from './types.ts';
 
 /** read_batch 항목 — definitions.mjs BATCHABLE_READ_TOOL_NAMES 와 같아야 한다 */
@@ -313,7 +313,10 @@ export class DoogleToolExecutor {
     const after = this.buildAfter(engine, baseline, touches);
     const out: Record<string, unknown> = { revision: revAfter, ...result, after };
     if (staged) {
-      const cs = this.staging.record(thread, tool, summarize(tool, args), after.pages as number[], revAfter);
+      const cs = this.staging.record(thread, tool, summarize(tool, args), after.pages as number[], revAfter, {
+        targets: reviewTargets(engine, tool, args, touches),
+        args: clipArgs(args),
+      });
       out['changeSetId'] = cs.id;
       out['staged'] = true;
     }
@@ -1083,6 +1086,69 @@ export class DoogleToolExecutor {
 }
 
 /** change set 요약 한 줄 */
+/** (검토 UI) 도구가 넣은 글 — 선택 길이 계산용 */
+function insertedText(tool: string, args: Record<string, unknown>): string | null {
+  const t = tool === 'replace_all' ? args['replacement'] : tool === 'insert_text' || tool === 'replace_range' ? args['text'] : undefined;
+  return typeof t === 'string' ? t : null;
+}
+
+/**
+ * (검토 UI) 터치 → 검토 행 위치. 글을 넣은 편집은 넣은 글을, 그 밖은 문단 전체를 가리킨다.
+ * 기록 시점 좌표이며 실패해도 쓰기에는 영향이 없다.
+ */
+function reviewTargets(engine: Engine, tool: string, args: Record<string, unknown>, touches: Touch[]): PendingChangeTarget[] {
+  const out: PendingChangeTarget[] = [];
+  const edits = tool === 'apply_edits' && Array.isArray(args['edits']) ? args['edits'] as unknown[] : null;
+  for (let i = 0; i < touches.length && out.length < 16; i++) {
+    const t = touches[i];
+    try {
+      if (t.wholeSection) {
+        out.push({ sectionIdx: t.sectionIdx, paraIdx: 0, charOffset: 0, length: 0, wholeSection: true });
+        continue;
+      }
+      if (t.table) {
+        out.push({ sectionIdx: t.sectionIdx, paraIdx: t.table.paraIdx, charOffset: 0, length: 0, table: { ...t.table } });
+        continue;
+      }
+      const para = t.cell ? t.cellParaStart ?? 0 : t.paraStart;
+      const itemArgs = edits && edits.length === touches.length ? asRecord(edits[i]) : args;
+      const itemTool = edits && edits.length === touches.length ? String(itemArgs['tool'] ?? '') : tool;
+      const text = insertedText(itemTool, itemArgs);
+      const paraLen = engine.length(t.sectionIdx, para, t.cell);
+      let charOffset = 0;
+      let length = paraLen;
+      if (text !== null && t.charOffset !== undefined && !text.includes('\n')) {
+        charOffset = Math.min(t.charOffset, paraLen);
+        length = Math.max(0, Math.min(scalarLength(text), paraLen - charOffset));
+      }
+      out.push({
+        sectionIdx: t.sectionIdx, paraIdx: para, charOffset, length,
+        ...(t.cell ? { cell: { paraIdx: t.cell.paraIdx, controlIdx: t.cell.controlIdx, cellIdx: t.cell.cellIdx } } : {}),
+      });
+    } catch { /* 위치를 못 구하면 행은 위치 없이 보인다 */ }
+  }
+  return out;
+}
+
+/** (검토 UI) 인자 사본 — 긴 문자열·배열은 자른다 */
+function clipArgs(value: unknown, depth = 0): Record<string, unknown> {
+  const clip = (v: unknown, d: number): unknown => {
+    if (typeof v === 'string') return v.length > 400 ? `${v.slice(0, 400)}…` : v;
+    if (Array.isArray(v)) return d > 2 ? [] : v.slice(0, 32).map((x) => clip(x, d + 1));
+    if (v && typeof v === 'object') {
+      if (d > 2) return {};
+      const out: Record<string, unknown> = {};
+      for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
+        if (k === 'base64' || k === 'imageBase64' || k === 'data') continue;
+        out[k] = clip(x, d + 1);
+      }
+      return out;
+    }
+    return v;
+  };
+  return clip(asRecord(value), depth) as Record<string, unknown>;
+}
+
 function summarize(tool: string, args: Record<string, unknown>): string {
   const clip = (v: unknown) => {
     const s = String(v ?? '');

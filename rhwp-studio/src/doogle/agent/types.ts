@@ -148,6 +148,21 @@ export interface DoogleAgentDeps {
   now?(): number;
 }
 
+/**
+ * 검토 행이 가리키는 문서 위치 (기록 시점 좌표 — 뒤 편집으로 문단 번호가 밀릴 수 있다).
+ * 셀 안이면 cell 이 있고 paraIdx 는 셀 안 문단이다. 표 전체면 table, 구역 전체면 wholeSection.
+ */
+export interface PendingChangeTarget {
+  sectionIdx: number;
+  paraIdx: number;
+  charOffset: number;
+  /** 선택할 글자 수 (scalar). 0 이면 캐럿만 */
+  length: number;
+  cell?: { paraIdx: number; controlIdx: number; cellIdx: number };
+  table?: { paraIdx: number; controlIdx: number };
+  wholeSection?: boolean;
+}
+
 export interface PendingChangeSet {
   id: string;
   threadId: string;
@@ -157,6 +172,12 @@ export interface PendingChangeSet {
   pages: number[];
   revision: number;
   createdAt: number;
+  /** (추가) 화면 이동·문서 안 검토용 위치 */
+  targets?: PendingChangeTarget[];
+  /** (추가) 검토 목록이 diff 를 그리는 도구 인자 (긴 문자열은 잘린 사본) */
+  args?: Record<string, unknown>;
+  /** (추가) 행 단위로 적용(✓)했지만 앞선 행이 아직 대기 중이라 목록에 남아 있다 */
+  kept?: boolean;
 }
 
 export interface PendingChangeEvent {
@@ -171,6 +192,16 @@ export interface PendingApi {
   rejectAll(threadId?: string): { rejected: number; userEditsReverted: boolean };
   onChange(cb: (e: PendingChangeEvent) => void): () => void;
   hasPending(threadId?: string): boolean;
+  /**
+   * (추가) 행 하나 적용 — 표시만 남기고, 가장 앞 행부터 연속으로 적용된 것은 확정한다.
+   * 앞선 행을 나중에 거절하면 이 행도 함께 되돌아간다(스냅샷 모델).
+   */
+  accept?(id: string): { accepted: number };
+  /**
+   * (추가) 이 행과 그 뒤 행을 거절 — 이 행 직전 스냅샷으로 복원한다. 마지막 행이면 정확히 그 행만.
+   * 돌려주는 rejected 는 함께 되돌아간 행 수.
+   */
+  rejectFrom?(id: string): { rejected: number; userEditsReverted: boolean };
 }
 
 export interface DoogleAgentRuntime {

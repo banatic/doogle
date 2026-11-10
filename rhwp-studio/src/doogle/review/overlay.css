@@ -1,0 +1,134 @@
+/* 두글 문서 위 검토 막 — 유리 팝오버·하단 알약. 토큰은 doogle/theme/tokens.css (없으면 기본값). */
+
+.dg-glass {
+  position: fixed;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 5px;
+  background: var(--dg-glass-bg, rgba(255, 255, 255, 0.58));
+  -webkit-backdrop-filter: blur(var(--dg-glass-blur, 16px)) saturate(180%);
+  backdrop-filter: blur(var(--dg-glass-blur, 16px)) saturate(180%);
+  border: 1px solid var(--dg-glass-border, rgba(255, 255, 255, 0.75));
+  box-shadow: var(--dg-glass-shadow, 0 10px 30px rgba(15, 23, 42, 0.16), 0 1px 2px rgba(15, 23, 42, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.9));
+  font-family: var(--dg-font-ui, 'Noto Sans KR', system-ui, sans-serif);
+  font-size: 12px;
+  color: var(--dg-text, #1f2937);
+  box-sizing: border-box;
+}
+
+.dg-glass[hidden] {
+  display: none;
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .dg-glass {
+    background: #ffffff;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    border-color: var(--dg-border, #dde2ea);
+  }
+}
+
+.dg-glass-sep {
+  width: 1px;
+  height: 16px;
+  margin: 0 4px;
+  background: rgba(15, 23, 42, 0.15);
+  flex-shrink: 0;
+}
+
+.dg-glass button {
+  font: inherit;
+  cursor: pointer;
+  border: 0;
+  background: transparent;
+  color: inherit;
+}
+
+.dg-glass button:focus-visible {
+  outline: 2px solid var(--dg-accent, #1f5fbf);
+  outline-offset: 1px;
+}
+
+.dg-glass button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* 팝오버 */
+.dg-review-pop {
+  border-radius: 14px;
+}
+
+.dg-pop-btn {
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 9px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.dg-pop-btn:hover {
+  background: rgba(15, 23, 42, 0.06);
+}
+
+.dg-pop-primary {
+  background: var(--dg-accent, #1f5fbf) !important;
+  color: #fff !important;
+  font-weight: 600;
+}
+
+.dg-pop-primary:hover {
+  filter: brightness(1.08);
+}
+
+.dg-pop-quiet {
+  font-weight: 400;
+  color: var(--dg-text2, #374151);
+}
+
+/* 알약 */
+.dg-review-pill {
+  border-radius: 999px;
+  transform: translate(-50%, -100%);
+  background: var(--dg-glass-bg, rgba(255, 255, 255, 0.55));
+}
+
+.dg-pill-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dg-pill-btn:hover:not(:disabled) {
+  background: rgba(15, 23, 42, 0.07);
+}
+
+.dg-pill-zoom {
+  font-size: 16px !important;
+}
+
+.dg-pill-count {
+  padding: 0 4px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.dg-pill-zoomval {
+  min-width: 38px;
+  padding: 0 2px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .dg-review-pill {
+    background: #ffffff;
+  }
+}

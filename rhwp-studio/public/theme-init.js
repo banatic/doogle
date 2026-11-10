@@ -45,6 +45,8 @@
     toolbarBasic = true;
     toolbarFormat = true;
   }
+  // [doogle] 두글 모드(Tauri 또는 ?doogle=1)는 첫 페인트부터 셸 스타일을 쓴다 — src/doogle/index.ts isDoogleMode 와 같은 판정.
+  if (window.__TAURI_INTERNALS__ || /[?&]doogle=1(?:&|$)/.test(location.search)) root.setAttribute('data-doogle', '');
   root.dataset.toolboxBasic = toolbarBasic ? 'shown' : 'hidden';
   root.dataset.toolboxFormat = toolbarFormat ? 'shown' : 'hidden';
 })();

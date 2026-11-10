@@ -1,0 +1,137 @@
+/* ================================================================
+   두글(doogle) 디자인 토큰 — 시안 F "클래식 블루"
+   ----------------------------------------------------------------
+   `<html data-doogle>` 일 때만 살아 있다. 비두글 모드에서는 이 파일 전체가
+   매칭되지 않아 upstream 화면이 그대로다.
+
+   - `--dg-*`  : 두글 화면(셸·사이드바·검토 팝오버)이 쓰는 이름. 사이드바(agent S)도
+                 같은 이름을 소비하므로 이름을 바꾸지 말 것.
+   - 아래쪽 블록: upstream 변수(`--ui-*`, `--accent-*`, `--ruler-*` …)를 토큰으로
+                 다시 묶어, 대화상자·메뉴·눈금자 같은 upstream 표면을 TS 수정 없이
+                 같은 팔레트로 칠한다.
+   ================================================================ */
+
+:root[data-doogle] {
+  /* ── 팔레트 ── */
+  --dg-title: #1F5FBF;
+  --dg-title-text: #FFFFFF;
+  --dg-accent: #1F5FBF;
+  --dg-accent-hover: #1A51A3;
+  --dg-bg: #E9ECF1;
+  --dg-chrome: #F8FAFC;
+  --dg-panel: #FAFBFC;
+  --dg-surface: #FFFFFF;
+  --dg-border: #DDE2EA;
+  --dg-divider: #E5E7EB;
+  --dg-field: #CBD5E1;
+  --dg-text: #1F2937;
+  --dg-text2: #374151;
+  --dg-muted: #4B5563;
+  --dg-soft: #EFF6FF;
+  --dg-soft-border: #BFDBFE;
+  --dg-soft-text: #1E3A8A;
+  --dg-hover: #F1F5F9;
+  --dg-ins: #1D4ED8;
+  --dg-del: #B91C1C;
+  --dg-user-bubble: #EEF1F5;
+  --dg-ai-soft: #FFF7ED;
+  --dg-ai-border: #FCD9A8;
+  --dg-ai-text: #92400E;
+
+  /* ── 글꼴 ── 번들 폰트가 없으므로 외부 CDN 없이 시스템 글꼴로 떨어진다 */
+  --dg-font-ui: 'Noto Sans KR', 'Pretendard Variable', Pretendard, 'Malgun Gothic', '맑은 고딕',
+    'Apple SD Gothic Neo', system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+  /* ── 모서리 ── */
+  --dg-r-sm: 4px;
+  --dg-r-md: 8px;
+  --dg-r-lg: 14px;
+
+  /* ── 유리(떠 있는 표면) ── */
+  --dg-glass-bg: rgba(255, 255, 255, 0.58);
+  --dg-glass-border: rgba(255, 255, 255, 0.75);
+  --dg-glass-blur: 16px;
+  --dg-glass-shadow: 0 10px 30px rgba(15, 23, 42, 0.16), 0 1px 2px rgba(15, 23, 42, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+
+  /* ── 그림자·초점 ── */
+  --dg-shadow-pop: 0 8px 24px rgba(15, 23, 42, 0.14), 0 1px 2px rgba(15, 23, 42, 0.06);
+  --dg-shadow-dialog: 0 18px 48px rgba(15, 23, 42, 0.22), 0 2px 6px rgba(15, 23, 42, 0.08);
+  --dg-shadow-page: 0 1px 4px rgba(15, 23, 42, 0.18);
+  --dg-focus: 0 0 0 2px #FFFFFF, 0 0 0 4px var(--dg-accent);
+}
+
+/* 투명도 줄이기를 원하면 유리를 불투명 표면으로 바꾼다. */
+@media (prefers-reduced-transparency: reduce) {
+  :root[data-doogle] {
+    --dg-glass-bg: #FFFFFF;
+    --dg-glass-border: var(--dg-border);
+    --dg-glass-blur: 0px;
+  }
+}
+
+/* ================================================================
+   upstream 변수 다리 — 두글 모드에서는 라이트 팔레트로 고정한다.
+   특이도 (0,3,1): base.css 다크(0,2,0)·flat 스킨(0,3,0)보다 높아 순서와 무관하게 이긴다.
+   ================================================================ */
+html:root[data-doogle][data-doogle] {
+  color-scheme: light;
+
+  --ui-bg: var(--dg-chrome);
+  --ui-bg-light: var(--dg-chrome);
+  --ui-surface: #FFFFFF;
+  --ui-surface-raised: #FFFFFF;
+  --ui-surface-muted: #F1F5F9;
+  --ui-border: var(--dg-border);
+  --ui-border-light: var(--dg-field);
+  --ui-border-subtle: var(--dg-divider);
+  --ui-border-strong: var(--dg-field);
+  --ui-text: var(--dg-text);
+  --ui-text-secondary: var(--dg-text2);
+  --ui-text-muted: var(--dg-muted);
+  --ui-text-hint: #6B7280;
+  --ui-text-disabled: #9CA3AF;
+  --ui-text-placeholder: #6B7280;
+  --ui-text-on-accent: #FFFFFF;
+  --ui-hover: var(--dg-hover);
+  --ui-hover-strong: var(--dg-soft);
+  --ui-active: #DBEAFE;
+  --ui-selected: var(--dg-soft);
+  --ui-menu-open: var(--dg-accent);
+  --ui-menu-open-border: var(--dg-accent);
+  --ui-toolbar-bg-start: #FFFFFF;
+  --ui-toolbar-bg-end: #FFFFFF;
+  --ui-accent-bg: var(--dg-soft);
+  --ui-accent-bg-light: var(--dg-soft);
+  --ui-link: var(--dg-ins);
+  --ui-focus-soft: rgba(31, 95, 191, 0.18);
+
+  --doc-workspace: var(--dg-bg);
+  --doc-paper: #FFFFFF;
+  --doc-shadow: rgba(15, 23, 42, 0.18);
+
+  --focus-ring: var(--dg-accent);
+  --resize-handle: var(--dg-accent);
+
+  --ruler-bg: #F3F5F8;
+  --ruler-body: #FFFFFF;
+  --ruler-tick: #9CA3AF;
+  --ruler-text: var(--dg-muted);
+  --ruler-marker: var(--dg-accent);
+
+  --accent-primary: var(--dg-accent);
+  --accent-strong: #184C99;
+  --accent-light: var(--dg-accent-hover);
+  --accent-hover: var(--dg-soft-border);
+  --accent-subtle: var(--dg-soft-border);
+
+  --shadow-dropdown: var(--dg-shadow-pop);
+  --shadow-dialog: var(--dg-shadow-dialog);
+  --shadow-light: var(--dg-shadow-pop);
+  --overlay-bg: rgba(15, 23, 42, 0.28);
+
+  --font-family-ui: var(--dg-font-ui);
+  --radius-sm: var(--dg-r-sm);
+  --radius-md: 6px;
+  --radius-lg: var(--dg-r-md);
+}

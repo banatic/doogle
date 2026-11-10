@@ -32,6 +32,8 @@ export function createDoogleAgentRuntime(deps: DoogleAgentDeps): DoogleAgentRunt
       rejectAll: (threadId) => executor.staging.rejectAll(threadId),
       onChange: (cb) => executor.staging.onChange(cb),
       hasPending: (threadId) => executor.staging.hasPending(threadId),
+      accept: (id) => executor.staging.accept(id),
+      rejectFrom: (id) => executor.staging.rejectFrom(id),
     },
     revision: () => executor.revision,
     dispose: () => executor.dispose(),

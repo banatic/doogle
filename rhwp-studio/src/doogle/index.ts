@@ -10,6 +10,11 @@
  */
 import type { PluginHost, PluginSurface, StudioPlugin } from '@/plugin/types';
 import { PLUGIN_API_VERSION } from '@/plugin/types';
+// 두글 셸(시안 F) 스타일 — 전부 `:root[data-doogle]` 범위라 비두글 모드에는 영향이 없다.
+// 정적 import 로 두어야 upstream 크롬이 잠깐 보였다 사라지는 깜빡임이 없다. JS 는 아래에서 동적 로드.
+import './theme/tokens.css';
+import './theme/overlays.css';
+import './shell/shell.css';
 
 export const DOOGLE_PLUGIN_ID = 'doogle';
 export const DOOGLE_PANEL_ID = 'agent';
@@ -25,6 +30,14 @@ export function isDoogleMode(): boolean {
   } catch {
     return false;
   }
+}
+
+// 두글 모드면 문서 로드 전부터 셸(제목 막대·리본)을 세운다. host 가 필요한 부분은 initDoogle 에서 잇는다.
+if (isDoogleMode()) {
+  document.documentElement.setAttribute('data-doogle', '');
+  void import('./shell/index.ts')
+    .then((shell) => shell.mountShell())
+    .catch((error) => console.error('[doogle] 셸을 올리지 못했습니다', error));
 }
 
 export const dooglePlugin: StudioPlugin = {
@@ -43,12 +56,14 @@ let activeDispose: (() => void) | null = null;
  * 실행기(agent E) + hub 클라이언트 + 사이드바를 잇는다. 플러그인 활성화 때 한 번 부른다.
  */
 export async function initDoogle(host: PluginHost): Promise<PluginSurface> {
-  const [{ HubClient, endpointFromUrl }, { DoogleSidebar }, desk, { createRuntime }] = await Promise.all([
+  const [{ HubClient, endpointFromUrl }, { DoogleSidebar }, desk, { createRuntime }, shell] = await Promise.all([
     import('./hub-client.ts'),
     import('./ui/sidebar.ts'),
     import('./ui/desk-bridge.ts'),
     import('./ui/runtime-wiring.ts'),
+    import('./shell/index.ts'),
   ]);
+  shell.attachShellHost(host);
 
   const runtime = await createRuntime(host);
   let mode: 'agent' | 'full' = 'agent';
@@ -94,7 +109,7 @@ export async function initDoogle(host: PluginHost): Promise<PluginSurface> {
   host.ui.registerSidePanel({
     id: DOOGLE_PANEL_ID,
     title: '두글 에이전트',
-    defaultWidth: 400,
+    defaultWidth: 420,
     mount: (container) => sidebar.mount(container),
     unmount: () => sidebar.dispose(),
     onVisibilityChange: (open) => sidebar.setVisible(open),
