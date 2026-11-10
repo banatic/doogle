@@ -405,6 +405,9 @@ async function runQuery({ sdk, server, model, text, systemPrompt, cwd, exe, resu
               kind: 'usage',
               inputTokens: (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0),
               outputTokens: u.output_tokens ?? 0,
+              // 진단용(선택 필드): 모델 요청 횟수와 캐시 적중량
+              ...(Number.isFinite(e.num_turns) ? { turns: e.num_turns } : {}),
+              ...(u.cache_read_input_tokens ? { cacheReadTokens: u.cache_read_input_tokens } : {}),
             });
           }
           if (e.is_error) {
