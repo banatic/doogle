@@ -951,7 +951,7 @@ export class DoogleToolExecutor {
     return {
       revision: this.revision, fragments, bodyAreaMm, overflowsBody, overflowsBodyWidth,
       pageBreak: props['pageBreak'], repeatHeader: props['repeatHeader'],
-      ...(overflowsBody && props['pageBreak'] === 0 ? { fix: 'set_table_props {pageBreak:"row", repeatHeader:true}' } : {}),
+      ...(overflowsBody && (props['pageBreak'] === 0 || props['pageBreak'] === 1) ? { fix: 'set_table_props {pageBreak:"row", repeatHeader:true}' } : {}),
       ...(overflowsBodyWidth ? { fixWidth: 'edit_table fit_to_page or set_column_widths' } : {}),
     };
   }

@@ -291,7 +291,7 @@ const DEFINITIONS = [
     name: 'get_table_layout',
     kind: 'read',
     label: '표 배치 읽기',
-    description: `Where a table lands: fragments[] {pageIndex, xMm, yMm, widthMm, heightMm} per page, bodyAreaMm, overflowsBody/overflowsBodyWidth, pageBreak (0 none, 1 cell, 2 row), repeatHeader. Fix overflowsBody with pageBreak 0 via set_table_props {pageBreak:"row", repeatHeader:true}; too wide: edit_table fit_to_page or set_column_widths.`,
+    description: `Where a table lands: fragments[] {pageIndex, xMm, yMm, widthMm, heightMm} per page, bodyAreaMm, overflowsBody/overflowsBodyWidth, pageBreak (0 none, 1 cell, 2 row), repeatHeader. Fix overflowsBody with pageBreak 0 or 1 via set_table_props {pageBreak:"row", repeatHeader:true}. If pageBreak is already 2 (row) and it still overflows, do NOT switch to "cell" (that forbids splitting inside a row and makes it worse) and do not shrink fonts or line spacing on your own — report the overflow to the user; too wide: edit_table fit_to_page or set_column_widths.`,
     shape: {
       sectionIdx: z.number().int().default(0).optional(),
       paraIdx: z.number().int(),
@@ -640,7 +640,7 @@ const DEFINITIONS = [
     name: 'set_table_props',
     kind: 'write',
     label: '표 속성 변경',
-    description: `Set table-level properties (address from its get_structure table line). EASY CENTERING: {horizontalAlign:"center"} → floating, column-relative, zero offset. Any floating-placement key implies positionMode floating. pageBreak "row" splits a long table across pages. ${WRITE_POINTER}`,
+    description: `Set table-level properties (address from its get_structure table line). EASY CENTERING: {horizontalAlign:"center"} → floating, column-relative, zero offset. Any floating-placement key implies positionMode floating. pageBreak: "row" splits a long table across pages, even inside a tall row at line boundaries (use this); "cell" never splits a row — a row crossing the page bottom moves whole to the next page, so a row taller than the page overflows; "none" keeps the table on one page. ${WRITE_POINTER}`,
     shape: {
       expectedRevision: z.number().int(),
       render: renderParam(),
