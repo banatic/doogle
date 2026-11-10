@@ -283,25 +283,39 @@
   background: var(--dg-surface, #FFFFFF);
   flex-shrink: 0;
 }
+/* AI 도우미 — 대표색 단색 단추. 그라데이션·글로우·주황 없음. 색은 토큰이라 다크에서도 그대로 맞는다
+   (다크: 밝은 파랑 바탕 + 짙은 글자). 사이드바가 열려 있으면(aria-pressed) 옅은 파랑으로 물러난다. */
 .dg-tab-ai {
   position: relative;
   height: 26px;
   padding: 0 10px;
-  border: 1px solid var(--dg-ai-border);
-  border-radius: 13px;
-  background: var(--dg-ai-soft);
-  color: var(--dg-ai-text);
+  border: 1px solid var(--dg-accent);
+  border-radius: var(--dg-r-sm, 4px);
+  background: var(--dg-accent);
+  color: var(--dg-on-accent, #FFFFFF);
   font: inherit;
   font-size: var(--dg-fs-sm, 12px);
   font-weight: 600;
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   white-space: nowrap;
   cursor: pointer;
+  transition: background-color var(--dg-dur, 120ms) var(--dg-ease, ease), border-color var(--dg-dur, 120ms) var(--dg-ease, ease), color var(--dg-dur, 120ms) var(--dg-ease, ease);
 }
-.dg-tab-ai:hover { background: var(--dg-warn-soft, var(--dg-ai-soft)); border-color: var(--dg-ai-text); }
-.dg-tab-ai[aria-pressed="true"] { box-shadow: inset 0 0 0 1px var(--dg-ai-text); }
+.dg-tab-ai:hover { background: var(--dg-accent-hover); border-color: var(--dg-accent-hover); }
+.dg-tab-ai:active {
+  background: color-mix(in srgb, var(--dg-accent) 82%, var(--dg-text));
+  border-color: color-mix(in srgb, var(--dg-accent) 82%, var(--dg-text));
+}
+.dg-tab-ai[aria-pressed="true"] {
+  background: var(--dg-soft);
+  border-color: var(--dg-soft-border);
+  color: var(--dg-soft-text);
+}
+.dg-tab-ai[aria-pressed="true"]:hover { background: var(--dg-active); }
+.dg-tab-ai[aria-pressed="true"]:active { background: var(--dg-active); border-color: var(--dg-accent); }
+@media (prefers-reduced-motion: reduce) { .dg-tab-ai { transition: none; } }
 .dg-tab-collapse {
   width: 28px;
   height: 26px;
