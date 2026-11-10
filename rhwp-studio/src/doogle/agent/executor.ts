@@ -371,7 +371,7 @@ export class DoogleToolExecutor {
     const out: Record<string, unknown> = { revision: revAfter, ...result, after };
     if (staged) {
       const cs = this.staging.record(thread, tool, summarize(tool, args), after.pages as number[], revAfter, {
-        targets: reviewTargets(engine, tool, args, touches),
+        targets: reviewTargets(engine, tool, args, touches, (t) => this.pageOfTouch(engine, t)[0]),
         args: clipArgs(args),
         formats: formatLog,
       });
@@ -592,9 +592,12 @@ export class DoogleToolExecutor {
           batch.index = index;
           batch.tool = item.tool;
           const before = w.touches.length;
+          const formatsBefore = w.engine.formatLog?.length ?? 0;
           try {
             results.push(WRITE_HANDLERS[item.tool](w, item.args));
+            for (const f of w.engine.formatLog?.slice(formatsBefore) ?? []) f.item = index;
             for (const t of w.touches.slice(before)) {
+              t.item = index;
               batch.journal.push({ sectionIdx: t.sectionIdx, paraStart: t.paraStart, paraEnd: t.paraEnd, paraDelta: t.paraDelta });
               // 이 항목이 문단 수를 바꿨으면, 앞 항목들이 적어 둔 자리(그 뒤쪽 문단)를 같은 만큼 민다 —
               // 그래야 after 보고와 검토 위치가 배치가 끝난 문서의 문단 번호를 가리킨다.
@@ -1213,28 +1216,44 @@ function insertedText(tool: string, args: Record<string, unknown>): string | nul
   return typeof t === 'string' ? t : null;
 }
 
+/** 검토 행 하나가 기억하는 자리 수 (apply_edits 한 묶음은 32 항목까지) */
+const REVIEW_TARGETS_MAX = 48;
+/** 검토 목록에 보일 문단 첫머리 글 길이 */
+const REVIEW_LEAD_CHARS = 18;
+
 /**
  * (검토 UI) 터치 → 검토 행 위치. 글을 넣은 편집은 넣은 글을, 그 밖은 문단 전체를 가리킨다.
  * 기록 시점 좌표이며 실패해도 쓰기에는 영향이 없다.
  */
-function reviewTargets(engine: Engine, tool: string, args: Record<string, unknown>, touches: Touch[]): PendingChangeTarget[] {
+function reviewTargets(
+  engine: Engine, tool: string, args: Record<string, unknown>, touches: Touch[],
+  pageOf?: (t: Touch) => number | undefined,
+): PendingChangeTarget[] {
   const out: PendingChangeTarget[] = [];
   const edits = tool === 'apply_edits' && Array.isArray(args['edits']) ? args['edits'] as unknown[] : null;
-  for (let i = 0; i < touches.length && out.length < 16; i++) {
+  for (let i = 0; i < touches.length && out.length < REVIEW_TARGETS_MAX; i++) {
     const t = touches[i];
+    // 쪽·항목 번호 — 못 구해도 위치 자체는 남긴다
+    const extra: { page?: number; item?: number } = {};
+    try {
+      const page = pageOf?.(t);
+      if (typeof page === 'number') extra.page = page;
+    } catch { /* 쪽을 모르면 행은 쪽 없이 보인다 */ }
+    if (typeof t.item === 'number') extra.item = t.item;
     try {
       if (t.wholeSection) {
-        out.push({ sectionIdx: t.sectionIdx, paraIdx: 0, charOffset: 0, length: 0, wholeSection: true });
+        out.push({ sectionIdx: t.sectionIdx, paraIdx: 0, charOffset: 0, length: 0, wholeSection: true, ...extra });
         continue;
       }
       if (t.table || t.tableCells) {
         const table = t.table ?? { paraIdx: t.tableCells![0].paraIdx, controlIdx: t.tableCells![0].controlIdx };
-        out.push({ sectionIdx: t.sectionIdx, paraIdx: table.paraIdx, charOffset: 0, length: 0, table: { ...table } });
+        out.push({ sectionIdx: t.sectionIdx, paraIdx: table.paraIdx, charOffset: 0, length: 0, table: { ...table }, ...extra });
         continue;
       }
       const para = t.cell ? t.cellParaStart ?? 0 : t.paraStart;
-      const itemArgs = edits && edits.length === touches.length ? asRecord(edits[i]) : args;
-      const itemTool = edits && edits.length === touches.length ? String(itemArgs['tool'] ?? '') : tool;
+      const mapped = edits && typeof t.item === 'number' ? edits[t.item] : edits && edits.length === touches.length ? edits[i] : null;
+      const itemArgs = mapped ? asRecord(mapped) : args;
+      const itemTool = mapped ? String(itemArgs['tool'] ?? '') : tool;
       const text = insertedText(itemTool, itemArgs);
       const paraLen = engine.length(t.sectionIdx, para, t.cell);
       let charOffset = 0;
@@ -1243,9 +1262,16 @@ function reviewTargets(engine: Engine, tool: string, args: Record<string, unknow
         charOffset = Math.min(t.charOffset, paraLen);
         length = Math.max(0, Math.min(scalarLength(text), paraLen - charOffset));
       }
+      let lead = '';
+      try {
+        lead = engine.text(t.sectionIdx, para, t.cell, 0, REVIEW_LEAD_CHARS + 8).replace(/\s+/g, ' ').trim();
+        if (lead.length > REVIEW_LEAD_CHARS) lead = `${lead.slice(0, REVIEW_LEAD_CHARS - 1)}…`;
+      } catch { /* 글을 못 읽으면 쪽만 보인다 */ }
       out.push({
         sectionIdx: t.sectionIdx, paraIdx: para, charOffset, length,
         ...(t.cell ? { cell: { paraIdx: t.cell.paraIdx, controlIdx: t.cell.controlIdx, cellIdx: t.cell.cellIdx } } : {}),
+        ...extra,
+        ...(lead ? { lead } : {}),
       });
     } catch { /* 위치를 못 구하면 행은 위치 없이 보인다 */ }
   }

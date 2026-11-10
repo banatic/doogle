@@ -23,14 +23,16 @@ import {
   type ProviderModel,
   type ToolCallMessage,
 } from '../hub-client.ts';
-import { impactSentence } from '../review/keys.ts';
 import { mountReviewList, type ReviewListHandle } from '../review/list.ts';
 import { reviewStore, type DecisionReport } from '../review/state.ts';
 import { countdownText, describeConnection, userWords, type DeskHubStatus } from './connection.ts';
 import type { DeskHubEvent } from './desk-bridge.ts';
 import { icon, type IconName } from './icons.ts';
 import { SettingsSheet } from './settings-sheet.ts';
-import { describeToolCall, formatToolFailure, parseBatchFailures } from './tool-presentation.ts';
+import {
+  describeToolCall, doneText, formatToolFailure, needsUserAction, parseBatchFailures, progressText,
+  type ToolCallView,
+} from './tool-presentation.ts';
 import './sidebar.css';
 
 export interface SidebarDeps {
@@ -119,6 +121,23 @@ function modelDisplayName(model: ProviderModel, models: readonly ProviderModel[]
   return model.label || model.id;
 }
 
+/** "Claude (Claude Code 로그인)" → "Claude" */
+function providerShortName(label: string): string {
+  return label.replace(/\s*\(.*\)\s*$/, '').trim() || label;
+}
+
+/**
+ * 입력창 단추에 보일 짧은 이름 — "Claude · 기본값", "Claude · Sonnet 5.5".
+ * 전체 이름("기본값 (Claude Code 권장)")은 메뉴와 툴팁에서 보인다.
+ */
+export function modelButtonLabel(provider: Pick<ProviderInfo, 'label'>, model: Pick<ProviderModel, 'id' | 'label'>): string {
+  const who = providerShortName(provider.label);
+  let name = model.id === 'default' ? '기본값' : (model.label || model.id).replace(/\s*\(.*\)\s*$/, '').trim();
+  // 제공자 이름이 모델 이름 앞에 겹치면 뗀다: "Claude Sonnet 5.5" → "Sonnet 5.5"
+  if (name.toLowerCase().startsWith(`${who.toLowerCase()} `)) name = name.slice(who.length + 1).trim();
+  return `${who} · ${name || model.id}`;
+}
+
 /** "목록 갱신: n분 전" / "기본 목록" */
 function modelsFreshnessNote(provider: ProviderInfo, now = Date.now()): string {
   const source = provider.models[0]?.source;
@@ -176,8 +195,20 @@ function clipTitle(text: string): string {
 interface ToolEntry {
   li: HTMLLIElement;
   label: string;
+  view: ToolCallView;
   /** 묶음 도구의 하위 항목 줄 (apply_edits.edits[i] 순서) */
   items?: HTMLLIElement[];
+  /** 실패 사유 줄 — 에이전트가 이어서 해냈으면 "다시 시도함" 을 덧붙인다 */
+  reason?: HTMLElement;
+}
+
+/** 질문 카드 (ask_user_question) — 답하면 닫힌다 */
+interface AskCard {
+  root: HTMLElement;
+  options: HTMLButtonElement[];
+  other: HTMLButtonElement | null;
+  threadId: string;
+  answered: boolean;
 }
 
 interface TurnView {
@@ -199,6 +230,10 @@ interface TurnView {
   actions: HTMLElement | null;
   /** 이 턴이 만든 검토 변경 id */
   changeIds: Set<string>;
+  /** 끝난 편집을 한 줄씩 남기는 자리 (연달아 끝난 것은 한 덩이로) */
+  doneList: HTMLUListElement | null;
+  /** 이미 보인 "사용자가 손써야 하는 실패" 카드 (코드별 한 번) */
+  actionCards: Set<string>;
   done: boolean;
 }
 
@@ -247,7 +282,12 @@ export class DoogleSidebar {
   private conn!: HTMLElement;
   private scroller!: HTMLElement;
   private review!: HTMLElement;
+  /** 입력창 바로 위에 붙는 검토 머리줄 (건수 · 모두 거절 · 모두 적용) */
+  private reviewBar!: HTMLElement;
   private reviewList: ReviewListHandle | null = null;
+  private readonly askCards: AskCard[] = [];
+  /** "직접 입력" 을 눌러 답을 기다리는 중 — 입력창 안내문이 바뀐다 */
+  private awaitingAnswer = false;
   private live!: HTMLElement;
   private input!: HTMLTextAreaElement;
   private modeBtn!: HTMLButtonElement;
@@ -297,7 +337,11 @@ export class DoogleSidebar {
       }),
     );
     // 열려 있는 동안 선택·커서가 바뀌면 빈 대화의 제안 칩을 다시 고른다
-    const onFocusIn = () => this.refreshContext();
+    const onFocusIn = () => {
+      this.refreshContext();
+      // 적용 뒤 되돌리기는 문서가 그대로일 때만 — 패널로 돌아올 때 다시 확인한다
+      for (const t of this.thread?.turns ?? []) if (t.done) this.renderTurnActions(t);
+    };
     root.addEventListener('pointerenter', onFocusIn);
     root.addEventListener('focusin', onFocusIn);
     this.offs.push(() => {
@@ -571,11 +615,14 @@ export class DoogleSidebar {
     this.review.setAttribute('aria-label', '검토할 변경');
     this.review.hidden = true;
 
+    this.reviewBar = el('div', 'dg-review-bar');
+    this.reviewBar.hidden = true;
+
     this.live = el('div', 'dg-sr-only');
     this.live.setAttribute('aria-live', 'polite');
     this.live.setAttribute('aria-atomic', 'true');
 
-    body.append(this.conn, this.scroller, this.live);
+    body.append(this.conn, this.scroller, this.reviewBar, this.live);
     return body;
   }
 
@@ -688,6 +735,8 @@ export class DoogleSidebar {
     this.scroller?.replaceChildren(view.log);
     if (this.titleText) this.titleText.textContent = view.title;
     if (this.titleBtn) this.titleBtn.setAttribute('aria-label', `대화: ${view.title}`);
+    this.awaitingAnswer = false;
+    this.renderPlaceholder();
     this.renderReview();
   }
 
@@ -743,11 +792,24 @@ export class DoogleSidebar {
   /** 진행 중인 턴이 있으면 그 안(생각 중 줄 앞)에, 아니면 대화 끝에 */
   private placeInTurn(node: HTMLElement, turn: TurnView | null = this.turn): void {
     if (turn && !turn.done) {
-      turn.root.insertBefore(node, turn.thinking ?? null);
+      // 대화 끝을 보고 있었으면 새로 들어온 카드·알림이 보이게 따라 내려간다
+      const follow = turn === this.turn && this.isNearBottom();
+      turn.root.insertBefore(node, this.tail(turn));
       if (turn === this.turn) turn.text = null;
+      if (follow) this.scrollToBottom();
     } else {
       this.appendToLog(node);
     }
+  }
+
+  /** 이 턴 안에 검토 목록이 놓여 있으면 그 목록 — 목록은 늘 턴의 맨 끝(답변 아래)에 둔다 */
+  private reviewIn(turn: TurnView): HTMLElement | null {
+    return this.review && this.review.parentElement === turn.root ? this.review : null;
+  }
+
+  /** 턴에 새 내용을 넣을 자리: 진행 줄 앞, 없으면 검토 목록 앞, 그것도 없으면 맨 끝 */
+  private tail(turn: TurnView): HTMLElement | null {
+    return turn.thinking ?? this.reviewIn(turn);
   }
 
   /**
@@ -939,8 +1001,10 @@ export class DoogleSidebar {
     const provider = this.currentProvider();
     const model = provider?.models.find((m) => m.id === this.model);
     let label: string;
+    let full = '';
     if (model && provider) {
-      label = modelDisplayName(model, provider.models);
+      label = modelButtonLabel(provider, model);
+      full = modelDisplayName(model, provider.models);
       storeSet(STORE_MODEL_LABEL, label);
     } else if (provider) {
       label = provider.available ? '모델 고르기' : 'AI 계정 연결 필요';
@@ -948,7 +1012,7 @@ export class DoogleSidebar {
       label = storeGet(STORE_MODEL_LABEL) || (this.deps.hub.state === 'open' ? '모델 불러오는 중…' : '연결 대기 중');
     }
     this.modelText.textContent = label;
-    const title = provider ? (provider.available ? `${provider.label} · ${label}` : `${provider.label}: 연결되지 않음`) : label;
+    const title = provider ? (provider.available ? `${provider.label} · ${full || label}` : `${provider.label}: 연결되지 않음`) : label;
     this.modelBtn.title = title;
     this.modelBtn.setAttribute('aria-label', `모델: ${title}`);
     this.modelBtn.classList.toggle('dg-warn', !!provider && !provider.available);
@@ -1045,12 +1109,12 @@ export class DoogleSidebar {
   private buildComposer(): HTMLElement {
     const wrap = el('div', 'dg-composer-wrap');
     const box = el('div', 'dg-composer');
-    const label = el('label', 'dg-sr-only', '두글에게 답장');
+    const label = el('label', 'dg-sr-only', '두글에게 요청');
     label.htmlFor = 'dg-msg';
     this.input = el('textarea', 'dg-input');
     this.input.id = 'dg-msg';
     this.input.rows = 2;
-    this.input.placeholder = '두글에게 답장하기';
+    this.renderPlaceholder();
     this.input.addEventListener('keydown', (event) => {
       if (event.isComposing || event.keyCode === 229) return;
       if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
@@ -1101,6 +1165,14 @@ export class DoogleSidebar {
     box.append(label, this.input, row);
     wrap.append(this.modelMenu, box);
     return wrap;
+  }
+
+  /** 새 대화면 무엇을 적을지, 이어지는 대화면 이어서 요청하라고 알린다 */
+  private renderPlaceholder(): void {
+    if (!this.input) return;
+    this.input.placeholder = this.awaitingAnswer
+      ? '답을 적어 주세요'
+      : this.thread && this.thread.turns.length > 0 ? '이어서 요청하기' : '문서에서 바꿀 내용을 적어 주세요';
   }
 
   private autosize(): void {
@@ -1177,6 +1249,8 @@ export class DoogleSidebar {
       return;
     }
     storeSet(STORE_ONBOARDED, '1');
+    // 어떤 답이든 보내면 열려 있던 질문 카드는 답한 것이 된다
+    this.closeAskCards(this.thread.id, text);
     if (textOverride === undefined) {
       this.input.value = '';
       this.autosize();
@@ -1207,11 +1281,12 @@ export class DoogleSidebar {
     root.append(thinking);
     const turn: TurnView = {
       threadId: this.thread.id, root, userText, providerId, chip: null, chipText: null, toolList: null, tools: new Map(),
-      text: null, prose: [], thinking, actions: null, changeIds: new Set(), done: false,
+      text: null, prose: [], thinking, actions: null, changeIds: new Set(), doneList: null, actionCards: new Set(), done: false,
     };
     this.turn = turn;
     this.thread.turns.push(turn);
     this.appendToLog(root);
+    this.renderPlaceholder();
     this.busy = true;
     reviewStore.setBusy(true);
     this.announce('응답을 작성하는 중');
@@ -1221,23 +1296,37 @@ export class DoogleSidebar {
 
   private endTurn(): void {
     const turn = this.turn;
+    const follow = this.isNearBottom();
     if (turn) {
       this.closeTextBlock();
       turn.thinking?.remove();
       turn.thinking = null;
       turn.done = true;
+      let unresolved = 0;
       for (const entry of turn.tools.values()) {
         if (entry.li.dataset.state === 'running') entry.li.dataset.state = 'done';
+        // 끝까지 다시 해내지 못한 실패만 오류로 남긴다
+        if (entry.li.dataset.state === 'failed') {
+          entry.li.dataset.state = 'error';
+          unresolved++;
+        }
       }
       this.updateChip(turn);
+      if (unresolved > 0 && turn.chip && turn.toolList) {
+        turn.chip.setAttribute('aria-expanded', 'true');
+        turn.toolList.hidden = false;
+      }
       turn.actions = this.buildActions(turn);
-      turn.root.append(turn.actions);
+      turn.root.insertBefore(turn.actions, this.reviewIn(turn));
     }
     this.turn = null;
     this.busy = false;
     reviewStore.setBusy(false);
     this.renderComposer();
     this.renderReview();
+    this.renderAskCards();
+    // 턴 끝에 붙는 것(동작 줄·검토 목록·펼친 실패 사유)까지 보이게 한다
+    if (follow) requestAnimationFrame(() => this.scrollToBottom());
     const count = reviewStore.count;
     this.announce(count > 0 ? `응답 완료. 검토할 변경 ${count}건` : '응답 완료');
     if (turn && count > 0) {
@@ -1289,7 +1378,7 @@ export class DoogleSidebar {
         const turn = this.ensureTurn();
         if (!turn.text) {
           const node = el('div', 'dg-prose dg-keep-all dg-streaming');
-          turn.root.insertBefore(node, turn.thinking ?? null);
+          turn.root.insertBefore(node, this.reviewIn(turn));
           turn.text = { node, raw: '' };
         }
         turn.text.raw += event.text;
@@ -1308,45 +1397,30 @@ export class DoogleSidebar {
         const turn = this.ensureTurn();
         this.closeTextBlock();
         const view = describeToolCall(event.name, event.args);
-        this.addTool(turn, event.callId, view.label, view.summary, view.items);
+        this.addTool(turn, event.callId, view);
         if (!turn.thinking) {
           turn.thinking = el('div', 'dg-thinking');
-          turn.root.append(turn.thinking);
+          turn.root.insertBefore(turn.thinking, this.reviewIn(turn));
         }
-        turn.thinking.textContent = `${view.label}…`;
-        this.announce(`도구 사용: ${view.label}`);
+        // 진행 줄에 지금 하는 일을 적는다 — "문서 구조 읽는 중…", "6곳 글자 서식 바꾸는 중…"
+        turn.thinking.textContent = `${progressText(view)}…`;
+        this.announce(progressText(view));
         break;
       }
       case 'tool_result': {
         const turn = this.turn;
         const entry = turn?.tools.get(event.callId);
         if (turn && entry) {
-          entry.li.dataset.state = event.ok ? 'done' : 'error';
+          // 실패는 일단 "넘어간 실패"로 둔다 — 에이전트가 스스로 다시 해내는 일이 많다.
+          // 턴이 끝날 때까지 같은 종류의 일을 해내지 못한 것만 오류로 올린다(endTurn).
+          entry.li.dataset.state = event.ok ? 'done' : 'failed';
           const status = entry.li.querySelector('.dg-tool-status');
           if (status) status.setAttribute('aria-label', event.ok ? '완료' : '실패');
-          if (!event.ok) {
-            // 실패 사유는 툴팁이 아니라 항목 아래 한 줄로, 칩은 자동으로 펼친다 (UI_AUDIT §3.12)
-            const failure = formatToolFailure(event.summary);
-            const byItem = entry.items ? parseBatchFailures(event.summary) : new Map<number, { code: string; text: string }>();
-            const reason = el('span', 'dg-tool-reason', byItem.size > 0
-              ? `${entry.items!.length}곳 중 ${byItem.size}곳이 실패해 하나도 적용하지 않았습니다.`
-              : failure.text);
-            if (failure.code) reason.title = failure.code;
-            // 사유 줄은 하위 항목 목록보다 위에 둔다
-            const list = entry.li.querySelector('.dg-tool-items');
-            if (list) list.before(reason); else entry.li.append(reason);
-            for (const [index, item] of byItem) {
-              const row = entry.items?.[index];
-              if (!row) continue;
-              row.dataset.state = 'error';
-              const why = el('span', 'dg-tool-reason', item.text);
-              why.title = item.code;
-              row.append(why);
-            }
-            if (turn.chip && turn.toolList) {
-              turn.chip.setAttribute('aria-expanded', 'true');
-              turn.toolList.hidden = false;
-            }
+          if (event.ok) {
+            this.markRecovered(turn, entry);
+            if (entry.view.category === 'edit') this.addDoneLine(turn, doneText(entry.view));
+          } else {
+            this.showToolFailure(turn, entry, event.summary);
           }
           this.updateChip(turn);
         }
@@ -1436,10 +1510,103 @@ export class DoogleSidebar {
 
   // ─── 도구 칩 ───────────────────────────────────────────
 
-  private addTool(
-    turn: TurnView, callId: string, label: string, summary: string,
-    items?: Array<{ label: string; summary: string }>,
-  ): void {
+  /**
+   * 도구 실패 — 영어 원문(에이전트에게 주는 안내)은 접어 두고 한국어 한 줄만 보인다.
+   * 사용자가 손써야 풀리는 실패(문서 없음·편집기 멈춤·다른 대화의 검토 대기)만 강조 카드로 올린다.
+   */
+  private showToolFailure(turn: TurnView, entry: ToolEntry, summary: string | undefined): void {
+    const failure = formatToolFailure(summary);
+    const byItem = entry.items ? parseBatchFailures(summary) : new Map<number, { code: string; text: string; raw: string }>();
+    const reason = el('span', 'dg-tool-reason', byItem.size > 0
+      ? `${entry.items!.length}곳 중 ${byItem.size}곳을 끝내지 못해 하나도 적용하지 않았습니다.`
+      : failure.text);
+    entry.reason = reason;
+    // 사유 줄은 하위 항목 목록보다 위에 둔다
+    const list = entry.li.querySelector('.dg-tool-items');
+    if (list) list.before(reason); else entry.li.append(reason);
+    for (const [index, item] of byItem) {
+      const row = entry.items?.[index];
+      if (!row) continue;
+      row.dataset.state = 'failed';
+      const why = el('span', 'dg-tool-reason', item.text);
+      why.title = item.raw;
+      row.append(why);
+    }
+    if (failure.raw) {
+      const details = el('details', 'dg-tool-raw');
+      details.append(el('summary', '', '자세히'), el('code', '', failure.raw.length > 700 ? `${failure.raw.slice(0, 700)}…` : failure.raw));
+      entry.li.append(details);
+    }
+    const codes = new Set<string>([failure.code ?? '', ...[...byItem.values()].map((item) => item.code)]);
+    for (const code of codes) if (needsUserAction(code)) this.addActionCard(turn, code);
+  }
+
+  /** 같은 종류의 일이 뒤에서 성공했다 — 앞서 넘어간 실패에 "다시 시도함" 을 붙인다 */
+  private markRecovered(turn: TurnView, done: ToolEntry): void {
+    for (const entry of turn.tools.values()) {
+      if (entry === done || entry.li.dataset.state !== 'failed' || entry.view.category !== done.view.category) continue;
+      entry.li.dataset.state = 'retried';
+      if (entry.reason && !entry.reason.dataset.retried) {
+        entry.reason.dataset.retried = '1';
+        entry.reason.textContent = `${(entry.reason.textContent ?? '').replace(/[.。]\s*$/, '')} · 다시 시도함`;
+      }
+      entry.li.querySelector('.dg-tool-status')?.setAttribute('aria-label', '다시 시도함');
+    }
+  }
+
+  /** 사용자가 손써야 하는 실패 — 무엇을 하면 되는지 단추로 준다 (코드별 한 번) */
+  private addActionCard(turn: TurnView, code: string): void {
+    if (turn.actionCards.has(code)) return;
+    turn.actionCards.add(code);
+    const spec: { title: string; body: string; actions: Array<{ label: string; primary?: boolean; run: () => void }> } = (() => {
+      switch (code) {
+        case 'NO_DOCUMENT':
+          return {
+            title: '열린 문서가 없습니다',
+            body: '문서를 열면 이어서 요청할 수 있습니다.',
+            actions: this.deps.openDocument ? [{ label: '문서 열기…', primary: true, run: () => this.deps.openDocument?.() }] : [],
+          };
+        case 'DOCUMENT_WRITER_BUSY':
+          return {
+            title: '다른 대화의 변경이 검토를 기다리고 있습니다',
+            body: '그 변경을 적용하거나 거절하면 이 대화에서 문서를 고칠 수 있습니다.',
+            actions: [{ label: '검토 목록 보기', primary: true, run: () => this.review?.scrollIntoView({ block: 'center', behavior: 'smooth' }) }],
+          };
+        case 'STAGING_BASELINE_LOST':
+          return {
+            title: '변경을 되돌릴 기준을 잃었습니다',
+            body: '되돌리려면 실행 취소(Ctrl+Z)를 쓰세요.',
+            actions: [],
+          };
+        default:
+          return {
+            title: '편집기가 편집을 멈췄습니다',
+            body: '실행 취소(Ctrl+Z)하거나 문서를 다시 연 뒤 다시 요청하세요.',
+            actions: [],
+          };
+      }
+    })();
+    this.placeInTurn(this.buildCard({ tone: 'warn', iconName: 'alert', ...spec }), turn);
+  }
+
+  /** 끝난 편집을 대화에 한 줄로 남긴다 — 도구 묶음을 펼치지 않아도 무엇을 했는지 보인다 */
+  private addDoneLine(turn: TurnView, text: string): void {
+    const follow = this.isNearBottom();
+    const tail = this.tail(turn);
+    const prev = tail ? tail.previousElementSibling : turn.root.lastElementChild;
+    if (follow) requestAnimationFrame(() => this.scrollToBottom());
+    if (!turn.doneList || prev !== turn.doneList) {
+      turn.doneList = el('ul', 'dg-done');
+      turn.root.insertBefore(turn.doneList, tail);
+      if (turn === this.turn) this.closeTextBlock();
+    }
+    const li = el('li', 'dg-done-item');
+    li.append(icon('check', 13, 2.2), el('span', '', text));
+    turn.doneList.append(li);
+  }
+
+  private addTool(turn: TurnView, callId: string, view: ToolCallView): void {
+    const { label, summary, items } = view;
     if (!turn.chip) {
       const chip = button('dg-tools-chip', '', () => {
         const open = chip.getAttribute('aria-expanded') !== 'true';
@@ -1482,7 +1649,7 @@ export class DoogleSidebar {
       li.append(ol);
     }
     turn.toolList!.append(li);
-    turn.tools.set(callId, { li, label, ...(itemRows ? { items: itemRows } : {}) });
+    turn.tools.set(callId, { li, label, view, ...(itemRows ? { items: itemRows } : {}) });
     this.updateChip(turn);
   }
 
@@ -1492,10 +1659,11 @@ export class DoogleSidebar {
     const labels = [...new Set(entries.map((e) => e.label))];
     const shown = labels.slice(0, 3).join(', ') + (labels.length > 3 ? ` 외 ${labels.length - 3}개` : '');
     const running = entries.some((e) => e.li.dataset.state === 'running');
+    // 다시 해낸 실패(retried)는 세지 않는다 — 끝내 못 한 것만 알린다
     const failed = entries.filter((e) => e.li.dataset.state === 'error').length;
-    turn.chipText.textContent = `도구 ${entries.length}개 사용 · ${shown}`;
+    turn.chipText.textContent = `도구 ${entries.length}개 사용 · ${shown}${failed ? ` · ${failed}개 끝내지 못함` : ''}`;
     turn.chip!.dataset.state = running ? 'running' : failed ? 'error' : 'done';
-    turn.chip!.title = failed ? `${failed}개 실패` : '';
+    turn.chip!.title = failed ? `${failed}개를 끝내지 못했습니다` : '';
   }
 
   // ─── 메시지 동작 ───────────────────────────────────────
@@ -1511,9 +1679,11 @@ export class DoogleSidebar {
     }, 15);
     const retry = iconButton('dg-act dg-act-retry', 'retry', '다시 시도', () => this.retry(turn), 15);
     if (!turn.userText) retry.hidden = true;
-    const revert = button('dg-act dg-act-text', '', () => this.revertTurn(turn));
-    revert.append(icon('undo', 14), el('span', '', '요청 전으로 되돌리기'));
+    // 검토 대기 중에는 목록 머리줄의 "모두 거절" 하나만 둔다. 이 단추는 적용한 뒤에만 보인다.
+    const revert = button('dg-act dg-act-text', '', () => this.revertApplied(turn));
+    revert.append(icon('undo', 14), el('span', 'dg-act-revert-text', '이 요청의 변경 되돌리기'));
     revert.classList.add('dg-act-revert');
+    revert.hidden = true;
     row.append(copy, retry, revert);
     // 실패한 도구가 있으면 그것만 다시 해 달라고 요청한다(도구 재생은 프로토콜에 없어 같은 대화의 새 요청으로)
     const failed = [...new Set([...turn.tools.values()].filter((e) => e.li.dataset.state === 'error').map((e) => e.label))];
@@ -1522,24 +1692,62 @@ export class DoogleSidebar {
         if (this.busy) return;
         this.submit(`방금 실패한 작업(${failed.join(', ')})만 원인을 확인해 다시 시도해 줘.`);
       });
-      again.append(icon('retry', 14), el('span', '', '실패한 도구만 다시 시도'));
+      again.append(icon('retry', 14), el('span', '', '끝내지 못한 작업만 다시 시도'));
       row.append(again);
     }
     this.renderTurnActions(turn, row);
     return row;
   }
 
-  /** 되돌리기는 이 턴의 변경이 아직 검토 대기 중일 때만 */
+  /**
+   * "이 요청의 변경 되돌리기" 는 이 턴의 변경을 적용한 뒤, 문서가 그대로인 동안만 보인다.
+   * 검토 대기 중의 되돌리기는 목록의 "모두 거절" 이 맡는다 (같은 일을 하는 단추를 둘 두지 않는다).
+   */
   private renderTurnActions(turn: TurnView, row = turn.actions): void {
     const revert = row?.querySelector<HTMLButtonElement>('.dg-act-revert');
     if (!revert) return;
-    const pendingIds = this.pendingIdsOf(turn);
-    revert.hidden = pendingIds.length === 0;
+    const info = this.appliedOf(turn);
+    revert.hidden = !info;
     revert.disabled = this.busy;
-    if (pendingIds.length > 0) {
-      revert.title = impactSentence(reviewStore.rejectImpact(pendingIds[0]));
+    if (info) {
+      const text = revert.querySelector('.dg-act-revert-text');
+      const label = info.whole ? '이 요청의 변경 되돌리기' : `적용한 변경 ${info.count}건 되돌리기`;
+      if (text) text.textContent = label;
+      revert.title = `적용한 변경 ${info.count}건을 요청 전 상태로 되돌립니다. 실행 취소(Ctrl+Z)와 같은 동작입니다.`;
     }
     for (const b of row?.querySelectorAll<HTMLButtonElement>('.dg-act-retry, .dg-act-failed') ?? []) b.disabled = this.busy;
+  }
+
+  /**
+   * 이 턴이 "방금 적용한 묶음"의 마지막 턴이면 그 묶음. whole = 묶음이 모두 이 턴의 변경이다.
+   * 적용 뒤 문서가 바뀌었으면(직접 편집·실행 취소·새 요청) null.
+   */
+  private appliedOf(turn: TurnView): { count: number; whole: boolean } | null {
+    let info: { threadId: string; ids: string[]; count: number } | null = null;
+    try { info = this.deps.pending?.revertInfo?.() ?? null; } catch { info = null; }
+    if (!info || info.count === 0) return null;
+    const owners = info.ids.map((id) => this.changeTurn.get(id));
+    const last = [...this.thread.turns].reverse().find((t) => owners.includes(t));
+    if (last !== turn) return null;
+    return { count: info.count, whole: owners.every((t) => t === turn) };
+  }
+
+  /** 적용한 변경을 요청 전 상태로 되돌린다 — 실행기가 스냅샷으로 복원한다(되돌리기 1단계) */
+  private revertApplied(turn: TurnView): void {
+    if (this.busy) return;
+    const pending = this.deps.pending;
+    try {
+      const reverted = pending?.revertAccepted?.().reverted ?? 0;
+      if (reverted > 0) {
+        this.addNotice(`적용한 변경 ${reverted}건을 되돌렸습니다.`, 'info');
+        this.deps.hub.reviewDecision(turn.threadId, 'reject_all', `사용자가 방금 적용했던 변경 ${reverted}건을 모두 되돌렸습니다. 문서는 그 요청 전 상태입니다.`);
+      } else {
+        this.addNotice('그 뒤로 문서가 바뀌어 한 번에 되돌릴 수 없습니다. 실행 취소(Ctrl+Z)를 쓰세요.', 'info');
+      }
+    } catch (error) {
+      this.addNotice(`되돌리지 못했습니다: ${error instanceof Error ? error.message : String(error)}`, 'error');
+    }
+    for (const t of this.thread.turns) if (t.done) this.renderTurnActions(t);
   }
 
   private pendingIdsOf(turn: TurnView): string[] {
@@ -1576,11 +1784,8 @@ export class DoogleSidebar {
         turn.changeIds.add(cs.id);
         this.changeTurn.set(cs.id, turn);
       }
-      // 검토 목록은 변경을 만든 턴의 지금 자리(산문 사이)에 놓는다
-      if (turn && !turn.root.contains(this.review)) {
-        this.closeTextBlock();
-        turn.root.insertBefore(this.review, turn.thinking ?? null);
-      }
+      // 검토 목록은 변경을 만든 턴의 맨 끝에 놓는다 — 도구 사용 → 답변 → 검토 목록 순서
+      if (turn && this.review.parentElement !== turn.root) turn.root.append(this.review);
     }
     for (const t of this.thread.turns) if (t.done) this.renderTurnActions(t);
   }
@@ -1596,15 +1801,16 @@ export class DoogleSidebar {
     if (rows.length > 0 && !this.thread.log.contains(review)) {
       // 다른 대화의 변경이면 이 대화 끝에 붙인다
       const owner = rows.map((r) => this.changeTurn.get(r.id)).find((t) => t && this.thread.turns.includes(t));
-      if (owner) owner.root.insertBefore(review, owner.actions ?? owner.thinking ?? null);
+      if (owner) owner.root.append(review);
       else this.thread.log.append(review);
     }
     if (!this.reviewList) {
       this.reviewList = mountReviewList(review, {
+        headHost: this.reviewBar,
         onError: (message) => this.addNotice(message, 'error'),
         title: (list) => list.some((r) => r.threadId !== this.thread.id && !this.changeTurn.has(r.id))
-          ? '검토 대기 중인 변경 (다른 대화)'
-          : '검토 대기 중인 변경',
+          ? '검토 대기 (다른 대화)'
+          : '검토 대기',
         onRender: () => {
           for (const t of this.thread?.turns ?? []) if (t.done) this.renderTurnActions(t);
         },
@@ -1644,6 +1850,99 @@ export class DoogleSidebar {
       if (report.userEditsReverted) this.addNotice('그 사이 직접 고친 내용도 함께 되돌아갔습니다.', 'info');
     } else {
       this.announce('변경을 적용했습니다');
+    }
+  }
+
+  // ─── 질문 카드 (ask_user_question) ─────────────────────
+
+  /**
+   * 에이전트의 되묻기를 선택 단추로 보인다. 기다리지 않고 곧바로 돌아온다 —
+   * 사용자가 고른 답(또는 직접 적은 답)은 다음 메시지로 간다.
+   */
+  showQuestion(call: ToolCallMessage): { ok: true; result: unknown } | { ok: false; error: { code: string; message: string } } {
+    const args = (call.args && typeof call.args === 'object' ? call.args : {}) as Record<string, unknown>;
+    const question = typeof args['question'] === 'string' ? args['question'].trim() : '';
+    const options = (Array.isArray(args['options']) ? args['options'] : [])
+      .map((raw) => (raw && typeof raw === 'object' ? raw as Record<string, unknown> : {}))
+      .map((o) => ({ label: typeof o['label'] === 'string' ? o['label'].trim() : '', description: typeof o['description'] === 'string' ? o['description'].trim() : '' }))
+      .filter((o) => o.label);
+    const turn = this.turn;
+    if (call.origin !== 'agent' || !turn || turn.done || (call.threadId && call.threadId !== turn.threadId)) {
+      return { ok: false, error: { code: 'NOT_AVAILABLE', message: 'ask_user_question works only during a turn of the doogle sidebar chat — ask in prose instead.' } };
+    }
+    if (!question || options.length < 2) {
+      return { ok: false, error: { code: 'INVALID_ARGS', message: 'ask_user_question needs a question and at least 2 options with labels' } };
+    }
+    if (this.askCards.some((card) => !card.answered && card.threadId === turn.threadId)) {
+      return { ok: false, error: { code: 'INVALID_ARGS', message: 'A question is already on screen. Ask one question per turn — end your turn now and wait for the answer.' } };
+    }
+    const card = el('div', 'dg-card dg-ask');
+    card.setAttribute('role', 'group');
+    card.setAttribute('aria-label', `질문: ${question}`);
+    card.append(el('div', 'dg-card-title dg-keep-all', question));
+    const list = el('div', 'dg-ask-opts');
+    const entry: AskCard = { root: card, options: [], other: null, threadId: turn.threadId, answered: false };
+    for (const option of options) {
+      const b = button('dg-ask-opt', '', () => this.answerQuestion(entry, b, option.label));
+      b.append(el('span', 'dg-ask-label dg-keep-all', option.label));
+      if (option.description) b.append(el('span', 'dg-ask-desc dg-keep-all', option.description));
+      entry.options.push(b);
+      list.append(b);
+    }
+    if (args['allowOther'] !== false) {
+      entry.other = button('dg-ask-opt dg-ask-other', '직접 입력…', () => {
+        this.awaitingAnswer = true;
+        this.renderPlaceholder();
+        this.input.focus();
+      });
+      list.append(entry.other);
+    }
+    card.append(list, el('p', 'dg-ask-wait', '응답이 끝나면 고를 수 있습니다.'));
+    this.askCards.push(entry);
+    this.placeInTurn(card, turn);
+    this.renderAskCards();
+    this.announce(`질문: ${question}`);
+    return {
+      ok: true,
+      result: {
+        shown: true,
+        note: 'The question card is on screen. End your turn now — no more tool calls, at most one short sentence. The user\'s choice arrives as their next message.',
+      },
+    };
+  }
+
+  private answerQuestion(card: AskCard, picked: HTMLButtonElement, label: string): void {
+    if (card.answered || this.busy) return;
+    if (this.thread.id !== card.threadId) return;
+    picked.setAttribute('aria-pressed', 'true');
+    this.submit(label);
+    // 보내지 못했으면(연결 끊김 등) 다시 고를 수 있게 둔다
+    if (!card.answered) picked.removeAttribute('aria-pressed');
+  }
+
+  /** 이 대화의 열린 질문 카드를 닫는다 — 고른 단추만 남기고 나머지는 흐리게 */
+  private closeAskCards(threadId: string, answer: string): void {
+    for (const card of this.askCards) {
+      if (card.answered || card.threadId !== threadId) continue;
+      card.answered = true;
+      card.root.dataset.answered = '1';
+      const picked = card.options.find((b) => b.getAttribute('aria-pressed') === 'true');
+      if (!picked && card.other) {
+        card.other.textContent = `직접 입력: ${clipTitle(answer)}`;
+        card.other.setAttribute('aria-pressed', 'true');
+      }
+    }
+    this.awaitingAnswer = false;
+    this.renderPlaceholder();
+    this.renderAskCards();
+  }
+
+  /** 응답 중이거나 이미 답한 카드의 단추는 누를 수 없다 */
+  private renderAskCards(): void {
+    for (const card of this.askCards) {
+      const locked = card.answered || this.busy;
+      for (const b of [...card.options, ...(card.other ? [card.other] : [])]) b.disabled = locked;
+      card.root.dataset.waiting = !card.answered && this.busy ? '1' : '';
     }
   }
 

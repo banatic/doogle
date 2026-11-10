@@ -156,6 +156,10 @@ export async function createHub(opts = {}) {
     }
     const def = tools.getTool(name);
     if (!def && !tools.stub) return { ok: false, error: { code: 'UNKNOWN_TOOL', message: `알 수 없는 tool: ${name}` } };
+    // 대화 제어 tool 은 두글 사이드바의 대화에서만 뜻이 있다 — 외부(MCP) 에이전트는 자기 대화에서 묻는다.
+    if (def?.kind === 'control' && origin !== 'agent') {
+      return { ok: false, error: { code: 'NOT_AVAILABLE', message: `${name} works only inside the doogle sidebar chat — ask the user in your own conversation instead.` } };
+    }
     if (def) {
       // insert_image: doogle-mcp가 이미 준비한 인자(naturalWidthPx/HeightPx 포함)는 그 두 필드를 빼고 검증한다.
       const prepared = name === 'insert_image' && args && typeof args === 'object'

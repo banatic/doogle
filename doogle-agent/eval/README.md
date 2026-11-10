@@ -9,7 +9,7 @@
 | `scenarios.mjs` | 시나리오(문서·요청·결과 검사) |
 | `show.mjs` | 한 시나리오의 호출 기록 요약 보기 |
 | `probe.mjs` + `probes/` | 모델 없이 실제 엔진으로 도구를 직접 불러 검증 |
-| `ui-shots.mjs` | 모델 없이(대본 provider) 주요 화면 상태 캡처 → `output/ui-audit/` |
+| `ui-shots.mjs` | 모델 없이(대본 provider) 주요 화면 상태 캡처 → `output/ui-audit/` (`--out` 으로 바꾼다). 화면에서 잰 값(안내문·검토 행 문구·좁은 창 배율·풍선 위치 등)은 같은 폴더의 `facts.json` |
 | `debug.mjs` | 문서 하나를 열고 한 턴을 보내 상태를 찍어 본다 |
 | `lib/session.mjs` | hub·브라우저·문서 세션, 기록기 |
 | `lib/audit.mjs` | 호출 기록 집계(오류·낭비 신호)와 `audit.md`·`summary.md` |

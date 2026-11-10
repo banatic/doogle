@@ -27,6 +27,9 @@ import { guardedSave, installCloseGuard } from './close-guard';
 import { installUpdater } from './updater';
 import { getDocState, noteDocumentSwap, onDocState, refreshDocState, type DocState } from './doc-state';
 import { openPopupMenu, type PopupEntry } from './popup-menu';
+import { mountFontNotice } from './font-notice';
+import { installNarrowFit } from './narrow-fit';
+import { installEquationFallbackFont } from './eq-font';
 import { invoke, isDesk } from '../ui/desk-bridge';
 import { commandShortcut, context, isEnabled, openCommandPalette, run, toggleAgentPanel } from './studio';
 
@@ -235,6 +238,12 @@ export function mountShell(): void {
   const statusBar = document.getElementById('status-bar');
   const status = statusBar ? new StatusAddons(statusBar, () => { if (!isAgentOpen()) toggleAgentPanel(); }) : null;
 
+  // 한컴 수식 글꼴이 없는 컴퓨터에서 수식 글자가 깨지지 않게 대체 글꼴을 건다.
+  installEquationFallbackFont();
+  // 글꼴 알림 띠 — 문서 영역 바로 위. main.ts 가 문서를 열 때 `doogle:fonts-missing` 으로 알린다.
+  const editorArea = document.getElementById('editor-area');
+  if (editorArea) mountFontNotice(editorArea);
+
   state = { ribbon, status, backstage, quick, host: null };
   // 창 닫기 → 저장 안 한 문서 확인(데스크탑 전용) + 저장 앞 검토 확인
   installCloseGuard();
@@ -261,5 +270,6 @@ export function attachShellHost(host: PluginHost): void {
   host.onDocumentSwap(() => { noteDocumentSwap(); queueRefreshAll(); });
   setBackstageLoader((bytes, fileName) => host.loadDocument(bytes, fileName));
   state.status?.attach(host);
+  installNarrowFit(host, { context, run });
   queueRefreshAll();
 }

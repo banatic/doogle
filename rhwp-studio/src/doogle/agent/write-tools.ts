@@ -35,6 +35,8 @@ export interface Touch {
   tableCells?: CellAddr[];
   /** 구역 전체 (쪽 설정·머리말 등) — 저널에 정밀 기록하지 않는다 */
   wholeSection?: boolean;
+  /** apply_edits 묶음에서 이 자리를 만든 항목 번호 (검토 목록이 항목별로 묶어 보인다) */
+  item?: number;
 }
 
 export interface WriteScope {

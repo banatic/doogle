@@ -23,6 +23,24 @@
   font-weight: 600;
 }
 
+/* 입력창 바로 위에 붙는 머리줄 — 목록이 길어도 "모두 적용"이 보인다 */
+.dg-rl-bar {
+  gap: 6px;
+}
+
+/* 목록 위의 작은 제목 (단추는 고정 띠에 있다) */
+.dg-rl-caption {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.dg-rl-wait {
+  margin: 0;
+  color: var(--dg-muted, CanvasText);
+  font-size: var(--dg-fs-sm, 12px);
+}
+
 /* 건수 — 배지가 아니라 제목 옆의 흐린 숫자 */
 .dg-rl-count {
   color: var(--dg-hint, GrayText);
@@ -113,9 +131,8 @@
 
 .dg-rl-row {
   position: relative;
-  display: grid;
-  grid-template-columns: 1fr auto;
-  align-items: start;
+  display: flex;
+  flex-direction: column;
   border-top: 1px solid var(--dg-divider, transparent);
   transition: opacity var(--dg-dur, 180ms) var(--dg-ease, ease), background-color var(--dg-dur, 180ms) var(--dg-ease, ease);
 }
@@ -144,28 +161,67 @@
   background: var(--dg-accent, Highlight);
 }
 
-/* 파급: 기준 행 뒤는 흐려진다 */
-.dg-rl-dim {
-  opacity: 0.45;
+/* 함께 되돌아갈 행 — 되돌리기 단추에 손이 가면 그 행과 뒤 행을 경고색으로 짚는다 */
+.dg-rl-revert,
+.dg-rl-revert:hover,
+.dg-rl-revert.dg-rl-current {
+  background: var(--dg-bad-soft, color-mix(in srgb, var(--dg-bad, #c0392b) 9%, transparent));
+}
+
+.dg-rl-revert::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--dg-bad, #c0392b);
 }
 
 .dg-rl-go {
   display: flex;
-  align-items: baseline;
-  gap: 12px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
   min-width: 0;
-  padding: 10px 4px 10px 12px;
+  padding: 10px 12px 4px;
   border: 0;
   background: transparent;
   text-align: left;
 }
 
+/* 한 줄 = 위치(흐린 글) + 바뀐 내용 */
+.dg-rl-line {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
 .dg-rl-loc {
-  flex-shrink: 0;
-  min-width: 48px;
   color: var(--dg-hint, GrayText);
   font-size: var(--dg-fs-sm, 12px);
   font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dg-rl-arrow,
+.dg-rl-dot {
+  color: var(--dg-hint, GrayText);
+}
+
+/* 색 견본 — 색 코드 대신 */
+.dg-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 4px;
+  border-radius: 2px;
+  box-shadow: inset 0 0 0 1px var(--dg-ink-12, rgba(0, 0, 0, 0.2));
+  vertical-align: -1px;
+  forced-color-adjust: none;
 }
 
 .dg-rl-what {
@@ -211,46 +267,43 @@
 
 .dg-rl-acts {
   display: flex;
+  justify-content: flex-end;
   gap: 4px;
-  padding: 6px 8px 0 0;
+  padding: 0 8px 6px 12px;
 }
 
-.dg-rl-icon {
-  min-width: 28px;
-  height: 28px;
-  padding: 0 6px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
+/* 행 단추 — 글자 단추. 뒤 행이 함께 되돌아가는 되돌리기만 경고색 */
+.dg-rl-act {
+  height: 26px;
+  padding: 0 8px;
   border: 0;
   border-radius: var(--dg-r-sm, 4px);
   background: transparent;
+  font-size: var(--dg-fs-sm, 12px) !important;
+  font-weight: 500;
   color: var(--dg-muted, CanvasText) !important;
+  white-space: nowrap;
 }
 
-.dg-rl-icon:hover:not(:disabled) {
+.dg-rl-act:hover:not(:disabled) {
   background: var(--dg-ink-06, ButtonFace);
   color: var(--dg-text, CanvasText) !important;
 }
 
-.dg-rl-ok:hover:not(:disabled) {
+.dg-rl-act.dg-rl-ok {
   color: var(--dg-accent, CanvasText) !important;
 }
 
-/* 거절 단추의 파급 수 — 아이콘 옆의 작은 숫자 */
-.dg-rl-plus {
-  font-size: var(--dg-fs-caption, 11px);
-  line-height: 1;
-  font-weight: 500;
-  color: inherit;
+.dg-rl-act.dg-rl-chained,
+.dg-rl-act.dg-rl-no:hover:not(:disabled) {
+  color: var(--dg-bad, CanvasText) !important;
 }
 
 /* 파급 안내 — 기준 행에만 보인다. 상자 없이 본문 줄에 맞춘 흐린 글자 */
 .dg-rl-chain {
   display: none;
-  grid-column: 1 / -1;
-  margin: -4px 12px 10px 72px;
+  margin: -2px 12px 8px;
+  text-align: right;
   color: var(--dg-muted, CanvasText);
   font-size: var(--dg-fs-sm, 12px);
   line-height: var(--dg-lh-tight, 1.4);
@@ -277,7 +330,6 @@
 
 /* 인라인 확인 — 상자 대신 위 구분선 하나 */
 .dg-rl-confirm {
-  grid-column: 1 / -1;
   margin: 0 12px 12px;
   padding-top: 10px;
   border-top: 1px solid var(--dg-divider, CanvasText);
@@ -315,7 +367,8 @@
     outline: 2px solid Highlight;
     outline-offset: -2px;
   }
-  .dg-rl-dim {
-    opacity: 0.6;
+  .dg-rl-revert {
+    outline: 2px solid Mark;
+    outline-offset: -2px;
   }
 }

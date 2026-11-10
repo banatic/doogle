@@ -8,8 +8,10 @@
 //
 // 여기에는 스튜디오 실행기가 실제로 처리하는 도구만 둔다. 실행기가 없는 도구를 실으면 모델이 부르고
 // 실패한다(평가 기록: docs/doogle/AGENT_EVAL.md). 그래서 다음은 뺐다:
-//  - 대화 제어(ask_user_question · request_permission · present_implementation_plan · update_todos):
-//    hub·사이드바에 응답 화면이 없다. 모델은 글로 묻고 턴을 끝낸다(system-prompt.mjs).
+//  - 대화 제어(request_permission · present_implementation_plan · update_todos):
+//    hub·사이드바에 응답 화면이 없다.
+//    ask_user_question 은 사이드바에 질문 카드가 생겨 되살렸다 — 카드를 띄우고 곧바로 돌아오며,
+//    사용자의 선택은 다음 메시지로 온다(기다리지 않는다).
 //  - insert_chart: 엔진에 차트 삽입 경로가 없다. edit_table 의 set_caption: 표 캡션 생성 경로가 없다.
 import {
   z,
@@ -114,9 +116,34 @@ function validateGetStructure(args) {
   }
 }
 
+// ─── 대화 제어 스키마 ───
+
+export const USER_QUESTION_LIMITS = Object.freeze({
+  question: 300,
+  options: 4,
+  label: 40,
+  description: 120,
+});
+
+/** ask_user_question — 질문 하나 + 선택지 2~4개. 사이드바가 선택 단추로 그린다. */
+export const USER_QUESTION_SHAPE = Object.freeze({
+  question: z.string().trim().min(1).max(USER_QUESTION_LIMITS.question)
+    .describe('One short question in the user\'s language, e.g. "어느 범위를 바꿀까요?"'),
+  options: z.array(z.object({
+    label: z.string().trim().min(1).max(USER_QUESTION_LIMITS.label)
+      .describe('Button text — a complete answer on its own, e.g. "장 제목 7개만"'),
+    description: z.string().trim().min(1).max(USER_QUESTION_LIMITS.description).optional()
+      .describe('One line shown under the label when the label alone is not enough'),
+  }).strict()).min(2).max(USER_QUESTION_LIMITS.options)
+    .describe('2-4 mutually exclusive choices, the one you recommend first'),
+  allowOther: z.boolean().optional()
+    .describe('Default true: the card also offers "직접 입력" (free text). false only when the listed options are the only possible answers'),
+});
+
 /**
  * v1 tool 정의.
- * kind: 'read' = 문서를 바꾸지 않음, 'write' = 문서를 바꿈(expectedRevision 필요). ('control' = 대화 제어 — v1 에는 없다.)
+ * kind: 'read' = 문서를 바꾸지 않음, 'write' = 문서를 바꿈(expectedRevision 필요),
+ *       'control' = 대화 제어(문서와 무관, 두글 사이드바가 처리 — 외부 MCP 에는 싣지 않는다).
  * label: 사이드바 표시용 한국어 이름 (rhwp-x tool-presentation.ts).
  * @type {Array<{name: string, kind: 'read'|'write'|'control', label: string, description: string, shape: Record<string, any>, validate?: (args: any) => void}>}
  */
@@ -962,6 +989,18 @@ const DEFINITIONS = [
     },
   },
 
+  // ─── 대화 제어 ───
+  {
+    name: 'ask_user_question',
+    kind: 'control',
+    label: '질문하기',
+    description: 'Show the user ONE multiple-choice question as a card with 2-4 option buttons (plus free-text "직접 입력"). Use it instead of asking in prose, and only when the request itself does not say what or how far to change (e.g. "make it look nice"). Do NOT use it to confirm a specific request or to ask about edge cases a sensible default settles — make the edit and report what you left out; edits are staged for user review. It returns at once with shown:true — it does NOT return the answer: end your turn right after it, without editing; the user\'s choice arrives as their next message. At most one question per turn. If the choices do not fit 2-4 short options, ask in prose instead.',
+    shape: USER_QUESTION_SHAPE,
+    validate(args) {
+      const labels = args.options.map((o) => o.label);
+      if (new Set(labels).size !== labels.length) throw invalidArgs('options must have distinct labels');
+    },
+  },
 ];
 
 export const TOOLS = Object.freeze(DEFINITIONS.map((definition) => Object.freeze({

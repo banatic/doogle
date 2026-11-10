@@ -57,6 +57,14 @@ export class PendingStaging implements PendingApi {
   private pendingBefore: number | null = null;
   /** beginWrite 시점 revision — 마지막 스테이징 쓰기 뒤와 다르면 그 사이에 사용자 편집이 끼었다 */
   private writeStartRevision: number | null = null;
+  /** 이 대기 묶음이 시작되기 직전 스냅샷 (첫 기준점과 같은 id). 묶음이 끝날 때까지 버리지 않는다. */
+  private origin: number | null = null;
+  /** 이 묶음에서 적용이 확정된 행 id */
+  private settled: string[] = [];
+  /** 대기 중 사용자가 직접 고친 적이 있다 — 되돌림 지점으로 돌아가면 그 편집도 사라진다 */
+  private batchUserEdits = false;
+  /** 방금 적용한 묶음을 한 번에 되돌릴 지점 — 적용 뒤 문서가 그대로일 때만 유효하다 */
+  private revertPoint: { snapshot: number; threadId: string; ids: string[]; revision: number; instance: number | undefined } | null = null;
 
   constructor(deps: DoogleAgentDeps, hooks: StagingHooks) {
     this.deps = deps;
@@ -75,7 +83,12 @@ export class PendingStaging implements PendingApi {
     this.claim(threadId);
     this.writeStartRevision = this.hooks.revision();
     if (this.baseline === null) {
+      // 새 묶음이 시작되면 앞 묶음의 되돌림 지점은 더는 "방금 적용한 것"이 아니다
+      this.dropRevertPoint();
       this.baseline = engine.saveSnapshot();
+      this.origin = this.baseline;
+      this.settled = [];
+      this.batchUserEdits = false;
       this.owner = threadId;
       this.pendingBefore = this.baseline;
     } else {
@@ -91,6 +104,7 @@ export class PendingStaging implements PendingApi {
     if (this.entries.length === 0 && this.baseline !== null) {
       engine.discardSnapshot(this.baseline);
       this.baseline = null;
+      this.origin = null;
       this.owner = null;
     }
   }
@@ -117,6 +131,7 @@ export class PendingStaging implements PendingApi {
     };
     const before = this.pendingBefore ?? (this.entries.length === 0 ? this.baseline : null);
     if (before !== null) this.befores.set(entry.id, before);
+    if (userEditsBefore) this.batchUserEdits = true;
     this.pendingBefore = null;
     this.entries.push(entry);
     this.lastStagedRevision = revision;
@@ -158,10 +173,13 @@ export class PendingStaging implements PendingApi {
   acceptAll(threadId?: string): { accepted: number } {
     if (!this.hasPending(threadId) || !this.covers(threadId)) return { accepted: 0 };
     const accepted = this.entries;
+    this.noteUserEdits();
     this.entries = [];
+    this.settled.push(...accepted.map((e) => e.id));
     this.dropBaseline();
     const thread = threadId ?? this.owner ?? accepted[0]?.threadId ?? null;
     this.owner = null;
+    this.finishBatch(thread);
     if (thread) this.hooks.noteReview(thread, { decision: 'accepted', changeSets: accepted.length });
     this.emit({ kind: 'accepted', threadId: thread, changeSets: accepted });
     return { accepted: accepted.length };
@@ -172,6 +190,7 @@ export class PendingStaging implements PendingApi {
     const rejected = this.entries;
     const baseline = this.baseline;
     const userEditsReverted = this.hasUserEditsSince();
+    this.noteUserEdits();
     if (baseline === null) {
       throw new DoogleToolError('STAGING_BASELINE_LOST', 'The pre-edit snapshot is missing; use undo to revert the staged edits.');
     }
@@ -192,6 +211,7 @@ export class PendingStaging implements PendingApi {
     this.dropBaseline();
     const thread = threadId ?? this.owner ?? rejected[0]?.threadId ?? null;
     this.owner = null;
+    this.finishBatch(thread);
     if (thread) {
       this.hooks.noteReview(thread, {
         decision: 'rejected',
@@ -209,6 +229,7 @@ export class PendingStaging implements PendingApi {
     if (!entry || entry.kept) return { accepted: 0 };
     entry.kept = true;
     const thread = entry.threadId;
+    this.noteUserEdits();
     this.settleKeptPrefix();
     if (this.entries.length === 0) {
       this.hooks.noteReview(thread, { decision: 'accepted', changeSets: 1 });
@@ -227,6 +248,7 @@ export class PendingStaging implements PendingApi {
       throw new DoogleToolError('STAGING_BASELINE_LOST', 'The snapshot before this edit is missing; use undo to revert it.');
     }
     const userEditsReverted = this.hasUserEditsSince(id);
+    this.noteUserEdits();
     const revBefore = this.hooks.revision();
     try {
       this.deps.transaction('doogle:reject-staged-edit', (doc) => {
@@ -244,7 +266,7 @@ export class PendingStaging implements PendingApi {
     for (const e of rejected) {
       const snap = this.befores.get(e.id);
       this.befores.delete(e.id);
-      if (doc && snap !== undefined && snap !== this.baseline) new Engine(doc).discardSnapshot(snap);
+      if (doc && snap !== undefined && snap !== this.baseline && snap !== this.origin) new Engine(doc).discardSnapshot(snap);
     }
     const thread = rejected[0].threadId;
     this.hooks.noteReview(thread, {
@@ -264,15 +286,94 @@ export class PendingStaging implements PendingApi {
     while (this.entries.length > 0 && this.entries[0].kept) {
       const first = this.entries.shift()!;
       this.befores.delete(first.id);
+      this.settled.push(first.id);
       const next = this.entries[0];
       const old = this.baseline;
       this.baseline = next ? this.befores.get(next.id) ?? null : null;
-      if (doc && old !== null && old !== this.baseline) new Engine(doc).discardSnapshot(old);
+      if (doc && old !== null && old !== this.baseline && old !== this.origin) new Engine(doc).discardSnapshot(old);
     }
-    if (this.entries.length === 0) {
+    if (this.entries.length === 0 && (this.baseline !== null || this.origin !== null)) {
+      const thread = this.owner;
       this.dropBaseline();
       this.owner = null;
+      this.finishBatch(thread);
     }
+  }
+
+  /** 마지막 스테이징 쓰기 뒤로 revision 이 움직였으면 사용자가 직접 고쳤다 */
+  private noteUserEdits(): void {
+    if (this.entries.length > 0 && this.hooks.revision() !== this.lastStagedRevision) this.batchUserEdits = true;
+  }
+
+  /**
+   * 대기 묶음이 비었다 — 적용된 행이 있고 그 사이 직접 편집이 없었으면 묶음 시작 직전 스냅샷을
+   * 되돌림 지점으로 남긴다. 아니면 버린다.
+   */
+  private finishBatch(thread: string | null): void {
+    const origin = this.origin;
+    const ids = this.settled;
+    this.origin = null;
+    this.settled = [];
+    if (origin === null) return;
+    if (ids.length === 0 || !thread || this.batchUserEdits) {
+      const doc = this.deps.getDocument();
+      if (doc) new Engine(doc).discardSnapshot(origin);
+      return;
+    }
+    this.revertPoint = {
+      snapshot: origin, threadId: thread, ids, revision: this.hooks.revision(), instance: this.deps.documentInstance?.(),
+    };
+  }
+
+  private dropRevertPoint(): void {
+    const point = this.revertPoint;
+    this.revertPoint = null;
+    if (!point) return;
+    // 문서가 바뀌었으면 스냅샷 id 는 다른 문서의 것이다 — 건드리지 않는다
+    if (this.deps.documentInstance?.() !== point.instance) return;
+    const doc = this.deps.getDocument();
+    if (doc) new Engine(doc).discardSnapshot(point.snapshot);
+  }
+
+  /**
+   * 방금 적용한 묶음을 한 번에 되돌릴 수 있는가. 적용 뒤 문서가 한 번이라도 바뀌었으면(직접 편집·
+   * 실행 취소·새 쓰기) null — 그때는 실행 취소(Ctrl+Z)가 맞는 길이다.
+   */
+  revertInfo(): { threadId: string; ids: string[]; count: number } | null {
+    const point = this.revertPoint;
+    if (!point) return null;
+    if (this.entries.length > 0 || this.hooks.revision() !== point.revision || this.deps.documentInstance?.() !== point.instance) {
+      this.dropRevertPoint();
+      return null;
+    }
+    return { threadId: point.threadId, ids: [...point.ids], count: point.ids.length };
+  }
+
+  /** 방금 적용한 묶음을 그 요청 전 상태로 되돌린다 — transaction 한 번이라 이것도 undo 한 단계다 */
+  revertAccepted(): { reverted: number } {
+    const info = this.revertInfo();
+    const point = this.revertPoint;
+    if (!info || !point) return { reverted: 0 };
+    const revBefore = this.hooks.revision();
+    try {
+      this.deps.transaction('doogle:revert-accepted-edits', (doc) => {
+        new Engine(doc).restoreSnapshot(point.snapshot);
+      });
+    } catch (error) {
+      throw new DoogleToolError(
+        'STAGING_REJECT_FAILED',
+        `Could not restore the document to its state before the applied edits (${error instanceof Error ? error.message : String(error)}). Use undo instead.`,
+      );
+    }
+    this.hooks.noteWrite(revBefore);
+    this.dropRevertPoint();
+    this.hooks.noteReview(info.threadId, {
+      decision: 'reverted',
+      changeSets: info.count,
+      note: `The user reverted ${info.count} edit(s) of yours that they had applied; the document is back to its state before them. Re-read before editing again.`,
+    });
+    this.emit({ kind: 'reverted', threadId: info.threadId, changeSets: [] });
+    return { reverted: info.count };
   }
 
   onChange(cb: (e: PendingChangeEvent) => void): () => void {
@@ -284,6 +385,7 @@ export class PendingStaging implements PendingApi {
     const doc = this.deps.getDocument();
     const ids = new Set<number>(this.befores.values());
     if (this.baseline !== null) ids.add(this.baseline);
+    if (this.origin !== null) ids.delete(this.origin);
     if (doc) for (const id of ids) new Engine(doc).discardSnapshot(id);
     this.befores.clear();
     this.baseline = null;
@@ -298,11 +400,20 @@ export class PendingStaging implements PendingApi {
     this.pendingBefore = null;
     this.writeStartRevision = null;
     this.owner = null;
+    this.origin = null;
+    this.settled = [];
+    this.batchUserEdits = false;
+    this.revertPoint = null;
     if (had.length > 0) this.emit({ kind: 'rejected', threadId: null, changeSets: had });
   }
 
   dispose(): void {
+    const origin = this.origin;
+    this.origin = null;
     this.dropBaseline();
+    this.dropRevertPoint();
+    const doc = this.deps.getDocument();
+    if (doc && origin !== null) new Engine(doc).discardSnapshot(origin);
     this.entries = [];
     this.listeners.clear();
   }

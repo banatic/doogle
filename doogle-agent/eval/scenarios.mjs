@@ -10,7 +10,9 @@ const has = (text, needle) => text.includes(needle);
 const count = (text, needle) => text.split(needle).length - 1;
 const writes = (record) => record.turns.flatMap((t) => t.toolCalls ?? []).filter((c) => /^(insert_|replace_|delete_|move_|apply_|create_|edit_|set_)/.test(c.name));
 /** 되물었는가 — 물음표나 '알려 주세요' 꼴의 요청으로 끝난다 */
-const asked = (record) => /\?|알려 ?주|말씀해 ?주|골라 ?주|정해 ?주/.test(finalText(record).slice(-400));
+// 되물음: 글로 묻거나(끝 400자) 질문 카드(ask_user_question)를 띄웠다
+const asked = (record) => calls(record, 'ask_user_question').some((c) => c.ok)
+  || /\?|알려 ?주|말씀해 ?주|골라 ?주|정해 ?주/.test(finalText(record).slice(-400));
 const okWrites = (record) => writes(record).filter((c) => c.ok);
 const calls = (record, name) => record.turns.flatMap((t) => t.toolCalls ?? []).filter((c) => c.name === name);
 const allCalls = (record) => record.turns.flatMap((t) => t.toolCalls ?? []);

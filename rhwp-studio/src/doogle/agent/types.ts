@@ -165,6 +165,12 @@ export interface PendingChangeTarget {
   cell?: { paraIdx: number; controlIdx: number; cellIdx: number };
   table?: { paraIdx: number; controlIdx: number };
   wholeSection?: boolean;
+  /** (추가) 이 자리가 놓인 쪽 (0-based, 기록 시점) */
+  page?: number;
+  /** (추가) 그 문단의 첫머리 글 (기록 시점, 24자까지) — 검토 목록이 위치를 "3쪽 “사업명”" 처럼 부른다 */
+  lead?: string;
+  /** (추가) apply_edits 묶음에서 이 자리를 만든 항목 번호 (edits[i]) */
+  item?: number;
 }
 
 /**
@@ -172,6 +178,8 @@ export interface PendingChangeTarget {
  * keys 는 도구가 요청한 속성 이름(applyChar/ParaFormat props 키).
  */
 export interface FormatDiff {
+  /** (추가) apply_edits 묶음에서 이 서식 변경을 만든 항목 번호 (edits[i]) */
+  item?: number;
   kind: 'char' | 'para';
   keys: string[];
   before: Record<string, unknown>;
@@ -203,7 +211,8 @@ export interface PendingChangeSet {
 }
 
 export interface PendingChangeEvent {
-  kind: 'added' | 'accepted' | 'rejected';
+  /** reverted = 적용했던 묶음을 사용자가 한 번에 되돌렸다 (changeSets 는 빈 배열) */
+  kind: 'added' | 'accepted' | 'rejected' | 'reverted';
   threadId: string | null;
   changeSets: PendingChangeSet[];
 }
@@ -231,6 +240,13 @@ export interface PendingApi {
   hasUserEditsSince?(id?: string): boolean;
   /** (추가) 지금 문서의 쪽 수 (검토 거터가 변경 위치를 비율로 찍는다) */
   pageCount?(): number;
+  /**
+   * (추가) 방금 적용한 묶음을 한 번에 되돌릴 수 있으면 그 묶음 — 적용 뒤 문서가 그대로일 때만.
+   * 직접 편집·실행 취소·새 쓰기가 있었으면 null (그때는 실행 취소가 맞는 길이다).
+   */
+  revertInfo?(): { threadId: string; ids: string[]; count: number } | null;
+  /** (추가) 방금 적용한 묶음을 그 요청 전 상태로 되돌린다. 되돌린 행 수. */
+  revertAccepted?(): { reverted: number };
 }
 
 export interface DoogleAgentRuntime {

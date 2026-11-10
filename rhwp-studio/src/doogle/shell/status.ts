@@ -3,8 +3,9 @@
  * 세 구역으로 다시 묶는다(UI_AUDIT 3.7).
  *
  *   왼쪽 = 위치    : 쪽 · 줄/칸 · 단 · 구역 (· 셀 · 필드)
- *   가운데 = 메시지 : upstream #sb-message
- *   오른쪽 = 상태  : 업데이트 진행 · 에이전트 ● + 변경 N건 · 글자 수 · 삽입/수정 · 배율
+ *   가운데 = 메시지 : upstream #sb-message (문서를 연 직후의 "파일 이름 — N페이지 (ms)" 는 지운다 —
+ *                     파일 이름은 제목 줄에, 쪽 수는 왼쪽에 이미 있고 로딩 시간은 사용자 정보가 아니다)
+ *   오른쪽 = 상태  : 업데이트 진행 · 저장 상태 · 에이전트 ● + 변경 N건 · 글자 수 · 삽입/수정 · 배율
  *
  * - 단·줄/칸·글자 수는 플러그인 host 의 캐럿 + 읽기 전용 문서 조회로 계산한다. host 가 붙기 전에는 숨긴다.
  * - 변경 건수는 `doogle:pending-count {detail:{count}}`(review/state.ts 가 쏜다).
@@ -15,7 +16,7 @@
  */
 import type { PluginHost } from '@/plugin/types';
 import { isDesk, onHubEvent } from '../ui/desk-bridge';
-import { onDocState, type DocState } from './doc-state';
+import { getDocState, onDocState, type DocState } from './doc-state';
 
 export const PENDING_COUNT_EVENT = 'doogle:pending-count';
 export const AGENT_STATE_EVENT = 'doogle:agent-state';
@@ -129,6 +130,20 @@ export function announceStatus(text: string): void {
 
 interface LineInfo { lineIndex: number; lineCount: number; charStart: number; charEnd: number }
 
+/**
+ * upstream 이 문서를 연 뒤 가운데 칸에 쓰는 요약 — "biz_plan.hwp — 6페이지 (116.5ms)" · "새 문서.hwp — 1페이지".
+ * 두글에서는 보이지 않는다(제목 줄·왼쪽 쪽 표시와 겹치고, 로딩 시간은 개발자용이다).
+ */
+export function isFileSummaryMessage(text: string): boolean {
+  return /\s—\s[\d,]+\s?(?:페이지|쪽|pages?)(?:\s\([\d.,]+\s?ms\))?$/i.test(text.trim());
+}
+
+function savedTitle(savedAt: number | null): string {
+  if (!savedAt) return '저장하지 않은 변경이 없습니다';
+  const at = new Date(savedAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
+  return `${at}에 저장했습니다`;
+}
+
 const nf = new Intl.NumberFormat('ko-KR');
 
 function zoneSep(order: number): HTMLElement {
@@ -143,6 +158,7 @@ export class StatusAddons {
   private readonly col: HTMLElement;
   private readonly line: HTMLElement;
   private readonly agent: HTMLButtonElement;
+  private readonly save: HTMLElement;
   private readonly chars: HTMLElement;
   private readonly update: HTMLElement;
   private host: PluginHost | null = null;
@@ -166,6 +182,10 @@ export class StatusAddons {
     this.agent.hidden = true;
     this.agent.addEventListener('click', onAgentClick);
 
+    this.save = document.createElement('span');
+    this.save.className = 'stb-item dg-sb-save';
+    this.save.hidden = true;
+
     this.chars = document.createElement('span');
     this.chars.className = 'stb-item dg-sb-chars';
     this.chars.hidden = true;
@@ -179,7 +199,8 @@ export class StatusAddons {
     liveEl.className = 'dg-visually-hidden';
     liveEl.setAttribute('aria-live', 'polite');
 
-    bar.append(this.col, this.line, zoneSep(20), zoneSep(40), this.update, this.agent, this.chars, liveEl);
+    bar.append(this.col, this.line, zoneSep(20), zoneSep(40), this.update, this.save, this.agent, this.chars, liveEl);
+    this.quietFileSummary(bar);
 
     pendingListeners.add((n) => {
       this.renderAgent();
@@ -192,12 +213,36 @@ export class StatusAddons {
     updateListeners.add(() => this.renderUpdate());
     let lastSaved: number | null = null;
     onDocState((s: DocState) => {
+      this.renderSave(s);
       if (s.savedAt && s.savedAt !== lastSaved) {
         lastSaved = s.savedAt;
         announceStatus('저장했습니다');
       }
     });
+    this.renderSave(getDocState());
     this.renderAgent();
+  }
+
+  /** 저장 상태 — 저장 안 한 변경이 있으면 "저장 안 됨", 없으면 "저장됨" */
+  private renderSave(s: DocState): void {
+    this.save.hidden = !s.hasDocument;
+    if (!s.hasDocument) return;
+    const dot = document.createElement('span');
+    dot.className = `dg-sb-dot dg-sb-dot--${s.dirty ? 'warn' : 'ok'}`;
+    dot.setAttribute('aria-hidden', 'true');
+    this.save.replaceChildren(dot, s.dirty ? '저장 안 됨' : '저장됨');
+    this.save.title = s.dirty ? '저장하지 않은 변경이 있습니다 (Ctrl+S)' : savedTitle(s.savedAt);
+  }
+
+  /** 가운데 메시지 칸에서 "파일 이름 — N페이지 (ms)" 요약을 지운다 */
+  private quietFileSummary(bar: HTMLElement): void {
+    const message = bar.querySelector<HTMLElement>('#sb-message') ?? document.getElementById('sb-message');
+    if (!message || typeof MutationObserver === 'undefined') return;
+    const clean = () => {
+      if (message.textContent && isFileSummaryMessage(message.textContent)) message.textContent = '';
+    };
+    new MutationObserver(clean).observe(message, { childList: true, characterData: true, subtree: true });
+    clean();
   }
 
   attach(host: PluginHost): void {

@@ -369,10 +369,7 @@ const SPECS: Record<string, ToolSpec> = {
   // 대화 제어
   ask_user_question: {
     category: 'other', label: '질문하기',
-    summary: (a) => {
-      const first = Array.isArray(a['questions']) ? rec(a['questions'][0]) : {};
-      return quote(str(first['question']) || str(first['header']), 32);
-    },
+    summary: (a) => quote(str(a['question']), 32),
   },
   request_permission: { category: 'other', label: '권한 요청', summary: (a) => clip(str(a['reason']), 64) },
   present_implementation_plan: { category: 'other', label: '계획 제시', summary: (a) => quote(str(a['title']), 32) },
@@ -383,6 +380,75 @@ const SPECS: Record<string, ToolSpec> = {
       : '',
   },
 };
+
+// ─── 진행 줄 ─────────────────────────────────────────────
+
+/** 도구 이름표의 끝말 → "…하는 중". 위에서부터 먼저 맞는 것을 쓴다. */
+const PROGRESSIVE: Array<[string, string]> = [
+  ['미리보기', '미리 보는 중'],
+  ['질문하기', '질문하는 중'],
+  ['읽기', '읽는 중'],
+  ['찾기', '찾는 중'],
+  ['보기', '보는 중'],
+  ['바꾸기', '바꾸는 중'],
+  ['만들기', '만드는 중'],
+  ['나누기', '나누는 중'],
+  ['합치기', '합치는 중'],
+  ['넣기', '넣는 중'],
+  ['그리기', '그리는 중'],
+  ['자르기', '자르는 중'],
+  ['삽입', '넣는 중'],
+  ['삭제', '지우는 중'],
+  ['변경', '바꾸는 중'],
+  ['이동', '옮기는 중'],
+  ['수정', '고치는 중'],
+  ['서식', '서식 바꾸는 중'],
+  ['추가', '추가하는 중'],
+  ['적용', '적용하는 중'],
+  ['편집', '편집하는 중'],
+  ['입력', '입력하는 중'],
+  ['확인', '확인하는 중'],
+  ['준비', '준비하는 중'],
+  ['조정', '조정하는 중'],
+  ['맞춤', '맞추는 중'],
+  ['갱신', '갱신하는 중'],
+  ['제시', '제시하는 중'],
+  ['요청', '요청하는 중'],
+];
+
+/** "문서 구조 읽기" → "문서 구조 읽는 중", "표 삭제" → "표 지우는 중" */
+export function progressive(label: string): string {
+  for (const [tail, doing] of PROGRESSIVE) {
+    if (label.endsWith(tail)) return `${label.slice(0, label.length - tail.length)}${doing}`;
+  }
+  return `${label} 중`;
+}
+
+/**
+ * 진행 줄에 적을 지금 하는 일 — "문서 구조 읽는 중", "6곳 글자 서식 바꾸는 중".
+ * 묶음 편집은 항목이 모두 같은 종류면 그 종류로 부른다.
+ */
+export function progressText(view: ToolCallView): string {
+  if (view.name === 'apply_edits' && view.items && view.items.length > 0) {
+    const kinds = [...new Set(view.items.map((item) => item.label))];
+    if (kinds.length === 1) return `${view.items.length}곳 ${progressive(kinds[0])}`;
+  }
+  return progressive(view.label);
+}
+
+/**
+ * 편집 도구가 끝난 뒤 대화에 남길 한 줄 — "6곳 편집 · 글자 서식, 텍스트 바꾸기".
+ * 문단 번호가 든 요약은 빼고, 따옴표로 글을 보여 주는 요약만 붙인다.
+ */
+export function doneText(view: ToolCallView): string {
+  if (view.name === 'apply_edits' && view.items && view.items.length > 0) {
+    const kinds = [...new Set(view.items.map((item) => item.label))];
+    const shown = kinds.slice(0, 3).join(', ') + (kinds.length > 3 ? ` 외 ${kinds.length - 3}가지` : '');
+    return `${view.items.length}곳 편집 · ${shown}`;
+  }
+  const readable = view.summary && view.summary.includes('“') && !/\d+문단/.test(view.summary);
+  return readable ? `${view.label} · ${view.summary}` : view.label;
+}
 
 /** `mcp__doogle__insert_text` → `insert_text` */
 export function bareToolName(name: string): string {
@@ -427,18 +493,48 @@ function batchItems(name: string, args: Args): Array<{ label: string; summary: s
  * 묶음 실패 사유 → 항목별 사유. executor 의 BATCH_FAILED 메시지
  * `… edits[2] insert_text: ANCHOR_NOT_FOUND 메시지 | edits[5] …` 를 나눈다.
  */
-export function parseBatchFailures(summary: string | undefined): Map<number, { code: string; text: string }> {
-  const out = new Map<number, { code: string; text: string }>();
+export function parseBatchFailures(summary: string | undefined): Map<number, { code: string; text: string; raw: string }> {
+  const out = new Map<number, { code: string; text: string; raw: string }>();
   const re = /(?:edits|reads)\[(\d+)\] [a-z_]+: ([A-Z][A-Z0-9_]+) (.*?)(?= \| (?:edits|reads)\[\d+\]|$)/gs;
   for (const m of (summary ?? '').matchAll(re)) {
     const code = m[2];
-    out.set(Number(m[1]), { code, text: FAILURE_TEXT[code] ?? m[3].trim() });
+    const rest = m[3].trim();
+    const byMessage = FAILURE_BY_MESSAGE.find(([re]) => re.test(rest))?.[1];
+    out.set(Number(m[1]), { code, text: byMessage ?? FAILURE_TEXT[code] ?? '이 항목을 끝내지 못했습니다.', raw: rest });
   }
   return out;
 }
 
+/**
+ * 실패 원문(영어, 에이전트에게 주는 안내)에서 읽어 낸 까닭 — 코드가 INVALID_ARGS 처럼 넓을 때 쓴다.
+ * 위에서부터 먼저 맞는 것을 쓴다.
+ */
+const FAILURE_BY_MESSAGE: Array<[RegExp, string]> = [
+  [/matched nothing/i, '바꿀 글을 찾지 못했습니다.'],
+  [/is ambiguous|only \d+ match/i, '같은 글이 여러 곳에 있어 자리를 정하지 못했습니다.'],
+  [/never spans paragraphs/i, '여러 문단에 걸친 글은 한 번에 찾을 수 없습니다.'],
+  [/out of range|does not exist|no such/i, '가리킨 자리가 문서에 없습니다.'],
+];
+
+/** 사용자가 직접 손써야 풀리는 실패 — 강조 카드로 보인다 */
+const USER_ACTION_CODES = new Set(['NO_DOCUMENT', 'EDITOR_BLOCKED', 'DOCUMENT_WRITER_BUSY', 'STAGING_BASELINE_LOST']);
+
+/** 이 실패는 사용자가 손써야 하는가 (아니면 에이전트가 스스로 다시 시도할 수 있다) */
+export function needsUserAction(code: string | undefined): boolean {
+  return !!code && USER_ACTION_CODES.has(code);
+}
+
 /** 사용자에게 보일 일이 없는 오류 코드 → 한 문장 (코드는 "자세히"/툴팁에만) */
 const FAILURE_TEXT: Record<string, string> = {
+  INVALID_ARGS: '요청 형식이 맞지 않았습니다.',
+  RANGE_HAS_OBJECTS: '표·그림이 든 범위라 건드리지 않았습니다.',
+  OBJECT_AT_PARAGRAPH_END: '문단 끝에 표·그림이 있어 그 자리에는 넣지 않았습니다.',
+  ENGINE_ERROR: '편집기가 이 작업을 처리하지 못했습니다.',
+  RENDER_UNAVAILABLE: '쪽 그림을 만들지 못했습니다.',
+  UNKNOWN_TOOL: '없는 기능을 부르려 했습니다.',
+  NOT_HANDLED_IN_STUDIO: '이 기능은 지금 쓸 수 없습니다.',
+  INTERNAL_ERROR: '알 수 없는 문제로 처리하지 못했습니다.',
+  STAGING_REJECT_FAILED: '변경을 되돌리지 못했습니다. 실행 취소(Ctrl+Z)를 쓰세요.',
   DOCUMENT_WRITER_BUSY: '다른 편집이 진행 중이라 쓰지 못했습니다. 잠시 뒤 다시 시도하세요.',
   REVISION_MISMATCH: '그 사이 문서가 바뀌어 적용하지 못했습니다.',
   STAGING_BASELINE_LOST: '검토 대기 중인 변경의 기준 문서를 잃어 적용하지 못했습니다.',
@@ -455,12 +551,14 @@ const FAILURE_TEXT: Record<string, string> = {
  * 도구 실패 사유(`tool_result.summary`) → 화면 한 줄 + 코드.
  * "CODE: 메시지" · "[CODE] 메시지" · "CODE" 꼴을 나눈다. 코드는 화면 본문에 쓰지 않는다 (UI_AUDIT §3.12).
  */
-export function formatToolFailure(summary: string | undefined): { text: string; code?: string } {
+export function formatToolFailure(summary: string | undefined): { text: string; code?: string; raw: string } {
   const raw = (summary ?? '').trim();
-  if (!raw) return { text: '실패했습니다.' };
+  if (!raw) return { text: '실패했습니다.', raw };
   const match = /^\[?([A-Z][A-Z0-9_]{2,})\]?(?::|\s+-|\s)\s*(.*)$/s.exec(raw) ?? /^([A-Z][A-Z0-9_]{2,})$/.exec(raw);
-  if (!match) return { text: raw };
-  const code = match[1];
-  const rest = (match[2] ?? '').trim();
-  return { text: FAILURE_TEXT[code] ?? (rest || '실패했습니다.'), code };
+  const code = match?.[1];
+  const rest = (match ? match[2] ?? '' : raw).trim();
+  const byMessage = FAILURE_BY_MESSAGE.find(([re]) => re.test(rest))?.[1];
+  // 원문(영어 안내)은 본문에 쓰지 않는다 — 까닭을 못 읽어 냈으면 한 줄 일반 문구로 물러선다
+  const text = byMessage ?? (code ? FAILURE_TEXT[code] : undefined) ?? '이 작업을 끝내지 못했습니다.';
+  return { text, ...(code ? { code } : {}), raw };
 }

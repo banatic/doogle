@@ -1585,9 +1585,35 @@ async function initializeDocument(
   }
 }
 
+/**
+ * [doogle] 글꼴 상태를 알림 띠(doogle/shell/font-notice.ts)에 알린다.
+ * 두글에서는 창을 띄워 쪽 그리기를 막지 않고, 비슷한 글꼴로 바로 그린 뒤 띠 한 줄로 사실만 알린다.
+ */
+function announceDoogleFonts(candidates: string[]): void {
+  const report = candidates.length ? analyzeDocumentFonts(candidates) : null;
+  const fonts = (report?.fonts ?? [])
+    .filter((font) => font.status !== 'available')
+    .map((font) => ({ name: font.fontName, status: font.status, substitute: font.substituteFont }));
+  window.dispatchEvent(new CustomEvent('doogle:fonts-missing', {
+    detail: {
+      fonts,
+      canDetect: !!report?.shouldPromptLocalAccess,
+      detect: async () => {
+        // 감지가 끝나면 'local-fonts-changed' 가 글꼴 공급·조판·뷰를 다시 준비한다.
+        await detectLocalFonts({ force: true, candidateFamilies: candidates });
+        announceDoogleFonts(candidates);
+      },
+    },
+  }));
+}
+
 async function promptLocalFontsIfNeeded(displayName: string): Promise<void> {
   try {
     if (!getLocalFontState().loaded) await loadStoredLocalFonts();
+    if (isDoogleMode()) {
+      announceDoogleFonts(wasm.getDocumentFontCandidates());
+      return;
+    }
     if (getLocalFontState().stored) return;
     const candidates = wasm.getDocumentFontCandidates();
     if (!candidates.length) return;

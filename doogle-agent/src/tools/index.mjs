@@ -19,8 +19,8 @@ export { documentIdArgError, assertCellArgsPlacement, TABLE_PROPS_KEYS, CELL_PRO
 export const TOOL_NAMES = Object.freeze(TOOLS.map((tool) => tool.name));
 
 /**
- * 사용자 응답을 기다리는 tool — hub 가 긴 대기 시간을 준다. v1 에는 그런 tool 이 없다
- * (대화 제어 tool 은 응답 화면이 생길 때 definitions.mjs 와 함께 되살린다).
+ * 사용자 응답을 기다리는 tool — hub 가 긴 대기 시간을 준다. v1 에는 그런 tool 이 없다:
+ * ask_user_question 은 질문 카드를 띄우고 곧바로 돌아온다(답은 다음 메시지로 온다).
  */
 export const HUMAN_WAIT_TOOL_NAMES = Object.freeze([]);
 

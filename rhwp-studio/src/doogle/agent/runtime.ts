@@ -36,6 +36,8 @@ export function createDoogleAgentRuntime(deps: DoogleAgentDeps): DoogleAgentRunt
       accept: (id) => executor.staging.accept(id),
       rejectFrom: (id) => executor.staging.rejectFrom(id),
       hasUserEditsSince: (id) => executor.staging.hasUserEditsSince(id),
+      revertInfo: () => executor.staging.revertInfo(),
+      revertAccepted: () => executor.staging.revertAccepted(),
       pageCount: () => {
         const doc = deps.getDocument();
         if (!doc) return 0;

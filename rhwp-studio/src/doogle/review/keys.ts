@@ -74,7 +74,15 @@ export function chainSentence(impact: RejectImpact): string {
     parts.push(`아래 ${impact.later}건${impact.kept > 0 ? `(적용 표시한 ${impact.kept}건 포함)` : ''}`);
   }
   if (impact.userEdits) parts.push('직접 고친 내용');
-  return parts.length > 0 ? `거절하면 ${parts.join('과 ')}도 함께 되돌아갑니다` : '';
+  return parts.length > 0 ? `되돌리면 ${parts.join('과 ')}도 함께 되돌아갑니다` : '';
+}
+
+/**
+ * 목록 행의 되돌리기 단추 글 — 뒤 행이 함께 되돌아가면 모두 몇 건인지 단추에 적는다
+ * ("× +1" 같은 기호 대신).
+ */
+export function rejectLabel(impact: RejectImpact): string {
+  return impact.later > 0 ? `여기부터 되돌리기 (${impact.count}건)` : '되돌리기';
 }
 
 /**

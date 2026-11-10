@@ -941,12 +941,96 @@
 /* 가운데 = 메시지 */
 :root[data-doogle] #sb-message { order: 30; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 /* 오른쪽 = 상태 */
-:root[data-doogle] .dg-sb-update { order: 50; display: inline-flex; align-items: center; gap: 6px; color: var(--dg-text2); }
+:root[data-doogle] .dg-sb-update { order: 49; display: inline-flex; align-items: center; gap: 6px; color: var(--dg-text2); }
+:root[data-doogle] .dg-sb-save { order: 50; display: inline-flex; align-items: center; gap: 6px; }
 :root[data-doogle] .dg-sb-agent { order: 51; }
 :root[data-doogle] .dg-sb-chars { order: 52; }
 :root[data-doogle] #sb-mode { order: 53; }
 :root[data-doogle] #status-bar .stb-right { order: 60; display: flex; align-items: center; gap: 4px; }
 :root[data-doogle] #status-bar [hidden] { display: none !important; }
+
+/* ── 알림 띠 (font-notice.ts) — 문서 영역 위 한 줄 ───────────────────── */
+:root[data-doogle] .dg-banner {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--dg-warn-soft, #FFF7E6);
+  border-bottom: 1px solid var(--dg-warn-border, #FCD9A8);
+  font-family: var(--dg-font-ui);
+  font-size: var(--dg-fs-sm, 12px);
+  color: var(--dg-text, #1f2937);
+}
+:root[data-doogle] .dg-banner[hidden] { display: none; }
+:root[data-doogle] .dg-banner-row { display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 12px; }
+:root[data-doogle] .dg-banner-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+:root[data-doogle] .dg-banner-grow { flex: 1 1 auto; }
+:root[data-doogle] .dg-banner button { font: inherit; cursor: pointer; }
+:root[data-doogle] .dg-banner button:focus-visible { outline: 2px solid var(--dg-focus, Highlight); outline-offset: 1px; }
+:root[data-doogle] .dg-banner-link {
+  flex-shrink: 0;
+  height: 24px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--dg-r-sm, 4px);
+  background: transparent;
+  color: var(--dg-warn, #92400E);
+  font-weight: 500;
+}
+:root[data-doogle] .dg-banner-link:hover { background: var(--dg-ink-06, rgba(15, 23, 42, 0.06)); }
+:root[data-doogle] .dg-banner-close { color: var(--dg-muted, #4b5563); font-weight: 400; }
+:root[data-doogle] .dg-banner-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 12px 10px 27px;
+}
+:root[data-doogle] .dg-banner-fonts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 132px;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 2px 16px;
+}
+:root[data-doogle] .dg-banner-font { display: flex; gap: 8px; min-width: 0; }
+:root[data-doogle] .dg-banner-font-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+:root[data-doogle] .dg-banner-font-note { flex-shrink: 0; color: var(--dg-muted, #4b5563); }
+:root[data-doogle] .dg-banner-acts { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+:root[data-doogle] .dg-banner-btn {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--dg-warn-border, #FCD9A8);
+  border-radius: var(--dg-r-sm, 4px);
+  background: var(--dg-surface, #fff);
+  color: var(--dg-text, #1f2937);
+}
+:root[data-doogle] .dg-banner-btn:disabled { opacity: 0.55; cursor: default; }
+:root[data-doogle] .dg-banner-hint { color: var(--dg-muted, #4b5563); }
+
+/* ── 좁은 창 — 사이드바가 문서를 밀어 쪽이 잘리지 않게 ─────────────────
+   1100px 아래: 사이드바를 340px 로 줄인다(문서는 narrow-fit.ts 가 폭에 맞춰 줄인다).
+   900px 아래 : 사이드바를 문서 위에 겹치는 서랍으로 바꾼다 — 문서 영역은 창 폭을 다 쓴다. */
+@media (max-width: 1099px) {
+  :root[data-doogle] #side-panel-host:has(.dg-panel) { width: 340px !important; }
+  :root[data-doogle] #side-panel-host:has(.dg-panel) .spl-resizer { display: none; }
+}
+@media (max-width: 899px) {
+  :root[data-doogle] #editor-area { position: relative; }
+  :root[data-doogle] #side-panel-host:has(.dg-panel) {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    grid-column: 1 / -1;
+    grid-row: 1 / -1;
+    justify-self: end;
+    width: min(360px, calc(100vw - 40px)) !important;
+    z-index: 30;
+    box-shadow: -12px 0 32px rgba(15, 23, 42, 0.18);
+  }
+}
 
 :root[data-doogle] .dg-sb-progress { width: 72px; height: 4px; accent-color: var(--dg-accent); }
 :root[data-doogle] .dg-sb-agent {

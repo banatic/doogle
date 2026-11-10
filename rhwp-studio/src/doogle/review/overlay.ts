@@ -15,7 +15,8 @@ import type { PluginHost, PluginTextRange } from '@/plugin/types';
 import type { PendingApi, PendingChangeSet } from '../agent/types.ts';
 import { icon } from '../ui/icons.ts';
 import { describeChange } from './describe.ts';
-import { REVIEW_KEYS, gutterPositions, impactSentence, matchReviewKey, type ReviewKeyAction } from './keys.ts';
+import { REVIEW_KEYS, gutterPositions, impactSentence, matchReviewKey, rejectLabel, type ReviewKeyAction } from './keys.ts';
+import { chipNode } from './list.ts';
 import { reviewStore } from './state.ts';
 import './overlay.css';
 
@@ -108,9 +109,9 @@ export function mountReviewOverlay(host: PluginHost, pending: PendingApi): Revie
   const applyBtn = btn('dg-pop-btn dg-pop-primary', '', () => decide('accept'));
   applyBtn.append(el('span', '', '적용'), kbd(REVIEW_KEYS.accept.label));
   applyBtn.setAttribute('aria-keyshortcuts', REVIEW_KEYS.accept.aria);
-  const rejectLabel = el('span', '', '거절');
+  const rejectText = el('span', '', '되돌리기');
   const rejectBtn = btn('dg-pop-btn', '', () => decide('reject'));
-  rejectBtn.append(rejectLabel, kbd(REVIEW_KEYS.reject.label));
+  rejectBtn.append(rejectText, kbd(REVIEW_KEYS.reject.label));
   rejectBtn.setAttribute('aria-keyshortcuts', REVIEW_KEYS.reject.aria);
   const sep = el('span', 'dg-glass-sep');
   sep.setAttribute('aria-hidden', 'true');
@@ -241,10 +242,22 @@ export function mountReviewOverlay(host: PluginHost, pending: PendingApi): Revie
     diff.setAttribute('aria-expanded', 'false');
   }
 
+  /**
+   * 문서 영역 중 지금 보이는 부분. 좁은 창에서는 사이드바가 문서 위에 겹치는 서랍으로 뜨므로
+   * (shell.css) 그 밑에 깔린 폭은 뺀다 — 풍선·이동 막대가 사이드바 위로 올라오지 않게.
+   */
   function editorRect(): DOMRect | null {
     const sc = document.getElementById('scroll-container');
     if (!sc || sc.offsetParent === null) return null;
-    return sc.getBoundingClientRect();
+    const rect = sc.getBoundingClientRect();
+    const side = document.getElementById('side-panel-host');
+    if (side && !side.hidden && getComputedStyle(side).position === 'absolute') {
+      const cover = side.getBoundingClientRect();
+      if (cover.width > 0 && cover.left < rect.right && cover.left > rect.left) {
+        return new DOMRect(rect.left, rect.top, cover.left - rect.left, rect.height);
+      }
+    }
+    return rect;
   }
 
   function layout(): void {
@@ -275,10 +288,45 @@ export function mountReviewOverlay(host: PluginHost, pending: PendingApi): Revie
     const h = pop.offsetHeight || 72;
     let left = anchor.left + anchor.width / 2 - w / 2;
     left = Math.max(editor.left + 8, Math.min(left, editor.right - w - 20));
-    let top = anchor.bottom + 8;
-    if (top + h > editor.bottom - 64) top = anchor.top - h - 8;
     pop.style.left = `${left}px`;
-    pop.style.top = `${Math.max(editor.top + 8, top)}px`;
+    pop.style.maxWidth = `${Math.max(200, editor.width - 28)}px`;
+    pop.style.top = `${popTop(anchor, h, editor)}px`;
+  }
+
+  /**
+   * 풍선의 세로 자리 — 대상의 아래·위 중 빈 쪽. 아래쪽 한계는 이동 막대(알약)의 윗변이다:
+   * 막대와 겹칠 자리면 대상 위로 올리고, 위도 모자라면 막대 바로 위에 붙인다.
+   */
+  function popTop(anchor: DOMRect, h: number, editor: DOMRect): number {
+    const GAP = 8;
+    const ceiling = editor.top + GAP;
+    const pillTop = pill.hidden ? editor.bottom : pill.getBoundingClientRect().top;
+    const floor = Math.min(editor.bottom, pillTop) - GAP;
+    const below = anchor.bottom + GAP;
+    if (below + h <= floor) return below;
+    const above = anchor.top - h - GAP;
+    if (above >= ceiling) return above;
+    return Math.max(ceiling, floor - h);
+  }
+
+  /**
+   * 변경 위치로 이동한 뒤 — 엔진은 캐럿이 화면 가장자리에 겨우 걸치게만 스크롤한다.
+   * 바뀐 자리가 화면 위에서 3분의 1 지점에 오도록 한 번 더 맞춘다(이미 편한 자리면 그대로 둔다).
+   */
+  function settleScroll(): void {
+    const sc = document.getElementById('scroll-container');
+    const editor = editorRect();
+    const anchor = anchorRect();
+    if (!sc || !editor || !anchor) return;
+    const band = { top: editor.top + editor.height * 0.15, bottom: editor.top + editor.height * 0.55 };
+    if (anchor.top >= band.top && anchor.bottom <= band.bottom) return;
+    const target = editor.top + editor.height / 3;
+    // 대상이 화면 3분의 1보다 크면 윗변을 위쪽 여백에 맞춘다
+    const want = anchor.height > editor.height / 3 ? editor.top + editor.height * 0.15 : target - anchor.height / 2;
+    const max = Math.max(0, sc.scrollHeight - sc.clientHeight);
+    const next = Math.max(0, Math.min(max, sc.scrollTop + (anchor.top - want)));
+    if (Math.abs(next - sc.scrollTop) < 2) return;
+    sc.scrollTop = next;
   }
 
   function layoutGutter(editor: DOMRect | null, count: number): void {
@@ -323,7 +371,7 @@ export function mountReviewOverlay(host: PluginHost, pending: PendingApi): Revie
       diff.title = long ? (expanded ? '접기' : '전체 보기') : '';
     } else if (view.chips.length > 0) {
       diff.append(el('span', 'dg-pop-sum', view.summary));
-      for (const chip of view.chips) diff.append(el('span', 'dg-pop-chip dg-tnum', chip));
+      for (const chip of view.chips) diff.append(chipNode(chip, 'dg-pop-chip dg-tnum'));
       diff.disabled = true;
     } else {
       diff.append(el('span', 'dg-pop-sum', view.summary));
@@ -332,10 +380,10 @@ export function mountReviewOverlay(host: PluginHost, pending: PendingApi): Revie
     diff.setAttribute('aria-label', `${view.location} 변경: ${diff.textContent ?? ''}`);
 
     const impact = reviewStore.rejectImpact(change.id);
-    rejectLabel.textContent = impact.later > 0 ? `거절 (+${impact.later})` : '거절';
+    rejectText.textContent = rejectLabel(impact);
     rejectBtn.setAttribute('aria-label', impact.later > 0
-      ? `거절 — 뒤 변경 ${impact.later}건도 함께 되돌아갑니다`
-      : '거절');
+      ? `여기부터 되돌리기 — 뒤 변경 ${impact.later}건도 함께 되돌아갑니다`
+      : '되돌리기');
     actions.hidden = confirming;
     confirmRow.hidden = !confirming;
     if (confirming) {
@@ -393,8 +441,13 @@ export function mountReviewOverlay(host: PluginHost, pending: PendingApi): Revie
     if (range) {
       try { host.selectTextRange(range); } catch (error) { console.warn('[doogle] 변경 위치로 이동하지 못했습니다', error); }
     }
-    // SelectionRenderer 가 다음 프레임에 그린다
-    requestAnimationFrame(() => requestAnimationFrame(layout));
+    // SelectionRenderer 가 다음 프레임에 그린다 — 그 뒤 자리를 3분의 1 지점으로 맞추고 풍선을 붙인다
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      settleScroll();
+      layout();
+      // 스크롤로 선택 사각형이 다시 그려진 뒤 한 번 더
+      requestAnimationFrame(layout);
+    }));
   });
 
   // ─── 단축키 ──────────────────────────────────────────

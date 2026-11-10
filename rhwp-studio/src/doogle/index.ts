@@ -84,6 +84,10 @@ export async function initDoogle(host: PluginHost): Promise<PluginSurface> {
     resolveEndpoint: async () => (desk.isDesk() ? desk.hubInfo() : endpointFromUrl()),
     onToolCall: async (call) => {
       sidebar?.noteExternalTool(call);
+      // 질문 카드는 문서 실행기가 아니라 사이드바가 그린다 — 띄우고 곧바로 돌아온다(답은 다음 메시지)
+      if (call.name === 'ask_user_question' || call.name.endsWith('__ask_user_question')) {
+        return sidebar.showQuestion(call);
+      }
       if (!runtime) {
         return { ok: false, error: { code: 'NOT_IMPLEMENTED', message: '두글 문서 실행기가 아직 없습니다' } };
       }

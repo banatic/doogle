@@ -70,9 +70,12 @@ MIT이므로 저작권 표시(LICENSE 3줄)만 유지하면 코드 그대로 가
 | `apply_engine_edits` / `prepare_engine_edit_session` | escape hatch |
 
 ### 대화 제어
-`ask_user_question`, `request_permission`, `present_implementation_plan`, `update_todos` — **v1 에서는 싣지 않는다.**
-hub·사이드바에 응답 화면이 없어 부르면 반드시 실패했다(`NOT_HANDLED_IN_STUDIO`). 모델은 글로 묻고 턴을 끝낸다.
-질문 카드 UI 가 생기면 `definitions.mjs` 에 되살린다.
+| tool | 인자 | 비고 |
+|---|---|---|
+| `ask_user_question` | `question, options[{label, description?}] (2~4), allowOther?` | 사이드바에 질문 카드(선택 단추 + "직접 입력")를 띄우고 **곧바로** `{shown:true}` 를 돌려준다. 답을 기다리지 않는다 — 모델은 턴을 끝내고, 사용자의 선택은 다음 메시지로 온다. `kind:'control'` 이라 외부 MCP 에는 싣지 않는다 |
+
+`request_permission`, `present_implementation_plan`, `update_todos` — **v1 에서는 싣지 않는다.**
+hub·사이드바에 응답 화면이 없어 부르면 반드시 실패했다(`NOT_HANDLED_IN_STUDIO`).
 
 ### 두글에서 바꾼 점 (rhwp-x 대비)
 - `get_structure` 범례는 결과마다 싣지 않고 `TOOL_RULES` 의 "Structure text" 에 한 번만 둔다. 중첩 표를 `▦` 와 `nested table in [n] … cellPath […]` 줄로 보인다.

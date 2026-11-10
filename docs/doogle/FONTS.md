@@ -29,3 +29,38 @@
 `rhwp-studio/src/doogle/theme/fonts.css`의 `@font-face`(`font-display: swap`)가 Vite 자산으로
 로컬 파일을 참조한다. CDN을 쓰지 않으므로 오프라인에서도 같은 모양으로 그려진다. 로드 전·실패
 시에는 `Malgun Gothic` → `Apple SD Gothic Neo` → `Noto Sans KR` → 시스템 글꼴 순으로 떨어진다.
+
+## Doogle Eq Fallback (Latin Modern Math 1.959 파생)
+
+수식 글자가 깨지지 않게 하는 대체 글꼴이다. 한글 수식은 한컴 수식 글꼴(HYhwpEQ · HancomEQN)의
+사설 영역(PUA) 코드로 글자를 그리는데, 그 글꼴이 없는 컴퓨터에서는 x · b · 숫자가 한글 비슷한
+글자나 네모로 보였다. 두글은 같은 PUA 코드에 Latin Modern Math 글리프를 묶은 작은 글꼴을 함께
+싣고, 진짜 글꼴이 없을 때만 그것으로 그린다. **한컴 수식 글꼴 자체는 싣지 않는다.**
+
+| 항목 | 값 |
+| --- | --- |
+| 원본 | Latin Modern Math 1.959 — `assets/fonts/LatinModernMath-Regular.woff2` (upstream rhwp 에 이미 포함) |
+| 저작권 | Copyright 2012--2014 for Latin Modern Math OTF by B. Jackowski, P. Strzelczyk and P. Pianowski (on behalf of TeX users groups) |
+| 라이선스 | GUST Font License (LPPL 1.3c 기반) |
+| 저장소 경로 | `rhwp-studio/src/doogle/theme/fonts/DoogleEqFallback.woff2` |
+| 크기 | 18,712 바이트 (글리프 210개) |
+| SHA-256 | `bb03f8bc4f9bfd248765e85b9802d6e32d736917899a343ca9ca06c76f57d74f` |
+| 라이선스 전문 | `rhwp-studio/src/doogle/theme/fonts/DoogleEqFallback-GUST-FONT-LICENSE.txt`, `assets/fonts/licenses/LPPL-1.3c.txt` |
+| 만드는 법 | `python scripts/doogle/build-eq-fallback-font.py` (fontTools · brotli) |
+
+### 고친 내용
+
+- 필요한 글리프만 남겼다(영문·숫자·연산자·그리스 문자·수학 이탤릭).
+- 한컴 수식 글꼴이 쓰는 PUA 코드(U+E000…)를 그 글자에 해당하는 Latin Modern Math 글리프에 묶었다.
+  대응표는 엔진의 `src/renderer/equation/hancom_glyphs.rs` `glyph()` 와 같다.
+- 조판 표(MATH · GSUB · GPOS)는 뺐다 — 수식 조판은 엔진이 한다.
+- GUST Font License 의 요청대로 글꼴 이름을 "Doogle Eq Fallback" 으로 바꿨다.
+
+### 로드 방식
+
+`rhwp-studio/src/doogle/shell/eq-font.ts` 가 두글 모드에서만 `HyhwpEQ` · `HancomEQN` 이름의
+`FontFace` 로 이 글꼴을 걸고, 두 이름을 upstream 의 등록 글꼴 목록(`REGISTERED_FONTS`)에 올린다
+— 올리지 않으면 캔버스 글꼴 대체가 그 이름을 맑은 고딕 사슬로 바꿔치기해 PUA 글자가 깨진다.
+진짜 한컴 수식 글꼴이 설치돼 있고 사용자가 알림 띠의 "이 컴퓨터에서 글꼴 찾기"를 승인했으면
+upstream 이 설치 글꼴을 먼저 쓴다. 승인 전에는 이 대체 글꼴로 그린다.
+글자 자리(전진 폭)는 엔진이 한컴 메트릭으로 정하므로 조판은 바뀌지 않고 글자 윤곽만 바뀐다.

@@ -243,17 +243,11 @@ export async function openSession({ browser, studioUrl, provider, mode = 'agent'
       const r = await tool('get_document_info');
       return r.ok && (r.result?.pageCount ?? 0) > 0 && (!r.result?.name || String(r.result.name).includes(base.replace(/\.[^.]+$/, '').slice(0, 8)));
     }, 120_000, `문서를 열지 못했습니다: ${base}`);
-    // 문서를 열면 뜨는 「로컬 글꼴 감지」 대화상자는 쪽 그리기를 막는다 — 대체 글꼴로 보기를 고른다.
-    for (let i = 0; i < 20; i++) {
-      const closed = await page.evaluate(() => {
-        const b = [...document.querySelectorAll('button')].find((x) => x.textContent?.trim() === '대체 글꼴로 보기');
-        if (!b) return false;
-        b.click();
-        return true;
-      });
-      if (closed) break;
-      await new Promise((r) => setTimeout(r, 150));
-    }
+    // 두글은 글꼴이 없어도 창을 띄우지 않고 비슷한 글꼴로 바로 그린다(알림 띠만 뜬다).
+    // 예전 빌드의 「로컬 글꼴 감지」 창이 남아 있으면 닫는다.
+    await page.evaluate(() => {
+      [...document.querySelectorAll('button')].find((x) => x.textContent?.trim() === '대체 글꼴로 보기')?.click();
+    });
     // 첫 조판·글꼴 로드·첫 쪽 그리기가 가라앉을 시간
     await page.waitForFunction(() => {
       const pages = document.querySelectorAll('#scroll-container canvas');

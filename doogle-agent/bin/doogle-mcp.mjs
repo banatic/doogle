@@ -233,7 +233,8 @@ const server = new Server(
   { capabilities: { tools: {}, resources: {} }, instructions: TOOL_RULES },
 );
 
-const MCP_TOOLS = toolsForProvider('mcp');
+// 대화 제어 tool(질문 카드)은 두글 사이드바 대화 전용이라 외부 에이전트에는 싣지 않는다.
+const MCP_TOOLS = toolsForProvider('mcp', { filter: (t) => t.kind !== 'control' });
 
 server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: MCP_TOOLS }));
 

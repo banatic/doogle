@@ -41,6 +41,7 @@
   --dg-x-r-md: var(--dg-r-md, 8px);
   --dg-x-r-lg: var(--dg-r-lg, 20px);
 
+  container: dg-panel / inline-size;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -639,6 +640,114 @@
   line-height: 1.5;
 }
 
+/* 검토 머리줄 — 대화가 길어도 입력창 바로 위에 붙어 "모두 적용"이 보인다 */
+.dg-review-bar {
+  flex-shrink: 0;
+  margin: 0 16px 8px;
+  padding: 8px 10px 8px 14px;
+  background: var(--dg-x-surface);
+  border: 1px solid var(--dg-x-soft-border);
+  border-radius: var(--dg-x-r-md);
+  box-shadow: 0 -6px 12px -8px rgba(15, 23, 42, 0.18);
+}
+
+/* 끝난 편집 한 줄 — 도구 묶음을 펼치지 않아도 무엇을 했는지 보인다 */
+.dg-done {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--dg-x-text2);
+}
+
+.dg-done-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.dg-done-item > svg {
+  flex-shrink: 0;
+  margin-top: 3px;
+  color: var(--dg-x-ok);
+}
+
+/* 질문 카드 — 에이전트의 되묻기를 선택 단추로 */
+.dg-ask {
+  gap: 10px;
+  border-color: var(--dg-x-soft-border);
+}
+
+.dg-ask-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dg-ask-opt {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-height: 36px;
+  padding: 8px 12px;
+  border: 1px solid var(--dg-x-border);
+  border-radius: var(--dg-x-r-md);
+  background: var(--dg-x-surface);
+  font-size: 13px !important;
+  color: var(--dg-x-text) !important;
+  text-align: left;
+  justify-content: center;
+}
+
+.dg-ask-opt:hover:not(:disabled) {
+  border-color: var(--dg-x-soft-border);
+  background: var(--dg-x-soft);
+  color: var(--dg-x-soft-text) !important;
+}
+
+.dg-ask-label {
+  font-weight: 500;
+}
+
+.dg-ask-desc {
+  font-size: 12px;
+  color: var(--dg-x-muted);
+}
+
+.dg-ask-other {
+  border-style: dashed;
+  color: var(--dg-x-muted) !important;
+}
+
+.dg-ask-opt[aria-pressed='true'] {
+  border-color: var(--dg-x-accent);
+  background: var(--dg-x-soft);
+  color: var(--dg-x-soft-text) !important;
+  opacity: 1 !important;
+}
+
+.dg-ask[data-answered] .dg-ask-opt:not([aria-pressed='true']) {
+  display: none;
+}
+
+.dg-ask-wait {
+  display: none;
+  margin: 0;
+  font-size: 12px;
+  color: var(--dg-x-muted);
+}
+
+.dg-ask[data-waiting='1'] .dg-ask-wait {
+  display: block;
+}
+
 /* 메시지 동작 */
 .dg-actions {
   display: flex;
@@ -743,6 +852,17 @@
   white-space: nowrap;
 }
 
+/* 좁은 패널: 적용 방식은 아이콘만(이름은 툴팁·aria-label 에 있다) — 모델 이름에 자리를 준다 */
+@container dg-panel (max-width: 372px) {
+  .dg-mode-chip {
+    width: 32px;
+    padding: 0;
+  }
+  .dg-mode-chip > span {
+    display: none;
+  }
+}
+
 .dg-mode-chip:hover:not(:disabled),
 .dg-model-btn:hover:not(:disabled) {
   background: var(--dg-x-hover);
@@ -756,7 +876,9 @@
 
 .dg-model-btn {
   height: 32px;
-  max-width: 150px;
+  min-width: 0;
+  max-width: 200px;
+  flex-shrink: 1;
   padding: 0 8px;
   border: 0;
   background: transparent;
@@ -1216,7 +1338,47 @@
   flex-basis: 100%;
   padding-left: 20px;
   font-size: 12px;
+  color: var(--dg-x-muted);
+  overflow-wrap: anywhere;
+}
+
+/* 끝내 해내지 못한 실패만 경고색 — 에이전트가 다시 해낸 것(retried)은 흐린 글로 둔다 */
+.dg-tool[data-state='error'] > .dg-tool-reason,
+.dg-tool-item[data-state='error'] > .dg-tool-reason {
   color: var(--dg-x-bad);
+}
+
+.dg-tool[data-state='failed'] .dg-tool-status,
+.dg-tool[data-state='retried'] .dg-tool-status {
+  background: var(--dg-x-warn-border);
+  box-shadow: inset 0 0 0 1px var(--dg-x-warn);
+  transform: scale(0.7);
+}
+
+/* 실패 원문(영어 안내)은 접어 둔다 */
+.dg-tool-raw {
+  flex-basis: 100%;
+  padding-left: 20px;
+  font-size: 12px;
+  color: var(--dg-x-muted);
+}
+
+.dg-tool-raw > summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--dg-x-hint);
+}
+
+.dg-tool-raw > code {
+  display: block;
+  margin-top: 4px;
+  padding: 6px 8px;
+  border-radius: var(--dg-x-r-sm);
+  background: var(--dg-x-bubble);
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 

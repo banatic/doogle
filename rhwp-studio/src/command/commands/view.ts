@@ -306,6 +306,20 @@ export const viewCommands: CommandDef[] = [
       applyZoomFit(services, 'fitWidth');
     },
   },
+  {
+    // [doogle] 배율을 수치로 정한다 — 좁은 창에서 문서를 폭에 맞춰 잠깐 줄였다 되돌릴 때 쓴다
+    // (doogle/shell/narrow-fit.ts). 폭 맞춤·쪽 맞춤과 달리 맞춤 규칙을 새로 저장하지 않는다.
+    id: 'view:zoom-set',
+    label: '배율 지정',
+    execute(services, params) {
+      const percent = Number((params as { percent?: unknown } | undefined)?.percent);
+      if (!Number.isFinite(percent) || percent <= 0) return;
+      const vm = services.getViewportManager();
+      // 사용자가 고른 맞춤 규칙이 있으면 그대로 둔다 — 그때는 이미 폭에 맞아 있다.
+      if (!vm || vm.getZoomFitMode() !== 'none') return;
+      vm.setZoom(percent / 100);
+    },
+  },
   zoomLevel(50),
   zoomLevel(75),
   zoomLevel(100, 'Ctrl+G,Q'),

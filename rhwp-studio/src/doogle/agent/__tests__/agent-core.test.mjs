@@ -6,10 +6,14 @@ import { resolveAnchor, looseWhitespacePattern, parseAnchorArgs, buildAnchorScop
 import { EditJournal } from '../edit-journal.ts';
 import { RevisionTracker } from '../revision.ts';
 import { createDoogleAgentRuntime } from '../runtime.ts';
-import { describeChange, formatChips } from '../../review/describe.ts';
+import { colorName, describeChange, formatChips, locationOf } from '../../review/describe.ts';
 import { ReviewStore } from '../../review/state.ts';
-import { describeToolCall, parseBatchFailures } from '../../ui/tool-presentation.ts';
-import { matchReviewKey, impactSentence, chainSentence, gutterPositions } from '../../review/keys.ts';
+import {
+  describeToolCall, doneText, formatToolFailure, needsUserAction, parseBatchFailures, progressText, progressive,
+} from '../../ui/tool-presentation.ts';
+import { matchReviewKey, impactSentence, chainSentence, gutterPositions, rejectLabel } from '../../review/keys.ts';
+import { nextAutoFit } from '../../shell/narrow-fit.ts';
+import { fontNoticeText } from '../../shell/font-notice.ts';
 
 // ─── 가짜 원천 / 엔진 ──────────────────────────────────
 
@@ -265,10 +269,169 @@ test('executor: per-change review — accept keeps, rejectFrom restores that cha
   rt.pending.accept(list[0].id);
   assert.equal(rt.pending.hasPending(), false);
   assert.deepEqual(doc.paras, ['하나1', '둘2', '셋']);
-  assert.equal(doc.snaps.size, 0, 'all review snapshots discarded');
+  // 적용한 묶음을 한 번에 되돌릴 지점(묶음 시작 직전 스냅샷) 하나만 남는다
+  assert.equal(doc.snaps.size, 1, 'only the revert point survives');
+  assert.deepEqual(rt.pending.revertInfo(), { threadId: 'A', ids: [list[0].id, list[1].id], count: 2 });
+  rt.dispose();
+  assert.equal(doc.snaps.size, 0, 'dispose discards the revert point');
+});
+
+test('pending: applied edits can be reverted in one step until the document changes', async () => {
+  const doc = new FakeDoc(['하나', '둘']);
+  const undo = [];
+  const rt = createDoogleAgentRuntime(fakeDeps(doc, undo));
+  const ctx = { origin: 'agent', threadId: 'A', mode: 'agent' };
+  const write = (paraIdx, text) => rt.executeTool('insert_text', { expectedRevision: rt.revision(), paraIdx, text }, ctx);
+  assert.equal(rt.pending.revertInfo(), null, 'nothing applied yet');
+  assert.ok((await write(0, '1')).ok);
+  assert.ok((await write(1, '2')).ok);
+  assert.equal(rt.pending.revertInfo(), null, 'still pending — "모두 거절" is the way back');
+  const seen = [];
+  rt.pending.onChange((e) => seen.push(e.kind));
+  assert.equal(rt.pending.acceptAll().accepted, 2);
+  assert.equal(rt.pending.revertInfo()?.count, 2);
+  // 한 번에 요청 전 상태로 — transaction 한 번(되돌리기 1단계)
+  const steps = undo.length;
+  assert.deepEqual(rt.pending.revertAccepted(), { reverted: 2 });
+  assert.deepEqual(doc.paras, ['하나', '둘']);
+  assert.equal(undo.length, steps + 1);
+  assert.equal(undo.at(-1).label, 'doogle:revert-accepted-edits');
+  assert.equal(seen.at(-1), 'reverted');
+  assert.equal(rt.pending.revertInfo(), null, 'one shot');
+  assert.equal(doc.snaps.size, 0);
+  assert.deepEqual(rt.pending.revertAccepted(), { reverted: 0 });
+
+  // 적용 뒤 문서가 바뀌면(새 쓰기) 되돌림 지점은 사라진다 — 그때는 실행 취소가 맞는 길이다
+  assert.ok((await write(0, 'a')).ok);
+  rt.pending.acceptAll();
+  assert.equal(rt.pending.revertInfo()?.count, 1);
+  assert.ok((await write(1, 'b')).ok);
+  assert.equal(rt.pending.revertInfo(), null);
+  rt.pending.rejectAll();
+  assert.deepEqual(doc.paras, ['하나a', '둘'], 'rejecting the new batch keeps the applied one');
+  assert.equal(rt.pending.revertInfo(), null, 'a fully rejected batch leaves nothing to revert');
+  assert.equal(doc.snaps.size, 0);
+});
+
+test('pending: no one-step revert when the user edited the document while edits were pending', async () => {
+  const doc = new FakeDoc(['가', '나']);
+  const events = eventSource();
+  const rt = createDoogleAgentRuntime({ ...fakeDeps(doc), events });
+  const ctx = { origin: 'agent', threadId: 'A', mode: 'agent' };
+  assert.ok((await rt.executeTool('insert_text', { expectedRevision: rt.revision(), paraIdx: 0, text: '1' }, ctx)).ok);
+  await tick();
+  doc.paras[1] += 'U'; // 사용자 직접 편집
+  events.emit('document-changed');
+  await tick();
+  rt.pending.acceptAll();
+  assert.equal(rt.pending.revertInfo(), null, 'restoring the snapshot would also drop the user edit');
+  assert.equal(doc.snaps.size, 0);
 });
 
 // ─── 검토 흐름 (UI_AUDIT 3.3) ─────────────────────────
+
+test('review rows: one line per kind, page + lead text for location, colour by name', async () => {
+  const doc = new FakeDoc(['사업명', '홈페이지 구축 계획', '사업 기간', '담당']);
+  const rt = createDoogleAgentRuntime(fakeDeps(doc));
+  const ctx = { origin: 'agent', threadId: 'A', mode: 'agent' };
+  const r = await rt.executeTool('apply_edits', {
+    expectedRevision: rt.revision(),
+    edits: [
+      { tool: 'apply_char_format', paraIdx: 0, bold: true, fontSizePt: 13, textColor: '#1f4e79' },
+      { tool: 'replace_range', find: '홈페이지 구축', text: '누리집 구축' },
+      { tool: 'apply_char_format', paraIdx: 2, bold: true, fontSizePt: 13, textColor: '#1f4e79' },
+    ],
+  }, ctx);
+  assert.ok(r.ok, JSON.stringify(r));
+  const [cs] = rt.pending.list('A');
+  assert.deepEqual(cs.targets.map((t) => t.item), [0, 1, 2]);
+  const view = describeChange(cs);
+  // 같은 서식 두 곳은 한 줄로 합치고, 글 바꾸기는 따로 보인다 (예전: "외 3곳 외 1곳", 글 바꾸기는 안 보임)
+  assert.equal(view.lines.length, 2);
+  const [format, text] = view.lines;
+  assert.equal(format.where, '1쪽 “사업명” 외 1곳');
+  assert.equal(format.count, 2);
+  assert.deepEqual(format.chips.map((c) => c.text), ['굵게', '10pt → 13pt', '진한 파랑']);
+  assert.equal(format.chips[2].swatch, '#1f4e79');
+  assert.equal(text.where, '1쪽 “누리집 구축 계획”');
+  assert.equal(text.del, '홈페이지 구축');
+  assert.equal(text.ins, '누리집 구축');
+  for (const line of view.lines) assert.doesNotMatch(`${line.where} ${line.label}`, /¶|#[0-9a-f]{6}/i);
+
+  assert.equal(colorName('#000000'), '검정');
+  assert.equal(colorName('#ff0000'), '빨강');
+  assert.equal(colorName('#808080'), '회색');
+  assert.equal(colorName('#1f4e79'), '진한 파랑');
+  assert.equal(colorName('남색'), '');
+  // 위치: 표·구역·쪽만 아는 경우
+  assert.equal(locationOf('set_page_layout', { sectionIdx: 0, paraIdx: 0, charOffset: 0, length: 0, wholeSection: true }), '쪽 설정');
+  assert.equal(locationOf('edit_table', { sectionIdx: 0, paraIdx: 5, charOffset: 0, length: 0, table: { paraIdx: 5, controlIdx: 0 }, page: 2 }), '3쪽 표');
+  assert.equal(locationOf('insert_text', { sectionIdx: 0, paraIdx: 1, charOffset: 0, length: 0, cell: { paraIdx: 5, controlIdx: 0, cellIdx: 3 }, page: 2, lead: '합계' }), '3쪽 표 안 “합계”');
+  assert.equal(locationOf('insert_text', { sectionIdx: 0, paraIdx: 7, charOffset: 0, length: 0 }), '8번째 문단');
+});
+
+test('review rows: reject button names how many changes go back', () => {
+  assert.equal(rejectLabel({ count: 1, later: 0, kept: 0, userEdits: false }), '되돌리기');
+  assert.equal(rejectLabel({ count: 2, later: 1, kept: 0, userEdits: false }), '여기부터 되돌리기 (2건)');
+});
+
+test('progress line and tool failures speak to the user, not the model', () => {
+  assert.equal(progressive('문서 구조 읽기'), '문서 구조 읽는 중');
+  assert.equal(progressive('텍스트 바꾸기'), '텍스트 바꾸는 중');
+  assert.equal(progressive('표 삭제'), '표 지우는 중');
+  assert.equal(progressive('글자 서식'), '글자 서식 바꾸는 중');
+  const format = (paraIdx) => ({ tool: 'apply_char_format', paraIdx, bold: true });
+  const batch = describeToolCall('apply_edits', { edits: [format(1), format(2), format(3)] });
+  assert.equal(progressText(batch), '3곳 글자 서식 바꾸는 중');
+  assert.equal(doneText(batch), '3곳 편집 · 글자 서식');
+  const mixed = describeToolCall('apply_edits', { edits: [format(1), { tool: 'replace_range', find: 'a', text: 'b' }] });
+  assert.equal(progressText(mixed), '2곳 편집하는 중');
+  assert.equal(doneText(mixed), '2곳 편집 · 글자 서식, 텍스트 바꾸기');
+  assert.equal(progressText(describeToolCall('get_structure', {})), '문서 구조 읽는 중');
+  // 문단 번호가 든 요약은 남기지 않는다
+  assert.equal(doneText(describeToolCall('insert_text', { paraIdx: 3, text: '추가' })), '텍스트 삽입');
+  assert.equal(doneText(describeToolCall('replace_all', { query: '사업', replacement: '프로젝트' })), '모두 바꾸기 · “사업” → “프로젝트”');
+
+  // 영어 원문은 본문에 쓰지 않고(raw 로만 남는다) 한국어 한 줄로
+  const raw = 'INVALID_ARGS: find "없는 글" matched nothing in the document — check the exact wording with find_text';
+  const failure = formatToolFailure(raw);
+  assert.equal(failure.text, '바꿀 글을 찾지 못했습니다.');
+  assert.equal(failure.code, 'INVALID_ARGS');
+  assert.equal(failure.raw, raw);
+  assert.equal(formatToolFailure('INVALID_ARGS: find "가" is ambiguous — 3 matches; pass occurrence').text, '같은 글이 여러 곳에 있어 자리를 정하지 못했습니다.');
+  assert.doesNotMatch(formatToolFailure('SOMETHING_NEW: an english sentence for the model').text, /[a-z]{4,}/);
+  assert.doesNotMatch(formatToolFailure('free english text without a code').text, /[a-z]{4,}/);
+  // 사용자가 손써야 풀리는 실패만 강조 카드로
+  assert.equal(needsUserAction('NO_DOCUMENT'), true);
+  assert.equal(needsUserAction('EDITOR_BLOCKED'), true);
+  assert.equal(needsUserAction('INVALID_ARGS'), false);
+  assert.equal(needsUserAction(undefined), false);
+});
+
+test('narrow window: zoom shrinks to fit, restores when there is room, and yields to the user', () => {
+  // 넓은 창에서는 손대지 않는다
+  assert.deepEqual(nextAutoFit(null, 100, 70, false), { auto: null, set: null });
+  // 좁아져 쪽이 넘치면 폭에 맞춘다
+  const shrunk = nextAutoFit(null, 100, 78, true);
+  assert.deepEqual(shrunk, { auto: { prev: 100, applied: 78 }, set: 78 });
+  // 더 좁아지면 더 줄이고, 자리가 조금 나면 원래 배율을 넘지 않게 키운다
+  assert.deepEqual(nextAutoFit(shrunk.auto, 78, 60, true), { auto: { prev: 100, applied: 60 }, set: 60 });
+  assert.deepEqual(nextAutoFit({ prev: 100, applied: 60 }, 60, 90, true), { auto: { prev: 100, applied: 90 }, set: 90 });
+  // 창이 넓어지면 원래 배율로 돌아가고 손을 뗀다
+  assert.deepEqual(nextAutoFit(shrunk.auto, 78, 120, false), { auto: null, set: 100 });
+  assert.deepEqual(nextAutoFit(shrunk.auto, 78, 130, true), { auto: null, set: 100 });
+  // 사용자가 배율을 직접 바꿨으면(우리가 넣은 값과 다르다) 되돌리지 않는다
+  assert.deepEqual(nextAutoFit(shrunk.auto, 50, 120, false), { auto: null, set: null });
+  // 이미 들어와 있으면 그대로
+  assert.deepEqual(nextAutoFit(null, 70, 78, true), { auto: null, set: null });
+});
+
+test('font notice: says "not checked yet" until the fonts were actually looked for', () => {
+  const font = (status) => ({ name: 'HY견고딕', status, substitute: null });
+  assert.equal(fontNoticeText([]), '');
+  assert.match(fontNoticeText([font('missing'), font('web-substitute')]), /글꼴 2개가 이 컴퓨터에 없어 비슷한 글꼴로 보입니다/);
+  assert.match(fontNoticeText([font('needs-local-check'), font('missing')]), /글꼴 2개를 이 컴퓨터에서 아직 확인하지 않아/);
+});
 
 function eventSource() {
   const handlers = new Map();
@@ -319,9 +482,12 @@ test('pending: format writes record before/after props; describe renders chips',
   assert.deepEqual(cs.formats[0].before, { bold: false, fontSize: 1000 });
   assert.deepEqual(cs.formats[0].after, { bold: true, fontSize: 1200 });
   const view = describeChange(cs);
-  assert.deepEqual(view.chips, ['굵게', '10pt → 12pt']);
+  assert.deepEqual(view.chips, [{ text: '굵게' }, { text: '10pt → 12pt' }]);
   assert.equal(view.summary, '글자 서식');
-  assert.equal(view.location, '1쪽 ¶1');
+  // 위치는 쪽 + 찾은 글 — 문단 번호(¶1)는 쓰지 않는다
+  assert.equal(view.location, '1쪽 “원문”');
+  assert.equal(cs.targets[0].page, 0);
+  assert.equal(cs.targets[0].lead, '원문 둘째');
   assert.deepEqual(
     formatChips({ kind: 'para', keys: ['alignment', 'lineSpacing'], before: { alignment: 'left', lineSpacing: 160, lineSpacingType: 'Percent' }, after: { alignment: 'justify', lineSpacing: 180, lineSpacingType: 'Percent' } }),
     ['왼쪽 → 양쪽', '줄간격 160% → 180%'],

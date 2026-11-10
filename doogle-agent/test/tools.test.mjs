@@ -41,7 +41,7 @@ test('tool list: unique names, v1 only, every tool has kind/label/description', 
     assert.equal(getTool(t.name), t);
   }
   const count = (kind) => TOOLS.filter((t) => t.kind === kind).length;
-  assert.deepEqual({ read: count('read'), write: count('write'), control: count('control') }, { read: 21, write: 31, control: 0 });
+  assert.deepEqual({ read: count('read'), write: count('write'), control: count('control') }, { read: 21, write: 31, control: 1 });
   for (const n of ['get_structure', 'find_text', 'render_page', 'read_batch', 'insert_text', 'replace_range', 'apply_edits',
     'apply_engine_edits', 'insert_image', 'insert_paragraphs', 'delete_paragraphs', 'move_paragraphs']) {
     assert.ok(getTool(n), `missing ${n}`);
@@ -49,12 +49,27 @@ test('tool list: unique names, v1 only, every tool has kind/label/description', 
 });
 
 test('실행기가 없는 도구는 싣지 않는다 (모델이 부르면 반드시 실패한다)', () => {
-  // 대화 제어 4개는 hub·사이드바에 응답 화면이 없고, insert_chart·set_caption 은 엔진 경로가 없다.
-  for (const n of ['ask_user_question', 'request_permission', 'present_implementation_plan', 'update_todos', 'insert_chart']) {
+  // 대화 제어 3개는 hub·사이드바에 응답 화면이 없고, insert_chart·set_caption 은 엔진 경로가 없다.
+  for (const n of ['request_permission', 'present_implementation_plan', 'update_todos', 'insert_chart']) {
     assert.equal(getTool(n), undefined, `${n} must not be exposed`);
   }
   assert.doesNotMatch(getTool('edit_table').description, /set_caption/);
   bad('edit_table', { expectedRevision: 1, sectionIdx: 0, paraIdx: 5, controlIdx: 0, op: 'set_caption', text: 'x' });
+});
+
+test('ask_user_question: 질문 하나 + 선택지 2~4개, 외부 MCP 에는 싣지 않는다', () => {
+  const two = [{ label: '장 제목 7개만' }, { label: '두 단계 모두', description: '장 제목과 하위 제목' }];
+  ok('ask_user_question', { question: '어느 범위를 바꿀까요?', options: two });
+  ok('ask_user_question', { question: '어느 범위를 바꿀까요?', options: two, allowOther: false });
+  bad('ask_user_question', { question: '어느 범위를 바꿀까요?', options: [two[0]] });
+  bad('ask_user_question', { question: '', options: two });
+  bad('ask_user_question', { question: '범위?', options: [two[0], two[0]] }, /distinct labels/);
+  bad('ask_user_question', { question: '범위?', options: [...two, { label: '셋' }, { label: '넷' }, { label: '다섯' }] });
+  assert.equal(getTool('ask_user_question').kind, 'control');
+  assert.equal(getTool('ask_user_question').shape.expectedRevision, undefined);
+  const mcp = toolsForProvider('mcp', { filter: (t) => t.kind !== 'control' });
+  assert.equal(mcp.some((t) => t.name === 'ask_user_question'), false);
+  assert.equal(toolsForProvider('anthropic').some((t) => t.name === 'ask_user_question'), true);
 });
 
 test('get_structure 범례는 TOOL_RULES 에 한 번만 있다', () => {
