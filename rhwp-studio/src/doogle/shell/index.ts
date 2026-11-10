@@ -1,7 +1,7 @@
 /**
  * 두글 셸 — 시안 F 의 제목 막대 + 리본 + 상태 표시줄 보강.
  *
- * upstream 화면(#menu-bar·#icon-toolbar·#style-bar)은 지우지 않고 CSS 로 숨긴다(`:root[data-doogle]`).
+ * upstream 화면(#menu-bar·#icon-toolbar·#style-bar)은 doogle.html 에서는 숨긴 묶음에 두고, index.html?doogle=1 에서는 CSS 로 숨긴다(`:root[data-doogle]`).
  * 컨트롤러(MenuBar·Toolbar·단축키)는 그대로 살아 있고, 셸은 그 위에 다른 겉모습을 얹는다.
  *
  *  - `mountShell()`      : 두글 모드 판정 직후(모듈 로드 시) 한 번. DOM 을 짓고 data-doogle 을 찍는다.
