@@ -475,6 +475,7 @@ impl DocumentCore {
             next_snapshot_id: 0,
             fragment_store: Vec::new(),
             next_fragment_id: 0,
+            doogle: Default::default(),
             section_raw_store: Vec::new(),
             next_section_raw_id: 0,
             border_paint_store: Vec::new(),
@@ -2571,6 +2572,8 @@ impl DocumentCore {
         self.invalidate_page_tree_cache();
         self.snapshot_store.clear();
         self.next_snapshot_id = 0;
+        // doogle: 새 문서를 열면 이전 문서의 문단 보관본을 버린다.
+        self.doogle = Default::default();
         self.source_format = crate::parser::FileFormat::Hwp;
         #[cfg(feature = "pdf-import")]
         {

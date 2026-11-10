@@ -1,0 +1,66 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "두글",
+  "mainBinaryName": "doogle",
+  "version": "0.1.0",
+  "identifier": "com.banatic.doogle",
+  "build": {
+    "devUrl": "http://127.0.0.1:7700",
+    "frontendDist": "../rhwp-studio/dist",
+    "beforeDevCommand": { "script": "npm run dev", "cwd": "../rhwp-studio", "wait": false },
+    "beforeBuildCommand": { "script": "npm run build", "cwd": "../rhwp-studio" }
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "label": "main",
+        "title": "두글",
+        "width": 1400,
+        "height": 900,
+        "minWidth": 800,
+        "minHeight": 560,
+        "dragDropEnabled": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "app", "dmg", "appimage", "deb"],
+    "category": "Productivity",
+    "shortDescription": "HWP/HWPX 편집기 + AI 문서 편집 에이전트",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "fileAssociations": [
+      {
+        "ext": ["hwp"],
+        "name": "HWP document",
+        "description": "한글 문서",
+        "role": "Editor"
+      },
+      {
+        "ext": ["hwpx"],
+        "name": "HWPX document",
+        "description": "한글 문서 (HWPX)",
+        "role": "Editor"
+      }
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["Korean", "English"]
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "11.0"
+    }
+  }
+}

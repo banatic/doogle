@@ -37,6 +37,8 @@ pub use host_font_environment::{
     DeclaredFontFallbackRequest, ObservedFontFallback, ObservedFontSource,
 };
 mod commands;
+// 두글(doogle) 에이전트용 추가 API — banatic/rhwp-x (MIT) 에서 이식.
+pub(crate) mod doogle;
 pub use commands::paragraph_block::{
     FillTemplateRequest, FillTemplateResult, ImportParagraphBlockLimits,
     ImportParagraphBlockPreview, ImportParagraphBlockRequest, ImportParagraphBlockResult,
@@ -318,6 +320,8 @@ pub struct DocumentCore {
     pub(crate) fragment_store: Vec<(u32, commands::delete_fragment::DeleteFragment)>,
     /// 다음 삭제 조각 ID
     pub(crate) next_fragment_id: u32,
+    /// 두글(doogle) 에이전트 전용 상태 (문단 보관본 등).
+    pub(crate) doogle: doogle::DoogleState,
     /// [#5769] Stage 4 구역 raw 저널 (ID → SectionRawCapture).
     /// 조각 저장소와 ID 계열을 나눈다. 자동 축출 없음 — discardSectionRaw 계약.
     pub(crate) section_raw_store: Vec<(u32, commands::section_raw_journal::SectionRawCapture)>,
@@ -630,6 +634,7 @@ impl DocumentCore {
             next_snapshot_id: 0,
             fragment_store: Vec::new(),
             next_fragment_id: 0,
+            doogle: Default::default(),
             section_raw_store: Vec::new(),
             next_section_raw_id: 0,
             border_paint_store: Vec::new(),

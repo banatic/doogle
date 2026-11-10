@@ -45,6 +45,8 @@ use crate::renderer::DEFAULT_DPI;
 #[cfg(target_arch = "wasm32")]
 mod bitmap_raster;
 mod canvas_metrics;
+// 두글(doogle) 에이전트용 export — banatic/rhwp-x (MIT) 에서 이식.
+mod doogle_agent;
 mod footnote_shape;
 mod form_action;
 mod host_font_environment;

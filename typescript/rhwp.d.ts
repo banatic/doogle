@@ -87,6 +87,80 @@ export class HwpDocument {
   /** 현재 DPI를 반환한다. */
   getDpi(): number;
 
+  // ─── 두글(doogle) 에이전트 API — banatic/rhwp-x (MIT) 에서 이식 ───────────
+  // 목록·상태: docs/doogle/ENGINE_GAPS.md. 반환 JSON 은 rhwp-x 와 같다.
+
+  /** 본문 문단 하나를 통째로 보관하고 보관 ID를 반환한다 (대기 편집 역연산). */
+  captureParagraph(sec: number, para: number): number;
+  /** 보관본으로 지정 위치의 본문 문단을 되돌린다. 보관본은 유지된다. */
+  restoreCapturedParagraph(id: number, sec: number, para: number): void;
+  /** 보관본을 해제한다. */
+  discardParagraphCapture(id: number): void;
+  /** 레이아웃을 뺀 본문 문단 내용 지문 (16자리 hex). */
+  getParagraphContentDigest(sec: number, para: number): string;
+
+  /** `getPageInfo` 결과의 JSON 배열. */
+  getAllPageInfo(): string;
+  /** 쪽의 줄 배치 JSON `{"lines":[{x,y,w,h,bl,sec?,para?,cs?,ce?,tx0?,tx1?,area?,cell?:{pp,path},runs:[[x,w,cs,ce]]}]}` (px). */
+  getPageLineLayout(pageNum: number): string;
+  /**
+   * 그림/수식 렌더 경계 JSON `{"pageIndex","x","y","width","height"}`.
+   * doogle 제한: 셀 안 그림 미지원, 셀 수식은 깊이 1 경로만, innerControlIdx 무시(셀 문단의 첫 수식).
+   */
+  getObjectBBox(
+    kind: 'image' | 'equation',
+    sec: number,
+    parentPara: number,
+    controlIdx: number,
+    cellIdx?: number,
+    cellParaIdx?: number,
+    innerControlIdx?: number,
+    cellPathJson?: string,
+  ): string;
+  /** 선택 범위에 통째로 든 표 주소 JSON `[{sec,ppi,ci,cellPath}]`. 본문은 containerPathJson = "[]". */
+  getTableControlsInSelection(
+    sec: number,
+    parentPara: number,
+    containerPathJson: string,
+    startPara: number,
+    startOffset: number,
+    endPara: number,
+    endOffset: number,
+  ): string;
+  /** 등록 글꼴 목록 JSON `[{lang,id,name}]` (대체 해소 없는 원본 이름). */
+  getFontList(): string;
+
+  /** 셀 문단: 캐럿 논리 오프셋 → 텍스트 오프셋. */
+  logicalToTextOffsetInCell(sec: number, parentPara: number, controlIdx: number, cellIdx: number, cellParaIdx: number, logicalOffset: number): number;
+  /** 중첩 셀 문단: 캐럿 논리 오프셋 → 텍스트 오프셋. */
+  logicalToTextOffsetInCellByPath(sec: number, parentPara: number, pathJson: string, logicalOffset: number): number;
+  /** 중첩 셀 문단: 텍스트 오프셋 → 캐럿 논리 오프셋. */
+  textToLogicalOffsetInCellByPath(sec: number, parentPara: number, pathJson: string, textOffset: number): number;
+  /** 중첩 셀 문단의 캐럿 길이 (텍스트 + 인라인 개체 슬롯). */
+  getCellLogicalLengthByPath(sec: number, parentPara: number, pathJson: string): number;
+
+  /** 열 폭(HWPUNIT) 지정. 반환 `{"ok":true,"colCount":N,"tableWidth":W}`. */
+  setTableColumnWidths(sec: number, parentPara: number, controlIdx: number, widths: Uint32Array | number[]): string;
+  /** 표를 본문 폭에 맞춰 비례 축소 (축소 전용). */
+  fitTableToPage(sec: number, parentPara: number, controlIdx: number): string;
+  /** 최상위 floating 개체 z-order. 반환 `{"ok":true,"zOrder":N}`. */
+  changeObjectZOrder(sec: number, parentPara: number, controlIdx: number, operation: 'front' | 'back' | 'forward' | 'backward'): string;
+
+  /** 셀 문단에 수식 삽입 (텍스트 오프셋). `logical=true` 는 오류. 반환 `{"ok":true,"cellParaIdx","controlIdx"}`. */
+  insertEquationInCell(sec: number, parentPara: number, controlIdx: number, cellIdx: number, cellParaIdx: number, charOffset: number, script: string, fontSizeHwpunit: number, color: number, logical?: boolean): string;
+  /** 중첩 셀 문단에 수식 삽입. */
+  insertEquationInCellByPath(sec: number, parentPara: number, cellPathJson: string, charOffset: number, script: string, fontSizeHwpunit: number, color: number, logical?: boolean): string;
+  /** 셀 문단의 수식 컨트롤 삭제. */
+  deleteEquationControlInCell(sec: number, parentPara: number, controlIdx: number, cellIdx: number, cellParaIdx: number, eqControlIdx: number): string;
+  /** 중첩 셀 문단의 수식 컨트롤 삭제. */
+  deleteEquationControlInCellByPath(sec: number, parentPara: number, cellPathJson: string, eqControlIdx: number): string;
+  /** 셀 문단 지정 수식의 스크립트 `{"ok":true,"script"}`. */
+  getEquationScriptInCellAt(sec: number, parentPara: number, controlIdx: number, cellIdx: number, cellParaIdx: number, eqControlIdx: number): string;
+  /** 수식 속성 (음수 셀 인자 = 본문 수식). */
+  getEquationPropertiesAt(sec: number, parentPara: number, controlIdx: number, cellIdx: number, cellParaIdx: number, innerControlIdx: number): string;
+  /** 중첩 셀 문단의 정확한 수식 속성. */
+  getEquationPropertiesByPath(sec: number, parentPara: number, cellPathJson: string, innerControlIdx: number): string;
+
   /** 메모리를 해제한다 (WASM). */
   free(): void;
 }

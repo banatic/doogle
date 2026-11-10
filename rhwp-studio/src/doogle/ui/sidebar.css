@@ -1,0 +1,463 @@
+/* 두글 에이전트 사이드바 — 접두어 dg- (upstream ai-panel.css 의 토큰·밀도를 따른다) */
+
+.dg-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 10px 12px 12px;
+  box-sizing: border-box;
+  font-size: var(--font-size-base);
+  color: var(--color-text);
+  gap: 8px;
+}
+
+.dg-panel [hidden] {
+  display: none !important;
+}
+
+/* 머리 */
+.dg-head {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: none;
+}
+
+.dg-pickers {
+  display: flex;
+  gap: 4px;
+}
+
+.dg-select {
+  flex: 1;
+  min-width: 0;
+  height: var(--control-height-md);
+  border: 1px solid var(--color-border-input);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: var(--font-size-sm);
+  padding: 0 4px;
+}
+
+.dg-head-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.dg-mode {
+  display: inline-flex;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.dg-mode-btn {
+  border: 0;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  padding: 3px 8px;
+  cursor: pointer;
+}
+
+.dg-mode-btn + .dg-mode-btn {
+  border-left: 1px solid var(--color-border);
+}
+
+.dg-mode-btn.dg-on {
+  background: var(--color-selected-bg);
+  color: var(--color-text);
+  font-weight: 600;
+}
+
+.dg-mode-btn:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.dg-head-tools {
+  display: flex;
+  gap: 2px;
+}
+
+.dg-icon-btn {
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  padding: 2px 6px;
+  cursor: pointer;
+}
+
+.dg-icon-btn:hover,
+.dg-mode-btn:not(:disabled):hover {
+  background: var(--color-hover-bg);
+}
+
+.dg-icon-btn:focus-visible,
+.dg-mode-btn:focus-visible,
+.dg-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* 연결·로그인 안내 */
+.dg-conn {
+  flex: none;
+  padding: 4px 8px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-light);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.dg-conn[data-state='unavailable'] {
+  background: var(--ui-warning-bg);
+  color: var(--ui-warning-text);
+}
+
+.dg-auth {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--ui-warning-border);
+  border-radius: var(--radius-md);
+  background: var(--ui-warning-bg);
+  color: var(--ui-warning-text);
+  line-height: 1.5;
+}
+
+.dg-auth p {
+  margin: 0;
+}
+
+.dg-auth-hint {
+  font-size: var(--font-size-sm);
+}
+
+/* 단추 */
+.dg-btn {
+  height: var(--control-height-md);
+  padding: 0 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.dg-btn:hover:not(:disabled) {
+  background: var(--color-hover-bg);
+}
+
+.dg-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.dg-btn-primary {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+  color: #fff;
+}
+
+.dg-btn-primary:hover:not(:disabled) {
+  background: var(--color-primary-dark);
+}
+
+.dg-btn-danger,
+.dg-btn-danger:hover:not(:disabled) {
+  border-color: var(--ui-danger-strong);
+  background: var(--ui-danger-strong);
+  color: #fff;
+}
+
+/* 대화 */
+.dg-chat {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  gap: 8px;
+}
+
+.dg-log {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-right: 2px;
+}
+
+.dg-empty {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+}
+
+.dg-msg {
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.dg-msg-user {
+  align-self: flex-end;
+  max-width: 88%;
+  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  background: var(--color-selected-bg);
+  white-space: pre-wrap;
+}
+
+.dg-msg-assistant {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dg-msg-assistant[data-usage]::after {
+  content: attr(data-usage);
+  color: var(--color-text-hint);
+  font-size: var(--font-size-xs);
+}
+
+.dg-msg-body.dg-streaming {
+  white-space: pre-wrap;
+}
+
+.dg-msg-body > :first-child { margin-top: 0; }
+.dg-msg-body > :last-child { margin-bottom: 0; }
+
+.dg-msg-body p,
+.dg-msg-body ul,
+.dg-msg-body ol,
+.dg-msg-body pre {
+  margin: 0 0 8px;
+}
+
+.dg-msg-body ul,
+.dg-msg-body ol {
+  padding-left: 20px;
+}
+
+.dg-msg-body code {
+  font-family: var(--font-family-mono);
+  font-size: 0.92em;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: var(--color-bg-light);
+}
+
+.dg-msg-body pre {
+  padding: 8px;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-light);
+  overflow-x: auto;
+}
+
+.dg-status {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.dg-status:empty {
+  display: none;
+}
+
+.dg-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.dg-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  max-width: 100%;
+  padding: 1px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.dg-chip[data-category='edit'] {
+  border-color: var(--color-primary-subtle);
+}
+
+.dg-chip-summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-muted);
+}
+
+.dg-chip[data-state='running'] .dg-chip-label::after {
+  content: ' …';
+}
+
+.dg-chip[data-state='done'] .dg-chip-label::before {
+  content: '✓ ';
+}
+
+.dg-chip[data-state='error'] {
+  border-color: var(--ui-danger-strong);
+  color: var(--ui-danger-strong);
+}
+
+.dg-chip[data-state='error'] .dg-chip-label::before {
+  content: '✕ ';
+}
+
+.dg-msg-external {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dg-external-tag {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+}
+
+.dg-notice {
+  padding: 4px 8px;
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+}
+
+.dg-notice-info {
+  color: var(--color-text-muted);
+}
+
+.dg-notice-limit {
+  border: 1px solid var(--ui-warning-border);
+  background: var(--ui-warning-bg);
+  color: var(--ui-warning-text);
+}
+
+.dg-notice-error {
+  background: var(--ui-danger-soft);
+  color: var(--ui-danger-strong);
+}
+
+/* 검토 대기 막대 */
+.dg-review {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--color-primary-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-accent-bg-light);
+}
+
+.dg-review-count {
+  flex: 1;
+  font-weight: 600;
+}
+
+/* 입력 */
+.dg-composer {
+  flex: none;
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.dg-input {
+  flex: 1;
+  min-width: 0;
+  resize: vertical;
+  min-height: 52px;
+  max-height: 40vh;
+  padding: 6px 8px;
+  border: 1px solid var(--color-border-input);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  line-height: 1.45;
+}
+
+.dg-input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+}
+
+/* 설정 */
+.dg-settings {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dg-settings-title {
+  margin: 0;
+  font-size: var(--font-size-md);
+}
+
+.dg-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.dg-field-label {
+  font-weight: 600;
+  font-size: var(--font-size-sm);
+}
+
+.dg-field-row {
+  display: flex;
+  gap: 4px;
+}
+
+.dg-field-input {
+  flex: 1;
+  min-width: 0;
+  height: var(--control-height-md);
+  padding: 0 6px;
+  border: 1px solid var(--color-border-input);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+}
+
+.dg-field-note:empty {
+  display: none;
+}
+
+.dg-field-note,
+.dg-hint {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+}
+
+.dg-settings-close {
+  align-self: flex-start;
+}

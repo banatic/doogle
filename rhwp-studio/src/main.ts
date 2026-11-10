@@ -31,6 +31,7 @@ import { AutomationHost } from '@/automation/host';
 import { getChromeVisibility, setChromeVisibility } from '@/automation/chrome';
 import type { ChromeVisibility } from '@/automation/types';
 import { PluginHostRegistry } from '@/plugin/host';
+import { isDoogleMode, dooglePlugin } from '@/doogle/index.ts';
 import type { StudioPlugin } from '@/plugin/types';
 import { CommandDispatcher } from '@/command/dispatcher';
 import type { EditorContext, CommandServices, EditorEditMode } from '@/command/types';
@@ -344,6 +345,7 @@ async function resolvePlugin(id: string): Promise<StudioPlugin> {
   if (__RHWP_AI__ && id === 'ai-assistant') {
     return (await import('@/ai/plugin')).aiAssistantPlugin;
   }
+  if (id === 'doogle' && isDoogleMode()) return dooglePlugin;
   if (import.meta.env.DEV && id === 'dev-probe') {
     return (await import('@/plugin/dev-probe-plugin')).devProbePlugin;
   }
@@ -2223,6 +2225,7 @@ void initPromise.then(() => {
   if (__RHWP_AI__ && sidePanels && window.parent === window) {
     plugins.load('ai-assistant').catch((error) => console.error('[main] AI 도우미 로드 실패', error));
   }
+  if (sidePanels && window.parent === window && isDoogleMode()) plugins.load('doogle').catch((error) => console.error('[main] 두글 로드 실패', error));
 });
 
 installEmbedRuntime({

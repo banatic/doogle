@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "두글 main window: core events (doogle://* listeners). Native dialogs and file IO go through app commands only.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

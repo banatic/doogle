@@ -898,6 +898,19 @@ export class HwpDocument {
         return ret[0] >>> 0;
     }
     /**
+     * 에이전트 대기 편집 전에 본문 문단 하나를 통째로 보관한다 (문단 단위 역연산).
+     * @param {number} section_idx
+     * @param {number} para_idx
+     * @returns {number}
+     */
+    captureParagraph(section_idx, para_idx) {
+        const ret = wasm.hwpdocument_captureParagraph(this.__wbg_ptr, section_idx, para_idx);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return ret[0] >>> 0;
+    }
+    /**
      * 그림 리사이즈 전에 원본 변환만 보관한다.
      * @param {string} target_json
      * @returns {number}
@@ -925,6 +938,35 @@ export class HwpDocument {
             throw takeFromExternrefTable0(ret[1]);
         }
         return ret[0] >>> 0;
+    }
+    /**
+     * 최상위 floating 개체(도형/그림/표/수식) z-order 변경.
+     * operation: "front" | "back" | "forward" | "backward". 반환: `{"ok":true,"zOrder":N}`
+     * @param {number} section_idx
+     * @param {number} parent_para_idx
+     * @param {number} control_idx
+     * @param {string} operation
+     * @returns {string}
+     */
+    changeObjectZOrder(section_idx, parent_para_idx, control_idx, operation) {
+        let deferred3_0;
+        let deferred3_1;
+        try {
+            const ptr0 = passStringToWasm0(operation, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ret = wasm.hwpdocument_changeObjectZOrder(this.__wbg_ptr, section_idx, parent_para_idx, control_idx, ptr0, len0);
+            var ptr2 = ret[0];
+            var len2 = ret[1];
+            if (ret[3]) {
+                ptr2 = 0; len2 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred3_0 = ptr2;
+            deferred3_1 = len2;
+            return getStringFromWasm0(ptr2, len2);
+        } finally {
+            wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+        }
     }
     /**
      * Shape z-order 변경
@@ -1887,6 +1929,62 @@ export class HwpDocument {
         }
     }
     /**
+     * 표 셀 문단에서 수식 컨트롤을 삭제한다. 반환: `{"ok":true}`
+     * @param {number} section_idx
+     * @param {number} parent_para_idx
+     * @param {number} control_idx
+     * @param {number} cell_idx
+     * @param {number} cell_para_idx
+     * @param {number} eq_control_idx
+     * @returns {string}
+     */
+    deleteEquationControlInCell(section_idx, parent_para_idx, control_idx, cell_idx, cell_para_idx, eq_control_idx) {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const ret = wasm.hwpdocument_deleteEquationControlInCell(this.__wbg_ptr, section_idx, parent_para_idx, control_idx, cell_idx, cell_para_idx, eq_control_idx);
+            var ptr1 = ret[0];
+            var len1 = ret[1];
+            if (ret[3]) {
+                ptr1 = 0; len1 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred2_0 = ptr1;
+            deferred2_1 = len1;
+            return getStringFromWasm0(ptr1, len1);
+        } finally {
+            wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
+     * 중첩 표 셀 문단에서 정확한 수식 컨트롤을 삭제한다.
+     * @param {number} section_idx
+     * @param {number} parent_para_idx
+     * @param {string} cell_path_json
+     * @param {number} eq_control_idx
+     * @returns {string}
+     */
+    deleteEquationControlInCellByPath(section_idx, parent_para_idx, cell_path_json, eq_control_idx) {
+        let deferred3_0;
+        let deferred3_1;
+        try {
+            const ptr0 = passStringToWasm0(cell_path_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ret = wasm.hwpdocument_deleteEquationControlInCellByPath(this.__wbg_ptr, section_idx, parent_para_idx, ptr0, len0, eq_control_idx);
+            var ptr2 = ret[0];
+            var len2 = ret[1];
+            if (ret[3]) {
+                ptr2 = 0; len2 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred3_0 = ptr2;
+            deferred3_1 = len2;
+            return getStringFromWasm0(ptr2, len2);
+        } finally {
+            wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+        }
+    }
+    /**
      * 본문 각주 컨트롤을 삭제한다.
      * @param {number} section_idx
      * @param {number} para_idx
@@ -2501,6 +2599,12 @@ export class HwpDocument {
     /**
      * @param {number} id
      */
+    discardParagraphCapture(id) {
+        wasm.hwpdocument_discardParagraphCapture(this.__wbg_ptr, id);
+    }
+    /**
+     * @param {number} id
+     */
     discardPictureTransform(id) {
         wasm.hwpdocument_discardPictureTransform(this.__wbg_ptr, id);
     }
@@ -3059,6 +3163,31 @@ export class HwpDocument {
         return ret;
     }
     /**
+     * 표를 본문 폭에 맞춰 비례 축소한다 (축소 전용). 반환: JSON `{"ok":true,...}`
+     * @param {number} section_idx
+     * @param {number} parent_para_idx
+     * @param {number} control_idx
+     * @returns {string}
+     */
+    fitTableToPage(section_idx, parent_para_idx, control_idx) {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const ret = wasm.hwpdocument_fitTableToPage(this.__wbg_ptr, section_idx, parent_para_idx, control_idx);
+            var ptr1 = ret[0];
+            var len1 = ret[1];
+            if (ret[3]) {
+                ptr1 = 0; len1 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred2_0 = ptr1;
+            deferred2_1 = len1;
+            return getStringFromWasm0(ptr1, len1);
+        } finally {
+            wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
      * 지연된 페이지네이션을 동기 barrier로 flush하고 최신 페이지 수를 반환한다.
      * @returns {string}
      */
@@ -3134,6 +3263,28 @@ export class HwpDocument {
         const len1 = WASM_VECTOR_LEN;
         const ret = wasm.hwpdocument_fontSupportsText(this.__wbg_ptr, ptr0, len0, face_index, ptr1, len1);
         return ret !== 0;
+    }
+    /**
+     * 전체 페이지 정보를 JSON 배열로 반환한다 (`getPageInfo` 결과의 배열).
+     * @returns {string}
+     */
+    getAllPageInfo() {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const ret = wasm.hwpdocument_getAllPageInfo(this.__wbg_ptr);
+            var ptr1 = ret[0];
+            var len1 = ret[1];
+            if (ret[3]) {
+                ptr1 = 0; len1 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred2_0 = ptr1;
+            deferred2_1 = len1;
+            return getStringFromWasm0(ptr1, len1);
+        } finally {
+            wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+        }
     }
     /**
      * [#4709] SVG 메트릭 face 주석 부착 여부를 반환한다.
@@ -3449,6 +3600,22 @@ export class HwpDocument {
         } finally {
             wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
         }
+    }
+    /**
+     * 셀 문단의 커서 길이: 텍스트와 인라인 개체 슬롯을 함께 센다.
+     * @param {number} section_idx
+     * @param {number} parent_para_idx
+     * @param {string} path_json
+     * @returns {number}
+     */
+    getCellLogicalLengthByPath(section_idx, parent_para_idx, path_json) {
+        const ptr0 = passStringToWasm0(path_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.hwpdocument_getCellLogicalLengthByPath(this.__wbg_ptr, section_idx, parent_para_idx, ptr0, len0);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return ret[0] >>> 0;
     }
     /**
      * 셀 고유 속성을 조회한다.
@@ -4564,6 +4731,90 @@ export class HwpDocument {
         }
     }
     /**
+     * 수식 속성 조회. 음수 셀 인자는 "없음"(본문 수식)이다.
+     * @param {number} section_idx
+     * @param {number} parent_para_idx
+     * @param {number} control_idx
+     * @param {number} cell_idx
+     * @param {number} cell_para_idx
+     * @param {number} inner_control_idx
+     * @returns {string}
+     */
+    getEquationPropertiesAt(section_idx, parent_para_idx, control_idx, cell_idx, cell_para_idx, inner_control_idx) {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const ret = wasm.hwpdocument_getEquationPropertiesAt(this.__wbg_ptr, section_idx, parent_para_idx, control_idx, cell_idx, cell_para_idx, inner_control_idx);
+            var ptr1 = ret[0];
+            var len1 = ret[1];
+            if (ret[3]) {
+                ptr1 = 0; len1 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred2_0 = ptr1;
+            deferred2_1 = len1;
+            return getStringFromWasm0(ptr1, len1);
+        } finally {
+            wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
+     * 중첩 표 셀 문단의 정확한 수식 컨트롤 속성.
+     * @param {number} section_idx
+     * @param {number} parent_para_idx
+     * @param {string} cell_path_json
+     * @param {number} inner_control_idx
+     * @returns {string}
+     */
+    getEquationPropertiesByPath(section_idx, parent_para_idx, cell_path_json, inner_control_idx) {
+        let deferred3_0;
+        let deferred3_1;
+        try {
+            const ptr0 = passStringToWasm0(cell_path_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ret = wasm.hwpdocument_getEquationPropertiesByPath(this.__wbg_ptr, section_idx, parent_para_idx, ptr0, len0, inner_control_idx);
+            var ptr2 = ret[0];
+            var len2 = ret[1];
+            if (ret[3]) {
+                ptr2 = 0; len2 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred3_0 = ptr2;
+            deferred3_1 = len2;
+            return getStringFromWasm0(ptr2, len2);
+        } finally {
+            wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+        }
+    }
+    /**
+     * 표 셀 문단의 지정 인덱스 수식 스크립트. 반환: `{"ok":true,"script":"..."}`
+     * @param {number} section_idx
+     * @param {number} parent_para_idx
+     * @param {number} control_idx
+     * @param {number} cell_idx
+     * @param {number} cell_para_idx
+     * @param {number} eq_control_idx
+     * @returns {string}
+     */
+    getEquationScriptInCellAt(section_idx, parent_para_idx, control_idx, cell_idx, cell_para_idx, eq_control_idx) {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const ret = wasm.hwpdocument_getEquationScriptInCellAt(this.__wbg_ptr, section_idx, parent_para_idx, control_idx, cell_idx, cell_para_idx, eq_control_idx);
+            var ptr1 = ret[0];
+            var len1 = ret[1];
+            if (ret[3]) {
+                ptr1 = 0; len1 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred2_0 = ptr1;
+            deferred2_1 = len1;
+            return getStringFromWasm0(ptr1, len1);
+        } finally {
+            wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
      * 현재 이벤트 로그를 JSON으로 반환한다.
      * @returns {string}
      */
@@ -4817,6 +5068,22 @@ export class HwpDocument {
             return getStringFromWasm0(ptr2, len2);
         } finally {
             wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+        }
+    }
+    /**
+     * 등록된 글꼴 목록. 반환: JSON `[{"lang":0,"id":0,"name":"..."}]` — 대체 해소 없는 원본 이름.
+     * @returns {string}
+     */
+    getFontList() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.hwpdocument_getFontList(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
         }
     }
     /**
@@ -5329,6 +5596,25 @@ export class HwpDocument {
         return ret[0] >>> 0;
     }
     /**
+     * 문서의 메모를 문서 순서대로 반환한다.
+     *
+     * 반환: `[{id,index,author,date,text,place,sectionIndex,paraIndex,
+     * startCharIdx,endCharIdx,path,page,editable,readOnlyReason}]`
+     * @returns {string}
+     */
+    getMemoList() {
+        let deferred1_0;
+        let deferred1_1;
+        try {
+            const ret = wasm.hwpdocument_getMemoList(this.__wbg_ptr);
+            deferred1_0 = ret[0];
+            deferred1_1 = ret[1];
+            return getStringFromWasm0(ret[0], ret[1]);
+        } finally {
+            wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
      * @returns {string}
      */
     getMetafileFontRequests() {
@@ -5463,6 +5749,40 @@ export class HwpDocument {
             return getStringFromWasm0(ret[0], ret[1]);
         } finally {
             wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
+     * 에이전트가 넣은 그림·수식의 렌더 경계. 셀 좌표는 수식 자체를 가리킨다.
+     * @param {string} kind
+     * @param {number} section_idx
+     * @param {number} parent_para_idx
+     * @param {number} control_idx
+     * @param {number | null} [cell_idx]
+     * @param {number | null} [cell_para_idx]
+     * @param {number | null} [inner_control_idx]
+     * @param {string | null} [cell_path_json]
+     * @returns {string}
+     */
+    getObjectBBox(kind, section_idx, parent_para_idx, control_idx, cell_idx, cell_para_idx, inner_control_idx, cell_path_json) {
+        let deferred4_0;
+        let deferred4_1;
+        try {
+            const ptr0 = passStringToWasm0(kind, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            var ptr1 = isLikeNone(cell_path_json) ? 0 : passStringToWasm0(cell_path_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            var len1 = WASM_VECTOR_LEN;
+            const ret = wasm.hwpdocument_getObjectBBox(this.__wbg_ptr, ptr0, len0, section_idx, parent_para_idx, control_idx, isLikeNone(cell_idx) ? Number.MAX_SAFE_INTEGER : (cell_idx) >>> 0, isLikeNone(cell_para_idx) ? Number.MAX_SAFE_INTEGER : (cell_para_idx) >>> 0, isLikeNone(inner_control_idx) ? Number.MAX_SAFE_INTEGER : (inner_control_idx) >>> 0, ptr1, len1);
+            var ptr3 = ret[0];
+            var len3 = ret[1];
+            if (ret[3]) {
+                ptr3 = 0; len3 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred4_0 = ptr3;
+            deferred4_1 = len3;
+            return getStringFromWasm0(ptr3, len3);
+        } finally {
+            wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
         }
     }
     /**
@@ -6099,6 +6419,29 @@ export class HwpDocument {
         }
     }
     /**
+     * 쪽의 줄 상자·베이스라인·런 x 범위를 압축 JSON 으로 반환한다 (에이전트 측정용).
+     * @param {number} page_num
+     * @returns {string}
+     */
+    getPageLineLayout(page_num) {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const ret = wasm.hwpdocument_getPageLineLayout(this.__wbg_ptr, page_num);
+            var ptr1 = ret[0];
+            var len1 = ret[1];
+            if (ret[3]) {
+                ptr1 = 0; len1 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred2_0 = ptr1;
+            deferred2_1 = len1;
+            return getStringFromWasm0(ptr1, len1);
+        } finally {
+            wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
      * 구역의 쪽 번호 매기기를 읽는다: `{ok, exists, position?, format?, dash?}` (#7635).
      * @param {number} section_idx
      * @returns {string}
@@ -6399,6 +6742,30 @@ export class HwpDocument {
             return getStringFromWasm0(ret[0], ret[1]);
         } finally {
             wasm.__wbindgen_free(deferred1_0, deferred1_1, 1);
+        }
+    }
+    /**
+     * 레이아웃을 뺀 본문 문단 내용 지문 — 되돌리기 전 사용자 수정 여부 판별용.
+     * @param {number} section_idx
+     * @param {number} para_idx
+     * @returns {string}
+     */
+    getParagraphContentDigest(section_idx, para_idx) {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const ret = wasm.hwpdocument_getParagraphContentDigest(this.__wbg_ptr, section_idx, para_idx);
+            var ptr1 = ret[0];
+            var len1 = ret[1];
+            if (ret[3]) {
+                ptr1 = 0; len1 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred2_0 = ptr1;
+            deferred2_1 = len1;
+            return getStringFromWasm0(ptr1, len1);
+        } finally {
+            wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
         }
     }
     /**
@@ -7205,6 +7572,37 @@ export class HwpDocument {
             const ptr0 = passStringToWasm0(path_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ret = wasm.hwpdocument_getTableCellBboxesByPath(this.__wbg_ptr, section_idx, parent_para_idx, ptr0, len0);
+            var ptr2 = ret[0];
+            var len2 = ret[1];
+            if (ret[3]) {
+                ptr2 = 0; len2 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred3_0 = ptr2;
+            deferred3_1 = len2;
+            return getStringFromWasm0(ptr2, len2);
+        } finally {
+            wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+        }
+    }
+    /**
+     * 본문 또는 셀 선택에 통째로 포함된 표 주소를 반환한다.
+     * @param {number} section_idx
+     * @param {number} parent_para_idx
+     * @param {string} container_path_json
+     * @param {number} start_para_idx
+     * @param {number} start_char_offset
+     * @param {number} end_para_idx
+     * @param {number} end_char_offset
+     * @returns {string}
+     */
+    getTableControlsInSelection(section_idx, parent_para_idx, container_path_json, start_para_idx, start_char_offset, end_para_idx, end_char_offset) {
+        let deferred3_0;
+        let deferred3_1;
+        try {
+            const ptr0 = passStringToWasm0(container_path_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ret = wasm.hwpdocument_getTableControlsInSelection(this.__wbg_ptr, section_idx, parent_para_idx, ptr0, len0, start_para_idx, start_char_offset, end_para_idx, end_char_offset);
             var ptr2 = ret[0];
             var len2 = ret[1];
             if (ret[3]) {
@@ -8307,6 +8705,75 @@ export class HwpDocument {
         }
     }
     /**
+     * 표 셀 문단에 수식을 삽입한다. `logical` 은 rx 호환용으로 받기만 하며 true 는 지원하지 않는다
+     * (텍스트 오프셋 계약). 반환: `{"ok":true,"cellParaIdx":N,"controlIdx":N}`
+     * @param {number} section_idx
+     * @param {number} parent_para_idx
+     * @param {number} control_idx
+     * @param {number} cell_idx
+     * @param {number} cell_para_idx
+     * @param {number} char_offset
+     * @param {string} script
+     * @param {number} font_size
+     * @param {number} color
+     * @param {boolean | null} [logical]
+     * @returns {string}
+     */
+    insertEquationInCell(section_idx, parent_para_idx, control_idx, cell_idx, cell_para_idx, char_offset, script, font_size, color, logical) {
+        let deferred3_0;
+        let deferred3_1;
+        try {
+            const ptr0 = passStringToWasm0(script, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ret = wasm.hwpdocument_insertEquationInCell(this.__wbg_ptr, section_idx, parent_para_idx, control_idx, cell_idx, cell_para_idx, char_offset, ptr0, len0, font_size, color, isLikeNone(logical) ? 0xFFFFFF : logical ? 1 : 0);
+            var ptr2 = ret[0];
+            var len2 = ret[1];
+            if (ret[3]) {
+                ptr2 = 0; len2 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred3_0 = ptr2;
+            deferred3_1 = len2;
+            return getStringFromWasm0(ptr2, len2);
+        } finally {
+            wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+        }
+    }
+    /**
+     * 중첩 표 셀 문단에 수식을 삽입한다.
+     * @param {number} section_idx
+     * @param {number} parent_para_idx
+     * @param {string} cell_path_json
+     * @param {number} char_offset
+     * @param {string} script
+     * @param {number} font_size
+     * @param {number} color
+     * @param {boolean | null} [logical]
+     * @returns {string}
+     */
+    insertEquationInCellByPath(section_idx, parent_para_idx, cell_path_json, char_offset, script, font_size, color, logical) {
+        let deferred4_0;
+        let deferred4_1;
+        try {
+            const ptr0 = passStringToWasm0(cell_path_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(script, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len1 = WASM_VECTOR_LEN;
+            const ret = wasm.hwpdocument_insertEquationInCellByPath(this.__wbg_ptr, section_idx, parent_para_idx, ptr0, len0, char_offset, ptr1, len1, font_size, color, isLikeNone(logical) ? 0xFFFFFF : logical ? 1 : 0);
+            var ptr3 = ret[0];
+            var len3 = ret[1];
+            if (ret[3]) {
+                ptr3 = 0; len3 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred4_0 = ptr3;
+            deferred4_1 = len3;
+            return getStringFromWasm0(ptr3, len3);
+        } finally {
+            wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+        }
+    }
+    /**
      * 머리말/꼬리말 문단에 필드 마커를 삽입한다.
      * @param {number} section_idx
      * @param {boolean} is_header
@@ -8371,6 +8838,71 @@ export class HwpDocument {
             throw takeFromExternrefTable0(ret[1]);
         }
         return ret[0] >>> 0;
+    }
+    /**
+     * 한 문단의 범위에 메모를 넣는다. `json` = `{author,text}`.
+     *
+     * 반환: `{"ok":true,"id":N,"index":N}`. 실패는 `{ok:false,code,message}`.
+     * @param {number} section_idx
+     * @param {number} para_idx
+     * @param {number} start_char_idx
+     * @param {number} end_char_idx
+     * @param {string} json
+     * @returns {string}
+     */
+    insertMemo(section_idx, para_idx, start_char_idx, end_char_idx, json) {
+        let deferred3_0;
+        let deferred3_1;
+        try {
+            const ptr0 = passStringToWasm0(json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ret = wasm.hwpdocument_insertMemo(this.__wbg_ptr, section_idx, para_idx, start_char_idx, end_char_idx, ptr0, len0);
+            var ptr2 = ret[0];
+            var len2 = ret[1];
+            if (ret[3]) {
+                ptr2 = 0; len2 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred3_0 = ptr2;
+            deferred3_1 = len2;
+            return getStringFromWasm0(ptr2, len2);
+        } finally {
+            wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+        }
+    }
+    /**
+     * 표 칸·글상자 안의 범위에 메모를 넣는다.
+     *
+     * `path_json` = `[{"controlIndex":N,"cellIndex":N,"cellParaIndex":N}, …]`.
+     * @param {number} section_idx
+     * @param {number} para_idx
+     * @param {string} path_json
+     * @param {number} start_char_idx
+     * @param {number} end_char_idx
+     * @param {string} json
+     * @returns {string}
+     */
+    insertMemoByPath(section_idx, para_idx, path_json, start_char_idx, end_char_idx, json) {
+        let deferred4_0;
+        let deferred4_1;
+        try {
+            const ptr0 = passStringToWasm0(path_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len1 = WASM_VECTOR_LEN;
+            const ret = wasm.hwpdocument_insertMemoByPath(this.__wbg_ptr, section_idx, para_idx, ptr0, len0, start_char_idx, end_char_idx, ptr1, len1);
+            var ptr3 = ret[0];
+            var len3 = ret[1];
+            if (ret[3]) {
+                ptr3 = 0; len3 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred4_0 = ptr3;
+            deferred4_1 = len3;
+            return getStringFromWasm0(ptr3, len3);
+        } finally {
+            wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+        }
     }
     /**
      * 새 번호 지정 컨트롤 삽입 (쪽 > 새 번호로 시작)
@@ -9062,6 +9594,38 @@ export class HwpDocument {
      */
     logicalToTextOffset(section_idx, para_idx, logical_offset) {
         const ret = wasm.hwpdocument_logicalToTextOffset(this.__wbg_ptr, section_idx, para_idx, logical_offset);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return ret[0] >>> 0;
+    }
+    /**
+     * @param {number} section_idx
+     * @param {number} parent_para_idx
+     * @param {number} control_idx
+     * @param {number} cell_idx
+     * @param {number} cell_para_idx
+     * @param {number} logical_offset
+     * @returns {number}
+     */
+    logicalToTextOffsetInCell(section_idx, parent_para_idx, control_idx, cell_idx, cell_para_idx, logical_offset) {
+        const ret = wasm.hwpdocument_logicalToTextOffsetInCell(this.__wbg_ptr, section_idx, parent_para_idx, control_idx, cell_idx, cell_para_idx, logical_offset);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return ret[0] >>> 0;
+    }
+    /**
+     * @param {number} section_idx
+     * @param {number} parent_para_idx
+     * @param {string} path_json
+     * @param {number} logical_offset
+     * @returns {number}
+     */
+    logicalToTextOffsetInCellByPath(section_idx, parent_para_idx, path_json, logical_offset) {
+        const ptr0 = passStringToWasm0(path_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.hwpdocument_logicalToTextOffsetInCellByPath(this.__wbg_ptr, section_idx, parent_para_idx, ptr0, len0, logical_offset);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
         }
@@ -10474,6 +11038,29 @@ export class HwpDocument {
         }
     }
     /**
+     * 메모를 지운다. 기준 글자는 남긴다.
+     * @param {number} id
+     * @returns {string}
+     */
+    removeMemo(id) {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const ret = wasm.hwpdocument_removeMemo(this.__wbg_ptr, id);
+            var ptr1 = ret[0];
+            var len1 = ret[1];
+            if (ret[3]) {
+                ptr1 = 0; len1 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred2_0 = ptr1;
+            deferred2_1 = len1;
+            return getStringFromWasm0(ptr1, len1);
+        } finally {
+            wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
      * 셀의 계산식 필드를 지우고 결과 글은 일반 글로 남긴다(한/글 계산식 지우기).
      * @param {number} section_idx
      * @param {number} parent_para_idx
@@ -11071,6 +11658,18 @@ export class HwpDocument {
             return getStringFromWasm0(ptr3, len3);
         } finally {
             wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+        }
+    }
+    /**
+     * 보관한 문단으로 지정 위치의 본문 문단을 되돌린다. 보관본은 유지된다.
+     * @param {number} id
+     * @param {number} section_idx
+     * @param {number} para_idx
+     */
+    restoreCapturedParagraph(id, section_idx, para_idx) {
+        const ret = wasm.hwpdocument_restoreCapturedParagraph(this.__wbg_ptr, id, section_idx, para_idx);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
         }
     }
     /**
@@ -12216,6 +12815,32 @@ export class HwpDocument {
         }
     }
     /**
+     * 메모 본문을 바꾼다. 작성자·날짜·서식은 그대로다.
+     * @param {number} id
+     * @param {string} text
+     * @returns {string}
+     */
+    setMemoText(id, text) {
+        let deferred3_0;
+        let deferred3_1;
+        try {
+            const ptr0 = passStringToWasm0(text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ret = wasm.hwpdocument_setMemoText(this.__wbg_ptr, id, ptr0, len0);
+            var ptr2 = ret[0];
+            var len2 = ret[1];
+            if (ret[3]) {
+                ptr2 = 0; len2 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred3_0 = ptr2;
+            deferred3_1 = len2;
+            return getStringFromWasm0(ptr2, len2);
+        } finally {
+            wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+        }
+    }
+    /**
      * 각주/미주 내부 수식 컨트롤의 속성을 변경한다.
      * @param {string} kind
      * @param {number} section_idx
@@ -12670,6 +13295,35 @@ export class HwpDocument {
             return getStringFromWasm0(ptr3, len3);
         } finally {
             wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+        }
+    }
+    /**
+     * 표의 열별 폭(HWPUNIT)을 절대값으로 설정한다. `widths.len()` 은 열 수와 같아야 한다.
+     * 반환: JSON `{"ok":true,"colCount":N,"tableWidth":W}`
+     * @param {number} section_idx
+     * @param {number} parent_para_idx
+     * @param {number} control_idx
+     * @param {Uint32Array} widths
+     * @returns {string}
+     */
+    setTableColumnWidths(section_idx, parent_para_idx, control_idx, widths) {
+        let deferred3_0;
+        let deferred3_1;
+        try {
+            const ptr0 = passArray32ToWasm0(widths, wasm.__wbindgen_malloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ret = wasm.hwpdocument_setTableColumnWidths(this.__wbg_ptr, section_idx, parent_para_idx, control_idx, ptr0, len0);
+            var ptr2 = ret[0];
+            var len2 = ret[1];
+            if (ret[3]) {
+                ptr2 = 0; len2 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred3_0 = ptr2;
+            deferred3_1 = len2;
+            return getStringFromWasm0(ptr2, len2);
+        } finally {
+            wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
         }
     }
     /**
@@ -13250,6 +13904,23 @@ export class HwpDocument {
      */
     textToLogicalOffset(section_idx, para_idx, text_offset) {
         const ret = wasm.hwpdocument_textToLogicalOffset(this.__wbg_ptr, section_idx, para_idx, text_offset);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return ret[0] >>> 0;
+    }
+    /**
+     * 셀(중첩 포함) 문단의 텍스트 오프셋 → 편집 캐럿 좌표(인라인 개체 = 1칸).
+     * @param {number} section_idx
+     * @param {number} parent_para_idx
+     * @param {string} path_json
+     * @param {number} text_offset
+     * @returns {number}
+     */
+    textToLogicalOffsetInCellByPath(section_idx, parent_para_idx, path_json, text_offset) {
+        const ptr0 = passStringToWasm0(path_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.hwpdocument_textToLogicalOffsetInCellByPath(this.__wbg_ptr, section_idx, parent_para_idx, ptr0, len0, text_offset);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
         }
@@ -14321,6 +14992,14 @@ function __wbg_get_imports() {
         __wbg_getRandomValues_436a51d0629d84e1: function() { return handleError(function (arg0, arg1) {
             globalThis.crypto.getRandomValues(getArrayU8FromWasm0(arg0, arg1));
         }, arguments); },
+        __wbg_getTime_63fb0332e6c4ec17: function(arg0) {
+            const ret = arg0.getTime();
+            return ret;
+        },
+        __wbg_getTimezoneOffset_4baa793e0d3962a8: function(arg0) {
+            const ret = arg0.getTimezoneOffset();
+            return ret;
+        },
         __wbg_getTransform_704a6fdec53e7617: function() { return handleError(function (arg0) {
             const ret = arg0.getTransform();
             return ret;
@@ -14438,6 +15117,10 @@ function __wbg_get_imports() {
             const ret = arg0.naturalWidth;
             return ret;
         },
+        __wbg_new_0_f117d868b403dc07: function() {
+            const ret = new Date();
+            return ret;
+        },
         __wbg_new_116be93542d39019: function() {
             const ret = new Array();
             return ret;
@@ -14456,6 +15139,10 @@ function __wbg_get_imports() {
         },
         __wbg_new_ebe3e0f6837f0879: function() {
             const ret = new Object();
+            return ret;
+        },
+        __wbg_new_f9d6489212f3b2b3: function(arg0) {
+            const ret = new Date(arg0);
             return ret;
         },
         __wbg_new_from_slice_3eea173078478cfe: function(arg0, arg1) {
@@ -14772,6 +15459,13 @@ function handleError(f, args) {
 
 function isLikeNone(x) {
     return x === undefined || x === null;
+}
+
+function passArray32ToWasm0(arg, malloc) {
+    const ptr = malloc(arg.length * 4, 4) >>> 0;
+    getUint32ArrayMemory0().set(arg, ptr / 4);
+    WASM_VECTOR_LEN = arg.length;
+    return ptr;
 }
 
 function passArray8ToWasm0(arg, malloc) {

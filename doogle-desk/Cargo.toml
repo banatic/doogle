@@ -1,0 +1,46 @@
+[package]
+name = "doogle-desk"
+version = "0.1.0"
+description = "두글 — rhwp-studio desktop shell with a local AI document agent"
+license = "MIT"
+edition = "2021"
+rust-version = "1.85"
+publish = false
+
+# 루트 rhwp workspace 에 넣지 않는다. 이 crate 는 자기 자신이 workspace root 다.
+[workspace]
+
+[lib]
+name = "doogle_desk_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-single-instance = "2"
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+getrandom = "0.3"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_System_JobObjects",
+  "Win32_System_Threading",
+] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
+
+# 이 개발 PC 의 보안 소프트웨어가 최적화 없는 libc build script 실행 파일을 격리해 `cargo check` 가
+# os error 5 (never executed) 로 실패한다. build script 만 최적화해 빌드한다(산출 코드에는 영향 없음).
+[profile.dev.build-override]
+opt-level = 3
