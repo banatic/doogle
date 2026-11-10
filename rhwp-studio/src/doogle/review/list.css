@@ -1,9 +1,12 @@
 /* 두글 검토 목록 (review/list.ts) — 사이드바 안에 놓인다. 색은 --dg-* 토큰만 (doogle/theme/tokens.css). */
 
+/* 평평한 목록(Notion·Linear 풍): 카드·알약·그림자 없이 1px 구분선과 일정한 간격(4·8·12),
+   위계는 굵기로, 색은 대표색(--dg-accent) 하나만 포인트로 쓴다. */
+
 .dg-rl {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   font-family: var(--dg-font-ui, system-ui, sans-serif);
   font-size: var(--dg-fs-md, 13px);
   color: var(--dg-text, CanvasText);
@@ -12,23 +15,18 @@
 .dg-rl-head {
   display: flex;
   align-items: center;
-  gap: 6px;
-  min-height: 30px;
+  gap: 8px;
+  min-height: 28px;
 }
 
 .dg-rl-title {
   font-weight: 600;
 }
 
+/* 건수 — 배지가 아니라 제목 옆의 흐린 숫자 */
 .dg-rl-count {
-  min-width: 20px;
-  padding: 0 6px;
-  border-radius: 999px;
-  background: var(--dg-active, Highlight);
-  color: var(--dg-soft-text, CanvasText);
-  font-size: var(--dg-fs-sm, 12px);
-  font-weight: 600;
-  text-align: center;
+  color: var(--dg-hint, GrayText);
+  font-weight: 400;
   font-variant-numeric: tabular-nums;
 }
 
@@ -48,16 +46,19 @@
 }
 
 .dg-rl button:focus-visible {
-  outline: 2px solid var(--dg-focus, Highlight);
+  outline: 2px solid var(--dg-focus, var(--dg-accent, Highlight));
   outline-offset: 1px;
 }
 
+/* 단추: 기본은 테두리 1px, 강조는 대표색 채움, 조용한 것은 글자 단추 */
 .dg-rl-btn {
   height: 28px;
-  padding: 0 10px;
+  padding: 0 12px;
   border: 1px solid var(--dg-border, ButtonBorder);
-  border-radius: var(--dg-r-md, 8px);
-  background: var(--dg-surface, Canvas);
+  border-radius: var(--dg-r-sm, 4px);
+  background: transparent;
+  font-size: var(--dg-fs-sm, 12px) !important;
+  font-weight: 500;
   white-space: nowrap;
 }
 
@@ -66,40 +67,38 @@
 }
 
 .dg-rl-quiet {
+  padding: 0 8px;
   border-color: transparent;
-  background: transparent;
-  color: var(--dg-text2, CanvasText);
+  color: var(--dg-muted, CanvasText);
+}
+
+.dg-rl-quiet:hover:not(:disabled) {
+  color: var(--dg-text, CanvasText);
 }
 
 .dg-rl-primary {
   border-color: var(--dg-accent, Highlight);
   background: var(--dg-accent, Highlight);
   color: var(--dg-on-accent, HighlightText) !important;
-  font-weight: 600;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
 }
 
 .dg-rl-primary:hover:not(:disabled) {
+  border-color: var(--dg-accent-hover, Highlight);
   background: var(--dg-accent-hover, Highlight);
 }
 
+/* 되돌리기 확인 — 채우지 않고 글자만 경고색 */
 .dg-rl-danger {
-  border-color: var(--dg-bad, CanvasText);
-  background: var(--dg-bad, CanvasText);
-  color: var(--dg-on-accent, Canvas) !important;
-  font-weight: 600;
-}
-
-.dg-rl-danger:hover:not(:disabled) {
-  filter: brightness(1.08);
+  color: var(--dg-bad, CanvasText) !important;
 }
 
 .dg-rl-kbd {
   font-family: var(--dg-font-mono, monospace);
   font-size: var(--dg-fs-kbd, 11.5px);
-  opacity: 0.85;
+  opacity: 0.75;
 }
 
 .dg-rl-list {
@@ -108,10 +107,8 @@
   padding: 0;
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--dg-border, CanvasText);
-  border-radius: var(--dg-r-md, 8px);
-  background: var(--dg-surface, Canvas);
-  overflow: hidden;
+  border-top: 1px solid var(--dg-divider, CanvasText);
+  border-bottom: 1px solid var(--dg-divider, CanvasText);
 }
 
 .dg-rl-row {
@@ -120,16 +117,31 @@
   grid-template-columns: 1fr auto;
   align-items: start;
   border-top: 1px solid var(--dg-divider, transparent);
-  transition: opacity var(--dg-dur, 180ms) var(--dg-ease, ease);
+  transition: opacity var(--dg-dur, 180ms) var(--dg-ease, ease), background-color var(--dg-dur, 180ms) var(--dg-ease, ease);
 }
 
 .dg-rl-list > :first-child {
   border-top: 0;
 }
 
-.dg-rl-current {
+.dg-rl-row:hover {
+  background: var(--dg-hover, transparent);
+}
+
+/* 지금 보는 행: 옅은 바탕 + 왼쪽 2px 대표색 막대 */
+.dg-rl-current,
+.dg-rl-current:hover {
   background: var(--dg-soft, Highlight);
-  box-shadow: inset 3px 0 0 var(--dg-accent, Highlight);
+}
+
+.dg-rl-current::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--dg-accent, Highlight);
 }
 
 /* 파급: 기준 행 뒤는 흐려진다 */
@@ -140,9 +152,9 @@
 .dg-rl-go {
   display: flex;
   align-items: baseline;
-  gap: 8px;
+  gap: 12px;
   min-width: 0;
-  padding: 8px 4px 8px 10px;
+  padding: 10px 4px 10px 12px;
   border: 0;
   background: transparent;
   text-align: left;
@@ -150,7 +162,7 @@
 
 .dg-rl-loc {
   flex-shrink: 0;
-  min-width: 52px;
+  min-width: 48px;
   color: var(--dg-hint, GrayText);
   font-size: var(--dg-fs-sm, 12px);
   font-variant-numeric: tabular-nums;
@@ -158,25 +170,22 @@
 
 .dg-rl-what {
   min-width: 0;
-  line-height: var(--dg-lh-tight, 1.35);
+  line-height: var(--dg-lh-tight, 1.4);
   overflow-wrap: anywhere;
   word-break: keep-all;
 }
 
+/* 바뀐 글자 — 바탕 칠 없이: 지운 것은 흐린 취소선, 넣은 것은 대표색 */
 .dg-rl-del {
-  color: var(--dg-del, CanvasText);
+  color: var(--dg-hint, GrayText);
   text-decoration: line-through;
-  background: var(--dg-bad-soft, transparent);
-  border-radius: 3px;
-  padding: 0 2px;
+  text-decoration-thickness: 1px;
 }
 
 .dg-rl-ins {
-  color: var(--dg-ins, CanvasText);
+  color: var(--dg-accent, CanvasText);
   text-decoration: none;
-  background: var(--dg-soft, transparent);
-  border-radius: 3px;
-  padding: 0 2px;
+  font-weight: 500;
 }
 
 .dg-rl-more,
@@ -187,15 +196,14 @@
 .dg-rl-fx {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  gap: 4px;
+  align-items: baseline;
+  column-gap: 8px;
+  row-gap: 2px;
 }
 
+/* 서식 값 — 칩이 아니라 평범한 글자 */
 .dg-rl-chip {
-  padding: 1px 6px;
-  border: 1px solid var(--dg-border, CanvasText);
-  border-radius: var(--dg-r-sm, 4px);
-  background: var(--dg-surface-2, Canvas);
+  color: var(--dg-text2, CanvasText);
   font-size: var(--dg-fs-sm, 12px);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -203,103 +211,81 @@
 
 .dg-rl-acts {
   display: flex;
-  gap: 2px;
-  padding: 5px 6px 0 0;
+  gap: 4px;
+  padding: 6px 8px 0 0;
 }
 
 .dg-rl-icon {
-  position: relative;
-  width: 28px;
+  min-width: 28px;
   height: 28px;
+  padding: 0 6px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 4px;
   border: 0;
-  border-radius: var(--dg-r-md, 8px);
+  border-radius: var(--dg-r-sm, 4px);
   background: transparent;
+  color: var(--dg-muted, CanvasText) !important;
+}
+
+.dg-rl-icon:hover:not(:disabled) {
+  background: var(--dg-ink-06, ButtonFace);
+  color: var(--dg-text, CanvasText) !important;
 }
 
 .dg-rl-ok:hover:not(:disabled) {
-  background: var(--dg-ok-soft, ButtonFace);
-  color: var(--dg-ok, CanvasText);
+  color: var(--dg-accent, CanvasText) !important;
 }
 
-.dg-rl-no:hover:not(:disabled) {
-  background: var(--dg-bad-soft, ButtonFace);
-  color: var(--dg-bad, CanvasText);
-}
-
-/* 거절 단추의 파급 수 */
+/* 거절 단추의 파급 수 — 아이콘 옆의 작은 숫자 */
 .dg-rl-plus {
-  position: absolute;
-  top: -1px;
-  right: -3px;
-  min-width: 14px;
-  padding: 0 3px;
-  border-radius: 999px;
-  background: var(--dg-warn-soft, Canvas);
-  color: var(--dg-warn, CanvasText);
-  border: 1px solid var(--dg-warn-border, CanvasText);
-  font-size: 10px;
-  line-height: 13px;
-  font-weight: 700;
+  font-size: var(--dg-fs-caption, 11px);
+  line-height: 1;
+  font-weight: 500;
+  color: inherit;
 }
 
-/* 파급 배지 — 기준 행에만 보인다 */
+/* 파급 안내 — 기준 행에만 보인다. 상자 없이 본문 줄에 맞춘 흐린 글자 */
 .dg-rl-chain {
   display: none;
   grid-column: 1 / -1;
-  align-items: baseline;
-  gap: 6px;
-  margin: -2px 10px 8px;
-  padding: 4px 8px;
-  border-radius: var(--dg-r-sm, 4px);
-  background: var(--dg-warn-soft, Canvas);
-  color: var(--dg-warn, CanvasText);
+  margin: -4px 12px 10px 72px;
+  color: var(--dg-muted, CanvasText);
   font-size: var(--dg-fs-sm, 12px);
+  line-height: var(--dg-lh-tight, 1.4);
 }
 
 .dg-rl-anchor .dg-rl-chain {
-  display: flex;
+  display: block;
 }
 
-.dg-rl-chain-mark {
-  font-weight: 700;
-}
-
-/* 사용자 직접 편집 자리 */
+/* 사용자 직접 편집 자리 — 구분선 사이의 흐린 한 줄 */
 .dg-rl-gap {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  border-top: 1px dashed var(--dg-warn-border, CanvasText);
-  background: var(--dg-warn-soft, Canvas);
-  color: var(--dg-warn, CanvasText);
+  padding: 6px 12px;
+  border-top: 1px solid var(--dg-divider, CanvasText);
+  color: var(--dg-hint, GrayText);
   font-size: var(--dg-fs-sm, 12px);
   transition: opacity var(--dg-dur, 180ms) var(--dg-ease, ease);
 }
 
-.dg-rl-gap-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--dg-warn, CanvasText);
-  flex-shrink: 0;
+.dg-rl-list > .dg-rl-gap:first-child {
+  border-top: 0;
 }
 
-/* 인라인 확인 */
+/* 인라인 확인 — 상자 대신 위 구분선 하나 */
 .dg-rl-confirm {
   grid-column: 1 / -1;
-  margin: 0 10px 10px;
-  padding: 8px 10px;
-  border: 1px solid var(--dg-bad-border, CanvasText);
-  border-radius: var(--dg-r-md, 8px);
-  background: var(--dg-bad-soft, Canvas);
+  margin: 0 12px 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--dg-divider, CanvasText);
 }
 
 .dg-rl > .dg-rl-confirm {
   margin: 0;
+  padding: 10px 0 0;
 }
 
 .dg-rl-confirm-msg {
@@ -310,7 +296,7 @@
 
 .dg-rl-confirm-acts {
   display: flex;
-  gap: 6px;
+  gap: 8px;
 }
 
 .dg-rl-confirming .dg-rl-chain {

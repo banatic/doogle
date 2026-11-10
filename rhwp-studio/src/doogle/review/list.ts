@@ -140,9 +140,7 @@ export function mountReviewList(container: HTMLElement, deps: ReviewListDeps = {
   }
 
   function gap(text: string): HTMLElement {
-    const li = el('li', 'dg-rl-gap');
-    li.append(el('span', 'dg-rl-gap-dot'), el('span', '', text));
-    return li;
+    return el('li', 'dg-rl-gap', text);
   }
 
   function render(): void {
@@ -234,9 +232,7 @@ export function mountReviewList(container: HTMLElement, deps: ReviewListDeps = {
 
       const text = chainSentence(impact);
       if (text) {
-        const chain = el('div', 'dg-rl-chain dg-keep-all');
-        chain.append(el('span', 'dg-rl-chain-mark', '↶'), el('span', '', text));
-        li.append(chain);
+        li.append(el('div', 'dg-rl-chain dg-keep-all', text));
       }
       if (confirming === row.id) {
         li.append(confirmBlock(impactSentence(impact), `함께 되돌리기 (${impact.count}건)`, () => decide('reject', row.id, true)));
