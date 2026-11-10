@@ -13,6 +13,7 @@ import spawn from 'cross-spawn';
 
 import { ProviderError } from '../errors.mjs';
 import { appDataDir } from '../paths.mjs';
+import { splitToolImage } from '../tools/index.mjs';
 
 const require = createRequire(import.meta.url);
 
@@ -114,11 +115,11 @@ export function toCallToolResult(r) {
   if (res && Array.isArray(res.content) && res.content.every((b) => b && typeof b.type === 'string')) {
     return { content: res.content };
   }
-  if (res && typeof res === 'object' && res.image && typeof res.image.data === 'string') {
-    const { image, ...rest } = res;
+  const { image, rest } = splitToolImage(res);
+  if (image) {
     return {
       content: [
-        { type: 'image', data: image.data, mimeType: image.mimeType ?? 'image/png' },
+        { type: 'image', data: image.data, mimeType: image.mimeType },
         ...(Object.keys(rest).length ? [{ type: 'text', text: JSON.stringify(rest) }] : []),
       ],
     };

@@ -261,6 +261,19 @@ function imageOf(result) {
 }
 
 /**
+ * 결과에서 그림을 떼어 낸다. studio 의 PngImage 는 `{mimeType, base64}` 이고 일부 경로는 `{data}` 를 쓴다 —
+ * 모든 provider 가 이 함수로 판별해야 그림이 base64 텍스트(수십만 자)로 모델에 들어가지 않는다.
+ * @param {unknown} result
+ * @returns {{ image: {data: string, mimeType: string} | null, rest: unknown }}
+ */
+export function splitToolImage(result) {
+  const image = imageOf(result);
+  if (!image) return { image: null, rest: result };
+  const { image: _omit, ...rest } = /** @type {Record<string, unknown>} */ (result);
+  return { image, rest };
+}
+
+/**
  * studio 결과를 MCP content 블록으로 변환한다. result.image 가 {mimeType, base64}(또는 data) 모양이면
  * image 블록을 먼저 두고 나머지 필드는 text(JSON) 블록에 담는다 (render_page png, render:"crop",
  * verify_changes includeImage).

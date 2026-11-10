@@ -322,11 +322,7 @@ export async function runResponsesTurn({ getToken, authKind, namespaceTools = fa
       }
       const ok = !!r?.ok;
       emit({ kind: 'tool_result', callId: call.call_id, ok, summary: summarize(ok ? r.result : r?.error) });
-      history.push({
-        type: 'function_call_output',
-        call_id: call.call_id,
-        output: JSON.stringify(ok ? { ok: true, result: r.result } : { ok: false, error: r?.error }),
-      });
+      history.push({ type: 'function_call_output', call_id: call.call_id, output: functionCallOutput(r) });
     }
     if (round === MAX_TOOL_ROUNDS - 1) emit({ kind: 'status', text: 'tool 호출 횟수 제한에 도달해 턴을 종료합니다.' });
   }
@@ -374,3 +370,19 @@ export function createOpenAIApiProvider(deps = {}) {
 }
 
 export default createOpenAIApiProvider();
+
+import { splitToolImage } from '../tools/index.mjs';
+
+/**
+ * tool 결과 → Responses `function_call_output.output`. 그림은 input_image 항목으로 떼어 보낸다
+ * (base64 를 JSON 문자열에 넣으면 수십만 자의 텍스트 토큰이 된다).
+ */
+export function functionCallOutput(r) {
+  if (!r?.ok) return JSON.stringify({ ok: false, error: r?.error });
+  const { image, rest } = splitToolImage(r.result);
+  if (!image) return JSON.stringify({ ok: true, result: r.result });
+  return [
+    { type: 'input_text', text: JSON.stringify({ ok: true, result: rest }) },
+    { type: 'input_image', image_url: `data:${image.mimeType};base64,${image.data}` },
+  ];
+}

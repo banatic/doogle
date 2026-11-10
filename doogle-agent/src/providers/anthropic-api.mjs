@@ -5,6 +5,7 @@ import { z } from 'zod';
 
 import { ProviderError } from '../errors.mjs';
 import { getSecret, SECRET_KEYS } from '../secrets.mjs';
+import { splitToolImage } from '../tools/index.mjs';
 
 export const MODELS = Object.freeze([
   { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5' },
@@ -116,13 +117,13 @@ export function toToolResult(toolUseId, r) {
     return { type: 'tool_result', tool_use_id: toolUseId, is_error: true, content: JSON.stringify({ error: r?.error ?? { code: 'TOOL_ERROR' } }) };
   }
   const res = r.result;
-  if (res && typeof res === 'object' && res.image && typeof res.image.data === 'string') {
-    const { image, ...rest } = res;
+  const { image, rest } = splitToolImage(res);
+  if (image) {
     return {
       type: 'tool_result',
       tool_use_id: toolUseId,
       content: [
-        { type: 'image', source: { type: 'base64', media_type: image.mimeType ?? 'image/png', data: image.data } },
+        { type: 'image', source: { type: 'base64', media_type: image.mimeType, data: image.data } },
         ...(Object.keys(rest).length ? [{ type: 'text', text: JSON.stringify(rest) }] : []),
       ],
     };

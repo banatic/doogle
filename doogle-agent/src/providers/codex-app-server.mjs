@@ -28,6 +28,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { loadProviderTools, providerError } from './openai-api.mjs';
+import { splitToolImage } from '../tools/index.mjs';
 
 const CLIENT_INFO = { name: 'doogle', title: '두글', version: '0.1.0' };
 const DISABLED_FEATURES = [
@@ -416,8 +417,16 @@ export function createCodexAppServerProvider(opts = {}) {
           try { r = await callTool(name, args); } catch (e) { r = { ok: false, error: { code: 'TOOL_FAILED', message: e?.message || String(e) } }; }
           const ok = !!r?.ok;
           emit({ kind: 'tool_result', callId: p.callId, ok, summary: summarize(ok ? r.result : r?.error) });
-          const payload = ok ? { ok: true, result: r.result } : { ok: false, error: r?.error };
-          return { contentItems: [{ type: 'inputText', text: JSON.stringify(payload) }], success: ok };
+          // 그림은 inputImage 로 떼어 보낸다 — base64 를 텍스트에 넣으면 수십만 자가 된다
+          const { image, rest } = ok ? splitToolImage(r.result) : { image: null, rest: null };
+          const payload = ok ? { ok: true, result: rest } : { ok: false, error: r?.error };
+          return {
+            contentItems: [
+              { type: 'inputText', text: JSON.stringify(payload) },
+              ...(image ? [{ type: 'inputImage', imageUrl: `data:${image.mimeType};base64,${image.data}` }] : []),
+            ],
+            success: ok,
+          };
         },
       };
       active.set(codexThreadId, handler);
