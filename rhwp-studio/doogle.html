@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<!--
+  [doogle] 두글 데스크탑 진입 페이지. Tauri 창이 이 페이지를 연다(doogle-desk/tauri.conf.json).
+  upstream index.html 과 같은 번들(/src/main.ts)을 쓰되, 화면은 두글 셸(제목 막대·리본·상태 표시줄 보강)이
+  JS 로 짓는다. upstream 기본 도구 상자(#icon-toolbar 의 일반 단추들)는 넣지 않는다.
+
+  아래 `@upstream` 표시는 빌드·개발 서버에서 index.html 의 해당 요소로 그대로 바뀐다(vite-doogle-html.ts).
+  남겨 둔 upstream 조각과 그 이유:
+   - #menu-bar   : 메뉴 정의의 정본. MenuBar(ext: 항목·최근 문서), 자동화 메뉴 질의(automation/menu-dom),
+                   리본 '더보기'·파일 백스테이지·빈 화면 최근 문서가 이 마크업을 읽는다. 숨긴 채 둔다.
+   - #style-bar  : upstream Toolbar 컨트롤러가 생성자에서 모든 요소를 `!` 로 찾고, 리본이 그 요소를
+                   제자리(slot)로 옮겨 쓴다. 컨테이너는 숨긴 채 둔다.
+   - #tb-numbering·#tb-bullet : 리본 slot. #tb-bullet 은 Toolbar 가 글머리표 팝업을 단다.
+   - 머리말/꼬리말·주석 편집 도구상자 : 그 편집 모드에서 셸이 이 줄만 다시 보인다(shell.css).
+   - #file-input : 파일 열기.
+   - #editor-area·#status-bar : 편집기 본체와 상태 표시줄(셸이 보강해 그대로 보인다).
+-->
+<html lang="ko" data-doogle data-doogle-entry>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="light dark" />
+  <meta name="theme-color" content="#2b6cb0" />
+  <!-- 다크테마·도구 상자 FOUC 방지(동기 로드) — index.html 과 같다 -->
+  <script src="/theme-init.js"></script>
+  <script src="/locale-init.js"></script>
+  <link rel="icon" href="/favicon.ico" />
+  <link rel="apple-touch-icon" href="/icons/icon-256.png" />
+  <title>두글</title>
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <div id="studio-root">
+    <header id="studio-header">
+      <h1 class="visually-hidden">두글 문서 편집기</h1>
+      <!-- 두글 셸(.dg-shell)이 이 자리 맨 앞에 붙는다(src/doogle/shell/index.ts mountShell) -->
+
+      <!-- 숨긴 upstream 조각: 메뉴 정의 · 서식 컨트롤러 · 리본 slot 원본 -->
+      <div class="dg-upstream-hidden" hidden>
+        <!-- @upstream id="menu-bar" -->
+        <!-- @upstream id="style-bar" -->
+        <div class="dg-upstream-slots">
+          <!-- @upstream id="tb-numbering" -->
+          <!-- @upstream id="tb-bullet" -->
+        </div>
+        <!-- @upstream id="file-input" -->
+      </div>
+
+      <!-- 편집 모드 전용 도구상자만 남긴 #icon-toolbar(평소에는 셸 CSS 가 숨긴다) -->
+      <div id="icon-toolbar" role="region" aria-label="편집 모드 도구 상자">
+        <div id="icon-toolbar-viewport" class="tb-scroll-viewport" role="group" aria-label="편집 모드 도구 상자 명령">
+          <div class="tb-scroll-track">
+            <!-- @upstream class="tb-group tb-headerfooter-group" -->
+            <!-- @upstream class="tb-group tb-mode-group tb-note-group" -->
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- @upstream id="editor-area" -->
+
+    <!-- @upstream id="status-bar" -->
+  </div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

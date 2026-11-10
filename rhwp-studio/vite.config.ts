@@ -2,6 +2,7 @@ import { defineConfig } from 'vite';
 import { resolve, extname, join } from 'path';
 import { readFileSync, readFile, stat } from 'fs';
 import { VitePWA } from 'vite-plugin-pwa';
+import { doogleHtml } from './vite-doogle-html'; // [doogle]
 
 const configDir = import.meta.dirname;
 const pkg = JSON.parse(readFileSync(resolve(configDir, 'package.json'), 'utf-8'));
@@ -85,6 +86,11 @@ export default defineConfig({
     // 현재 약 2.2 MB인 Studio 진입 청크는 허용하되 추가 증가는 계속 알린다.
     chunkSizeWarningLimit: 2500,
     rolldownOptions: {
+      // [doogle] 두글 데스크탑 진입 페이지(doogle.html)를 두 번째 입력으로 — index.html 은 그대로.
+      input: {
+        main: resolve(configDir, 'index.html'),
+        doogle: resolve(configDir, 'doogle.html'),
+      },
       checks: { bundlerTimings: false },
       onwarn(warning, defaultHandler) {
         const message = warning.message.replaceAll('\\', '/');
@@ -98,6 +104,7 @@ export default defineConfig({
     },
   },
   plugins: [
+    doogleHtml(configDir), // [doogle] doogle.html 의 <!-- @upstream … --> 를 index.html 조각으로 채운다
     {
       name: 'ignore-subsecond-patch-artifacts',
       handleHotUpdate(context) {

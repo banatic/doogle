@@ -4,6 +4,7 @@
     "windows": [
       {
         "label": "main",
+        "url": "doogle.html",
         "title": "두글",
         "width": 1400,
         "height": 900,

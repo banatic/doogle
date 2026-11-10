@@ -109,8 +109,9 @@ export const insertCommands: CommandDef[] = [
     label: t('command.insert.shape.label'),
     icon: 'icon-shape',
     canExecute: (ctx) => ctx.hasDocument,
-    execute(services) {
-      const anchor = document.getElementById('tb-shape');
+    execute(services, params) {
+      // [doogle] doogle.html 에는 #tb-shape 가 없다 — 그때만 부른 단추(anchorEl)에 붙인다.
+      const anchor = document.getElementById('tb-shape') ?? (params?.anchorEl as HTMLElement | undefined);
       if (!anchor) return;
       showShapePicker(anchor, {
         onSelect(type: ShapeType) {

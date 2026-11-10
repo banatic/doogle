@@ -25,9 +25,13 @@ const STORE_PANEL = 'doogle.panel';
 /** 에이전트 서비스 연결 상태를 셸(상태 표시줄 등)에 알리는 window 이벤트 */
 export const HUB_STATE_EVENT = 'doogle:hub-state';
 
-/** 두글 데스크탑(Tauri) 안이거나 URL 에 `?doogle=1` 이 있으면 두글 모드다. */
+/**
+ * 두글 전용 진입 페이지(doogle.html — `<html data-doogle-entry>`)이거나, 두글 데스크탑(Tauri) 안이거나,
+ * URL 에 `?doogle=1` 이 있으면 두글 모드다. 뒤의 둘은 index.html 로 열었을 때의 예전 경로다.
+ */
 export function isDoogleMode(): boolean {
   if (typeof window === 'undefined') return false;
+  if (typeof document !== 'undefined' && document.documentElement.hasAttribute('data-doogle-entry')) return true;
   if ((window as unknown as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__) return true;
   try {
     return new URLSearchParams(window.location.search).get('doogle') === '1';
