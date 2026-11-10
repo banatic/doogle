@@ -41,11 +41,50 @@ test('tool list: unique names, v1 only, every tool has kind/label/description', 
     assert.equal(getTool(t.name), t);
   }
   const count = (kind) => TOOLS.filter((t) => t.kind === kind).length;
-  assert.deepEqual({ read: count('read'), write: count('write'), control: count('control') }, { read: 21, write: 29, control: 4 });
+  assert.deepEqual({ read: count('read'), write: count('write'), control: count('control') }, { read: 21, write: 31, control: 0 });
   for (const n of ['get_structure', 'find_text', 'render_page', 'read_batch', 'insert_text', 'replace_range', 'apply_edits',
-    'apply_engine_edits', 'insert_image', 'ask_user_question', 'request_permission', 'present_implementation_plan', 'update_todos']) {
+    'apply_engine_edits', 'insert_image', 'insert_paragraphs', 'delete_paragraphs', 'move_paragraphs']) {
     assert.ok(getTool(n), `missing ${n}`);
   }
+});
+
+test('실행기가 없는 도구는 싣지 않는다 (모델이 부르면 반드시 실패한다)', () => {
+  // 대화 제어 4개는 hub·사이드바에 응답 화면이 없고, insert_chart·set_caption 은 엔진 경로가 없다.
+  for (const n of ['ask_user_question', 'request_permission', 'present_implementation_plan', 'update_todos', 'insert_chart']) {
+    assert.equal(getTool(n), undefined, `${n} must not be exposed`);
+  }
+  assert.doesNotMatch(getTool('edit_table').description, /set_caption/);
+  bad('edit_table', { expectedRevision: 1, sectionIdx: 0, paraIdx: 5, controlIdx: 0, op: 'set_caption', text: 'x' });
+});
+
+test('get_structure 범례는 TOOL_RULES 에 한 번만 있다', () => {
+  assert.match(TOOL_RULES, /Structure text \(get_structure\)/);
+  assert.match(TOOL_RULES, /nested table in \[cellIdx\]/);
+  assert.match(TOOL_RULES, /reflow/);
+});
+
+test('문단 단위 도구와 여러 셀 대상', () => {
+  ok('insert_paragraphs', { expectedRevision: 1, paraIdx: 92, paragraphs: ['추진 일정', ''] });
+  ok('insert_paragraphs', { expectedRevision: 1, sectionIdx: 0, paraIdx: 38, where: 'before', paragraphs: ['마. 요약'], formatFrom: 38 });
+  bad('insert_paragraphs', { expectedRevision: 1, paraIdx: 3, paragraphs: [] });
+  bad('insert_paragraphs', { expectedRevision: 1, paraIdx: 3, where: 'end', paragraphs: ['x'] });
+  ok('delete_paragraphs', { expectedRevision: 1, startParaIdx: 4, endParaIdx: 7 });
+  ok('delete_paragraphs', { expectedRevision: 1, startParaIdx: 4, includeObjects: true });
+  bad('delete_paragraphs', { expectedRevision: 1, endParaIdx: 7 });
+  ok('move_paragraphs', { expectedRevision: 1, startParaIdx: 16, toParaIdx: 40, where: 'after' });
+  bad('move_paragraphs', { expectedRevision: 1, startParaIdx: 16 });
+  for (const n of ['insert_paragraphs', 'delete_paragraphs', 'move_paragraphs']) assert.ok(BATCHABLE_EDIT_TOOL_NAMES.includes(n), n);
+
+  const cells = { paraIdx: 6, controlIdx: 0, cellIdxs: [8, [9, 13]] };
+  ok('apply_para_format', { expectedRevision: 1, cells, alignment: 'right' });
+  ok('apply_char_format', { expectedRevision: 1, cells, bold: true });
+  bad('apply_para_format', { expectedRevision: 1, cells, paraIdx: 0, alignment: 'right' }, /cells already names the target cells — drop paraIdx/);
+  bad('apply_char_format', { expectedRevision: 1, cells: { paraIdx: 6, controlIdx: 0 }, bold: true });
+  ok('set_cell_props', { expectedRevision: 1, sectionIdx: 0, paraIdx: 6, controlIdx: 0, cellIdxs: [0, [1, 7]], cellProps: { fillColor: '#E7E6E6' } });
+  ok('set_cell_props', { expectedRevision: 1, sectionIdx: 0, paraIdx: 6, controlIdx: 0, cellIdx: 3, cellProps: { fillColor: '#E7E6E6' } });
+  bad('set_cell_props', { expectedRevision: 1, sectionIdx: 0, paraIdx: 6, controlIdx: 0, cellProps: { fillColor: '#E7E6E6' } }, /cellIdx \(one cell\) or cellIdxs/);
+  bad('set_cell_props', { expectedRevision: 1, sectionIdx: 0, paraIdx: 6, controlIdx: 0, cellIdx: 1, cellIdxs: [2], cellProps: { fillColor: '#E7E6E6' } }, /exactly one of them/);
+  ok('preview_equation', { script: 'a over b', includeSvg: true });
 });
 
 test('batchable lists only name v1 tools of the right kind', () => {
@@ -147,9 +186,6 @@ test('validateArgs accepts TOOL_RULES / description examples', () => {
   ok('apply_list', { expectedRevision: 1, sectionIdx: 0, startParaIdx: 2, endParaIdx: 5, format: '가.' });
   ok('render_page', { pageIndex: 0, regionMm: { x: 0, y: 0, width: 50, height: 20 } });
   ok('insert_image', { expectedRevision: 1, sectionIdx: 0, paraIdx: 0, charOffset: 0, imagePath: '/tmp/a.png' });
-  ok('ask_user_question', { questions: [{ id: 'q1', header: '어조', question: '어떤 어조로?', options: [{ label: '공식', description: '보고서체' }, { label: '친근', description: '대화체' }] }] });
-  ok('request_permission', { capability: 'edit-document', reason: '본문을 고치려면 편집 모드가 필요합니다' });
-  ok('update_todos', { planId: 'p1', todos: [{ content: '개요 다시 쓰기', status: 'in-progress' }] });
   // 최상위 null 은 "없음"
   ok('insert_text', { expectedRevision: 1, paraIdx: 1, text: 'x', charOffset: null, cell: null });
 });
@@ -183,7 +219,6 @@ test('validateArgs rejects with careful messages', () => {
   bad('set_bookmark', { expectedRevision: 1, op: 'add', name: 'b' }, /op "add" requires sectionIdx/);
   bad('insert_image', { expectedRevision: 1, sectionIdx: 0, paraIdx: 0, charOffset: 0 }, /exactly one of imagePath or imageBase64/);
   bad('insert_image', { expectedRevision: 1, sectionIdx: 0, paraIdx: 0, charOffset: 0, imagePath: '/a.png', xMm: 3 }, /need positionMode "floating"/);
-  bad('request_permission', { capability: 'browser', reason: 'x' });
   bad('no_such_tool', {}, /unknown tool/);
   bad('get_structure', 'nope', /must be an object/);
 });

@@ -12,6 +12,7 @@
  */
 import { EditJournal, type EditJournalEntry } from './edit-journal.ts';
 import { Engine, ENGINE_EDIT_METHODS } from './engine-adapter.ts';
+import { ENGINE_METHOD_SIGNATURES, checkEngineArgs, engineSignatureText } from './engine-signatures.ts';
 import { RevisionTracker, timeSeededRevision } from './revision.ts';
 import { PendingStaging } from './pending.ts';
 import { renderPagePng, renderStackedRegions } from './render.ts';
@@ -46,7 +47,8 @@ const CONTROL_TOOLS = new Set(['ask_user_question', 'request_permission', 'prese
 const APPLY_EDITS_MAX = 32;
 const READ_BATCH_MAX = 16;
 const PAGE_STARTS_FOR_REPORT_LIMIT = 200;
-const MAX_SVG_BYTES = 800_000;
+/** SVG 는 글로 모델에 들어간다 — 한 쪽이 보통 30만 자를 넘으므로 작은 쪽·작은 영역이 아니면 거절한다 */
+const MAX_SVG_BYTES = 100_000;
 
 type ReadHandler = (args: Record<string, unknown>, ctx: ToolContext, engine: Engine) => unknown | Promise<unknown>;
 
@@ -134,7 +136,7 @@ export class DoogleToolExecutor {
       get_selection: (_a, _c, e) => this.getSelection(e),
       find_text: (a, _c, e) => this.findText(a, e),
       get_document_info: (a, _c, e) => this.getDocumentInfo(a, e),
-      get_fields: (_a, _c, e) => ({ revision: this.revision, fields: e.json('getFieldList') ?? [] }),
+      get_fields: (_a, _c, e) => this.getFields(e),
       get_para_format: (a, _c, e) => this.getParaFormat(a, e),
       get_char_format: (a, _c, e) => this.getCharFormat(a, e),
       get_table_properties: (a, _c, e) => this.getTableProperties(a, e),
@@ -268,10 +270,17 @@ export class DoogleToolExecutor {
       + ' — number occurrences against the text after those items, or match a longer unique phrase';
   }
 
+  /** 이번 쓰기에서 건드리기 직전 표의 본문 폭 넘침(px) — 키 "sec:para:ctrl" */
+  private tableOverflowBefore = new Map<string, number>();
+
   private scope(engine: Engine): WriteScope {
     return {
       engine,
       touches: [],
+      noteTableBefore: (s, p, c) => {
+        const key = `${s}:${p}:${c}`;
+        if (!this.tableOverflowBefore.has(key)) this.tableOverflowBefore.set(key, this.tableOverflowPx(engine, s, p, c));
+      },
       requireRevision: (a, s, p0, p1) => this.requireRevision(a, s, p0, p1),
       requireRevisionAnchored: (a, m) => this.requireRevisionAnchored(a, m),
       noteRemoval: (text) => {
@@ -312,22 +321,43 @@ export class DoogleToolExecutor {
     if (staged) this.staging.claim(thread);
     const baseline = this.captureBaseline(pre);
     const revBefore = this.revision;
+    this.tableOverflowBefore.clear();
     if (staged) this.staging.beginWrite(thread, pre);
     let touches: Touch[] = [];
     let result: Record<string, unknown>;
     const formatLog: FormatDiff[] = [];
+    let failure: DoogleToolError | null = null;
     try {
-      result = this.deps.transaction(`doogle:${tool}`, (doc) => {
+      result = this.deps.transaction(`doogle:${tool}`, (doc, tx) => {
         const scoped = new Engine(doc);
         if (staged) scoped.formatLog = formatLog;
         const w = this.scope(scoped);
-        const r = body(w);
-        touches = w.touches;
-        return r;
+        // 예상된 도구 실패(대상 없음·검증 실패·엔진 거절)는 여기서 받아 문서를 스스로 되돌리고
+        // "무변경"으로 끝낸다. 던지면 studio 가 명령 실패 복구를 돌리는데, 그 확인(화면·커서·기록 대조)이
+        // 어긋나면 문서 편집이 통째로 잠긴다 — 에이전트에게 도구 실패는 흔한 일이다.
+        // 호스트가 noChange 를 모르면(테스트·옛 호스트) 종전처럼 던져 호스트의 롤백에 맡긴다.
+        const restorePoint = tx ? scoped.saveSnapshot() : null;
+        try {
+          const r = body(w);
+          touches = w.touches;
+          return r;
+        } catch (error) {
+          if (!tx || restorePoint === null || !(error instanceof DoogleToolError)) throw error;
+          if (scoped.mutations > 0) scoped.restoreSnapshot(restorePoint);
+          tx.noChange();
+          failure = error;
+          return {};
+        } finally {
+          if (restorePoint !== null) scoped.discardSnapshot(restorePoint);
+        }
       });
     } catch (error) {
       if (staged) this.staging.abortWrite(pre);
       throw await settleCommandError(error);
+    }
+    if (failure) {
+      if (staged) this.staging.abortWrite(pre);
+      throw failure;
     }
     const revAfter = this.tracker.noteWrite(revBefore);
     const precise = touches.length > 0 && touches.every((t) => !t.wholeSection);
@@ -375,9 +405,11 @@ export class DoogleToolExecutor {
       }
       return pages;
     }
-    const table = t.table ?? (t.cell ? { paraIdx: t.cell.paraIdx, controlIdx: t.cell.controlIdx } : null);
+    const first = t.tableCells?.[0];
+    const table = t.table ?? (t.cell ? { paraIdx: t.cell.paraIdx, controlIdx: t.cell.controlIdx } : first ? { paraIdx: first.paraIdx, controlIdx: first.controlIdx } : null);
     if (table) {
-      const boxes = engine.tableCellBoxes(t.sectionIdx, table.paraIdx, table.controlIdx);
+      const only = t.tableCells ? new Set(t.tableCells.map((c) => c.cellIdx)) : t.cell && !t.table ? new Set([t.cell.cellIdx]) : null;
+      const boxes = engine.tableCellBoxes(t.sectionIdx, table.paraIdx, table.controlIdx).filter((b) => !only || only.has(b.cellIdx));
       const pages = [...new Set(boxes.map((b) => b.pageIndex))];
       if (pages.length > 0) return pages;
       const bbox = engine.tableBBox(t.sectionIdx, table.paraIdx, table.controlIdx);
@@ -399,7 +431,7 @@ export class DoogleToolExecutor {
     const seen = new Set<string>();
     for (const t of touches) {
       for (const page of this.pageOfTouch(engine, t)) pages.add(page);
-      if (t.wholeSection || t.table) continue;
+      if (t.wholeSection || t.table || t.tableCells) continue;
       const lo = t.cell ? t.cellParaStart ?? 0 : t.paraStart;
       const hi = t.cell ? t.cellParaEnd ?? lo : t.paraEnd;
       for (let p = lo; p <= hi && paragraphs.length < AFTER_MAX_PARAGRAPHS; p++) {
@@ -408,7 +440,9 @@ export class DoogleToolExecutor {
         seen.add(key);
         let len = 0;
         try { len = engine.length(t.sectionIdx, p, t.cell); } catch { continue; }
-        const from = p === lo && (t.charOffset ?? 0) > AFTER_WINDOW_LEAD ? (t.charOffset ?? 0) - AFTER_WINDOW_LEAD : 0;
+        // 편집 지점이 문단 뒤쪽이면 그 조금 앞부터 — 다만 문단이 그 뒤로 짧아졌으면(문단 나눔) 처음부터 보인다
+        const lead = p === lo && (t.charOffset ?? 0) > AFTER_WINDOW_LEAD ? (t.charOffset ?? 0) - AFTER_WINDOW_LEAD : 0;
+        const from = lead < len ? lead : 0;
         const text = engine.text(t.sectionIdx, p, t.cell, from, Math.min(AFTER_TEXT_CHARS, len - from));
         paragraphs.push({
           sectionIdx: t.sectionIdx, paraIdx: p, ...cellJson(t.cell), length: len,
@@ -426,6 +460,7 @@ export class DoogleToolExecutor {
       ...(pageList.length > AFTER_MAX_PAGES ? { morePages: pageList.length - AFTER_MAX_PAGES } : {}),
     };
     const warnings: string[] = [];
+    const reflow: string[] = [];
     if (baseline.pageStarts) {
       const afterStarts = pageCount <= PAGE_STARTS_FOR_REPORT_LIMIT ? collectPageStarts(engine, pageCount) : null;
       if (afterStarts) {
@@ -441,29 +476,37 @@ export class DoogleToolExecutor {
         const counts: number[] = [];
         for (let s = 0; s < engine.sectionCount(); s++) counts.push(engine.paragraphCount(s));
         const runs = movedParagraphRuns(baseline.pageStarts, afterStarts, counts, edits);
-        warnings.push(...movedRunWarnings(runs));
+        // 뒤 문단이 쪽을 옮겨 가는 것은 글을 고치면 으레 생기는 일이다 — 문제(warnings)가 아니라 참고(reflow)로 알린다.
+        reflow.push(...movedRunWarnings(runs));
       }
     }
+    const seenTables = new Set<string>();
     for (const t of touches) {
       if (!t.table) continue;
-      const overflow = this.tableOverflow(engine, t.sectionIdx, t.table.paraIdx, t.table.controlIdx);
-      if (overflow) warnings.push(overflow);
+      const key = `${t.sectionIdx}:${t.table.paraIdx}:${t.table.controlIdx}`;
+      if (seenTables.has(key)) continue;
+      seenTables.add(key);
+      // 이번 쓰기가 만든(또는 키운) 넘침만 알린다 — 원래 넘쳐 있던 표는 모델이 고칠 일이 아니다.
+      const now = this.tableOverflowPx(engine, t.sectionIdx, t.table.paraIdx, t.table.controlIdx);
+      const before = this.tableOverflowBefore.get(key) ?? 0;
+      if (now > 2 && now > before + 2) {
+        warnings.push(`table s${t.sectionIdx} p${t.table.paraIdx} c${t.table.controlIdx} now runs ${pxToMm(now)}mm past the body width — fix with edit_table fit_to_page or set_column_widths`);
+      }
     }
     if (warnings.length > 0) out['warnings'] = warnings;
+    if (reflow.length > 0) out['reflow'] = reflow;
     return out;
   }
 
-  private tableOverflow(engine: Engine, sectionIdx: number, paraIdx: number, controlIdx: number): string | null {
+  /** 표가 본문 오른쪽 끝을 넘은 양(px). 넘지 않거나 잴 수 없으면 0. */
+  private tableOverflowPx(engine: Engine, sectionIdx: number, paraIdx: number, controlIdx: number): number {
     const boxes = engine.tableCellBoxes(sectionIdx, paraIdx, controlIdx);
-    if (boxes.length === 0) return null;
-    const page = boxes[0].pageIndex;
+    if (boxes.length === 0) return 0;
     let frame: Record<string, number>;
-    try { frame = engine.pageInfo(page); } catch { return null; }
+    try { frame = engine.pageInfo(boxes[0].pageIndex); } catch { return 0; }
+    if (typeof frame['bodyRight'] !== 'number') return 0;
     const right = Math.max(...boxes.map((b) => b.x + b.w));
-    if (typeof frame['bodyRight'] === 'number' && right > frame['bodyRight'] + 2) {
-      return `table s${sectionIdx} p${paraIdx} c${controlIdx} runs ${pxToMm(right - frame['bodyRight'])}mm past the body width — fix with edit_table fit_to_page or set_column_widths`;
-    }
-    return null;
+    return Math.max(0, right - frame['bodyRight']);
   }
 
   private pageFrame(engine: Engine, pageIndex: number): PageFrame | null {
@@ -485,10 +528,12 @@ export class DoogleToolExecutor {
     } else {
       const rects: SelectionRect[] = [];
       for (const t of touches) {
-        const table = t.table ?? (t.cell ? { paraIdx: t.cell.paraIdx, controlIdx: t.cell.controlIdx } : null);
+        const first = t.tableCells?.[0];
+        const table = t.table ?? (t.cell ? { paraIdx: t.cell.paraIdx, controlIdx: t.cell.controlIdx } : first ? { paraIdx: first.paraIdx, controlIdx: first.controlIdx } : null);
         if (table) {
+          const only = t.table ? null : t.tableCells ? new Set(t.tableCells.map((c) => c.cellIdx)) : t.cell ? new Set([t.cell.cellIdx]) : null;
           for (const b of engine.tableCellBoxes(t.sectionIdx, table.paraIdx, table.controlIdx)) {
-            if (!t.cell || b.cellIdx === t.cell.cellIdx || t.table) rects.push({ pageIndex: b.pageIndex, x: b.x, y: b.y, width: b.w, height: b.h });
+            if (!only || only.has(b.cellIdx)) rects.push({ pageIndex: b.pageIndex, x: b.x, y: b.y, width: b.w, height: b.h });
           }
           continue;
         }
@@ -551,6 +596,9 @@ export class DoogleToolExecutor {
             results.push(WRITE_HANDLERS[item.tool](w, item.args));
             for (const t of w.touches.slice(before)) {
               batch.journal.push({ sectionIdx: t.sectionIdx, paraStart: t.paraStart, paraEnd: t.paraEnd, paraDelta: t.paraDelta });
+              // 이 항목이 문단 수를 바꿨으면, 앞 항목들이 적어 둔 자리(그 뒤쪽 문단)를 같은 만큼 민다 —
+              // 그래야 after 보고와 검토 위치가 배치가 끝난 문서의 문단 번호를 가리킨다.
+              if (t.paraDelta !== 0 && !t.wholeSection) shiftEarlierTouches(w.touches.slice(0, before), t);
             }
           } catch (error) {
             w.touches.length = before;
@@ -605,14 +653,21 @@ export class DoogleToolExecutor {
 
   private getEngineEditCapabilities(args: Record<string, unknown>, engine: Engine): unknown {
     const query = typeof args['query'] === 'string' ? (args['query'] as string).toLowerCase() : '';
-    const available = Object.entries(ENGINE_EDIT_METHODS).filter(([m]) => engine.has(m) && (!query || m.toLowerCase().includes(query)));
+    const available = Object.entries(ENGINE_EDIT_METHODS).filter(([m]) => engine.has(m) && ENGINE_METHOD_SIGNATURES[m]
+      && (!query || m.toLowerCase().includes(query)));
     const byKind: Record<string, string[]> = {};
     for (const [m, kind] of available) (byKind[kind] ??= []).push(m);
+    const detailed = args['detail'] === true || query.length > 0;
     return {
       revision: this.revision,
       methods: byKind,
-      argumentGuide: 'apply_engine_edits operations are {method, args:[positional]} — JSON options arguments are passed as JSON strings, '
-        + 'Uint8Array as {$base64}. Coordinates are 0-based (sectionIdx, paraIdx, charOffset in characters); sizes in HWPUNIT (1mm ≈ 283.46).',
+      // 시그니처 없이 인자를 짐작해 부르면 엔진이 죽는다 — query 나 detail:true 면 정확한 시그니처를 함께 준다.
+      ...(detailed ? { signatures: Object.fromEntries(available.slice(0, 40).map(([m]) => [m, engineSignatureText(m)])) } : {}),
+      ...(detailed && available.length > 40 ? { signaturesOmitted: available.length - 40 } : {}),
+      argumentGuide: 'apply_engine_edits operations are {method, args:[positional]} matching the signature exactly (count and types are checked before the call) — '
+        + '*_json arguments are JSON strings, Uint8Array is {$base64}. Coordinates are 0-based (section, paragraph, charOffset in characters); sizes in HWPUNIT (1mm ≈ 283.46). '
+        + (detailed ? '' : 'Pass query (a name fragment) or detail:true to get signatures. ')
+        + 'Prefer the semantic tools; this is for operations they do not cover.',
     };
   }
 
@@ -626,6 +681,8 @@ export class DoogleToolExecutor {
         throw invalidArgs(`operations[${i}].method ${JSON.stringify(method)} is not an agent-editable document method — see get_engine_edit_capabilities`);
       }
       if (!Array.isArray(r['args'])) throw invalidArgs(`operations[${i}].args must be an array`);
+      const bad = checkEngineArgs(method, r['args'] as unknown[]);
+      if (bad) throw invalidArgs(`operations[${i}] ${bad}`);
       const callArgs = (r['args'] as unknown[]).map((a) => {
         const o = asRecord(a);
         if (typeof o['$base64'] === 'string') {
@@ -673,6 +730,8 @@ export class DoogleToolExecutor {
       throw invalidArgs(`${JSON.stringify(method)} is not a session method — see get_engine_edit_capabilities (kind "session")`);
     }
     const callArgs = Array.isArray(args['args']) ? args['args'] as unknown[] : [];
+    const bad = checkEngineArgs(method, callArgs);
+    if (bad) throw invalidArgs(bad);
     const value = engine.call(method, ...callArgs);
     return { revision: this.revision, result: typeof value === 'string' ? (() => { try { return JSON.parse(value); } catch { return value; } })() : value };
   }
@@ -816,6 +875,36 @@ export class DoogleToolExecutor {
       out['fonts'] = fonts.filter((f) => qs.some((q) => f.toLowerCase().includes(q))).slice(0, 50);
     }
     return out;
+  }
+
+  /** 누름틀 목록 — 모델에게 필요한 것만 (엔진의 내부 명령 문자열·바이트 위치는 뺀다) */
+  private getFields(engine: Engine): unknown {
+    const raw = engine.json<Array<Record<string, unknown>>>('getFieldList') ?? [];
+    const names = new Map<string, number>();
+    for (const f of raw) names.set(String(f['name'] ?? ''), (names.get(String(f['name'] ?? '')) ?? 0) + 1);
+    const fields = raw.map((f) => {
+      const loc = asRecord(f['location']);
+      const name = String(f['name'] ?? '');
+      const cell = loc['cellIndex'] !== undefined || loc['cellIdx'] !== undefined;
+      return {
+        name,
+        ...(f['guide'] && f['guide'] !== name ? { guide: f['guide'] } : {}),
+        value: f['value'] ?? '',
+        fieldType: f['fieldType'],
+        sectionIdx: loc['sectionIndex'] ?? loc['sectionIdx'] ?? 0,
+        paraIdx: loc['paraIndex'] ?? loc['paraIdx'],
+        ...(typeof f['startCharIdx'] === 'number' ? { charOffset: f['startCharIdx'], length: Math.max(0, (f['endCharIdx'] as number) - (f['startCharIdx'] as number)) } : {}),
+        ...(cell ? { inCell: true } : {}),
+        // 이름이 같은 누름틀은 set_field_value 로 구별할 수 없다 — 글 자리(문단·오프셋)로 고친다
+        ...((names.get(name) ?? 0) > 1 ? { duplicateName: true } : {}),
+      };
+    });
+    const dup = fields.some((f) => 'duplicateName' in f);
+    return {
+      revision: this.revision,
+      fields,
+      ...(dup ? { note: 'Fields marked duplicateName share a name, so set_field_value cannot tell them apart — edit those by position with replace_range {paraIdx, startCharOffset, endCharOffset} (charOffset..charOffset+length), or insert_text when length is 0.' } : {}),
+    };
   }
 
   private getParaFormat(args: Record<string, unknown>, engine: Engine): unknown {
@@ -993,7 +1082,7 @@ export class DoogleToolExecutor {
     if (pageIndex >= pageCount) throw invalidArgs(`pageIndex ${pageIndex} is out of range (0..${pageCount - 1})`);
     if (args['format'] === 'svg') {
       const svg = String(engine.call('renderPageSvg', pageIndex));
-      if (svg.length > MAX_SVG_BYTES) throw new DoogleToolError('RESULT_TOO_LARGE', `SVG is ${svg.length} bytes (cap ${MAX_SVG_BYTES}); render a PNG or a regionMm instead.`);
+      if (svg.length > MAX_SVG_BYTES) throw new DoogleToolError('RESULT_TOO_LARGE', `This page's SVG is ${svg.length} characters (cap ${MAX_SVG_BYTES}) — too large to read as text. Use the default PNG (with regionMm to zoom in) or get_page_geometry for positions.`);
       return { revision: this.revision, pageIndex, svg };
     }
     const scale = typeof args['scale'] === 'number' ? Math.min(3, Math.max(0.5, args['scale'] as number)) : 1.25;
@@ -1073,7 +1162,8 @@ export class DoogleToolExecutor {
     const p = asRecord(parsed);
     return {
       revision: this.revision,
-      svg: p['svg'] ?? p['markup'] ?? null,
+      // SVG 마크업은 길다(수천 자) — 달라고 할 때만 싣는다. 판단에는 warnings 와 크기면 충분하다.
+      ...(args['includeSvg'] === true ? { svg: p['svg'] ?? p['markup'] ?? null } : {}),
       ...(typeof p['width'] === 'number' ? { widthMm: huToMm(p['width'] as number) } : {}),
       ...(typeof p['height'] === 'number' ? { heightMm: huToMm(p['height'] as number) } : {}),
       warnings: Array.isArray(p['warnings']) ? p['warnings'] : Array.isArray(p['diagnostics']) ? p['diagnostics'] : [],
@@ -1116,6 +1206,9 @@ export class DoogleToolExecutor {
 /** change set 요약 한 줄 */
 /** (검토 UI) 도구가 넣은 글 — 선택 길이 계산용 */
 function insertedText(tool: string, args: Record<string, unknown>): string | null {
+  if (tool === 'insert_paragraphs' && Array.isArray(args['paragraphs'])) {
+    return (args['paragraphs'] as unknown[]).filter((t) => typeof t === 'string').join('\n');
+  }
   const t = tool === 'replace_all' ? args['replacement'] : tool === 'insert_text' || tool === 'replace_range' ? args['text'] : undefined;
   return typeof t === 'string' ? t : null;
 }
@@ -1134,8 +1227,9 @@ function reviewTargets(engine: Engine, tool: string, args: Record<string, unknow
         out.push({ sectionIdx: t.sectionIdx, paraIdx: 0, charOffset: 0, length: 0, wholeSection: true });
         continue;
       }
-      if (t.table) {
-        out.push({ sectionIdx: t.sectionIdx, paraIdx: t.table.paraIdx, charOffset: 0, length: 0, table: { ...t.table } });
+      if (t.table || t.tableCells) {
+        const table = t.table ?? { paraIdx: t.tableCells![0].paraIdx, controlIdx: t.tableCells![0].controlIdx };
+        out.push({ sectionIdx: t.sectionIdx, paraIdx: table.paraIdx, charOffset: 0, length: 0, table: { ...table } });
         continue;
       }
       const para = t.cell ? t.cellParaStart ?? 0 : t.paraStart;
@@ -1156,6 +1250,23 @@ function reviewTargets(engine: Engine, tool: string, args: Record<string, unknow
     } catch { /* 위치를 못 구하면 행은 위치 없이 보인다 */ }
   }
   return out;
+}
+
+/**
+ * 배치의 뒤 항목(later)이 문단 수를 바꿨을 때, 앞 항목들이 적어 둔 자리를 같은 만큼 옮긴다.
+ * later 는 편집 뒤 좌표다: 편집 전 영역의 끝은 paraEnd - paraDelta 이고 그 뒤 문단이 paraDelta 만큼 움직였다.
+ */
+function shiftEarlierTouches(earlier: Touch[], later: Touch): void {
+  const regionEndBefore = later.paraEnd - later.paraDelta;
+  for (const t of earlier) {
+    if (t.sectionIdx !== later.sectionIdx || t.wholeSection) continue;
+    if (t.paraStart <= regionEndBefore) continue;
+    t.paraStart += later.paraDelta;
+    t.paraEnd += later.paraDelta;
+    if (t.cell) t.cell = { ...t.cell, paraIdx: t.cell.paraIdx + later.paraDelta };
+    if (t.table) t.table = { ...t.table, paraIdx: t.table.paraIdx + later.paraDelta };
+    if (t.tableCells) t.tableCells = t.tableCells.map((c) => ({ ...c, paraIdx: c.paraIdx + later.paraDelta }));
+  }
 }
 
 /** (검토 UI) 인자 사본 — 긴 문자열·배열은 자른다 */
@@ -1188,6 +1299,9 @@ function summarize(tool: string, args: Record<string, unknown>): string {
     case 'delete_range': return `delete ${args['find'] ? `"${clip(args['find'])}"` : 'range'}`;
     case 'replace_all': return `replace all "${clip(args['query'])}" → "${clip(args['replacement'])}"`;
     case 'apply_edits': return `${Array.isArray(args['edits']) ? (args['edits'] as unknown[]).length : 0} edits`;
+    case 'insert_paragraphs': return `insert ${Array.isArray(args['paragraphs']) ? (args['paragraphs'] as unknown[]).length : 0} paragraph(s) "${clip(Array.isArray(args['paragraphs']) ? (args['paragraphs'] as unknown[]).find((t) => typeof t === 'string' && t) : '')}"`;
+    case 'delete_paragraphs': return `delete paragraphs ${String(args['startParaIdx'])}${args['endParaIdx'] !== undefined && args['endParaIdx'] !== args['startParaIdx'] ? `–${String(args['endParaIdx'])}` : ''}`;
+    case 'move_paragraphs': return `move paragraphs ${String(args['startParaIdx'])}${args['endParaIdx'] !== undefined && args['endParaIdx'] !== args['startParaIdx'] ? `–${String(args['endParaIdx'])}` : ''} → ${String(args['where'] ?? 'before')} ${String(args['toParaIdx'])}`;
     default: return tool.replace(/_/g, ' ');
   }
 }

@@ -18,8 +18,11 @@ export { documentIdArgError, assertCellArgsPlacement, TABLE_PROPS_KEYS, CELL_PRO
 /** tool 이름 목록 (정의 순서). */
 export const TOOL_NAMES = Object.freeze(TOOLS.map((tool) => tool.name));
 
-/** 사용자 응답을 기다리는 tool — 호출 타임아웃을 두지 않는다 (사람이 답할 때까지). */
-export const HUMAN_WAIT_TOOL_NAMES = Object.freeze(['ask_user_question', 'request_permission']);
+/**
+ * 사용자 응답을 기다리는 tool — hub 가 긴 대기 시간을 준다. v1 에는 그런 tool 이 없다
+ * (대화 제어 tool 은 응답 화면이 생길 때 definitions.mjs 와 함께 되살린다).
+ */
+export const HUMAN_WAIT_TOOL_NAMES = Object.freeze([]);
 
 const TOOLS_BY_NAME = new Map(TOOLS.map((tool) => [tool.name, tool]));
 

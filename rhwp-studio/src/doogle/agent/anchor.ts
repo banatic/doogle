@@ -375,12 +375,14 @@ export function matchFromSearchHit(
     context,
   };
   const ctx = hit.cellContext;
-  if (ctx) {
-    const path = hit.cellPath && hit.cellPath.length > 0 ? hit.cellPath : undefined;
-    const top = path ? path[0] : { controlIndex: ctx.ctrlIdx, cellIndex: ctx.cellIdx, cellParaIndex: ctx.cellPara };
-    m.paraIdx = path ? path[path.length - 1].cellParaIndex : ctx.cellPara;
+  const path = hit.cellPath && hit.cellPath.length > 0 ? hit.cellPath : undefined;
+  // 엔진은 깊이 1 셀에는 cellContext 를, 중첩 셀에는 cellPath 만 싣는다 — 둘 중 하나만 있어도 셀 매치다.
+  // (cellPath 만 올 때 hit.para 는 표가 놓인 본문 문단이다.)
+  if (ctx || path) {
+    const top = path ? path[0] : { controlIndex: ctx!.ctrlIdx, cellIndex: ctx!.cellIdx, cellParaIndex: ctx!.cellPara };
+    m.paraIdx = path ? path[path.length - 1].cellParaIndex : ctx!.cellPara;
     m.cell = {
-      paraIdx: ctx.parentPara,
+      paraIdx: ctx ? ctx.parentPara : hit.para,
       controlIdx: top.controlIndex,
       cellIdx: top.cellIndex,
       ...(path && path.length > 1 ? { path } : {}),

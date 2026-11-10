@@ -31,6 +31,8 @@ export interface Touch {
   charOffset?: number;
   /** 표 전체·개체 전체 */
   table?: { paraIdx: number; controlIdx: number };
+  /** 한 표의 여러 셀 (서식을 한꺼번에 바꾼 경우) — after 보고·crop 은 이 셀들만 본다 */
+  tableCells?: CellAddr[];
   /** 구역 전체 (쪽 설정·머리말 등) — 저널에 정밀 기록하지 않는다 */
   wholeSection?: boolean;
 }
@@ -44,6 +46,8 @@ export interface WriteScope {
   requireRevisionAnchored(args: Record<string, unknown>, anchor: ResolvedAnchor): void;
   /** 이번 배치 앞 항목이 지운 글 (occurrence 오류 설명용) */
   noteRemoval(text: string): void;
+  /** 표를 바꾸기 직전에 부른다 — 쓰기 뒤 넘침 경고를 "새로 생긴 넘침"으로만 좁히는 기준점 */
+  noteTableBefore?(sectionIdx: number, paraIdx: number, controlIdx: number): void;
   batchNote(text: string, remaining: number): string;
 }
 
@@ -256,6 +260,17 @@ const insertText: WriteHandler = (w, args) => {
     const given = optInt(args, 'charOffset');
     const len = validateAddress(engine, sectionIdx, paraIdx, given, cell);
     offset = given ?? len;
+    if (given === undefined && !cell) {
+      // 오프셋 없이 "문단 끝"에 덧붙일 때, 끝자리에 놓인 표·그림·도형이 있으면 글은 그 개체 앞에 들어간다.
+      const trailing = engine.objectsIn(sectionIdx, paraIdx, paraIdx).filter((o) => o.kind !== 'equation' && o.charOffset >= len);
+      if (trailing.length > 0) {
+        throw new DoogleToolError(
+          'OBJECT_AT_PARAGRAPH_END',
+          `paragraph p${paraIdx} ends with ${describeObjects(trailing)}; text appended here would land BEFORE it. `
+            + `To add paragraphs after it use insert_paragraphs {paraIdx:${paraIdx}, paragraphs:[…]}; to type before it pass charOffset:${len} explicitly.`,
+        );
+      }
+    }
     if (shift !== 0) extra = { rebasedParaShift: shift };
   }
   const end = engine.insertText(sectionIdx, paraIdx, offset, text, cell);
@@ -277,6 +292,9 @@ function rangeTarget(w: WriteScope, args: Record<string, unknown>, tool: string)
   const anchor = optAnchor(w, args);
   if (anchor) {
     anchorReplaceOnly(anchor, tool);
+    if (!anchor.cell) {
+      refuseObjectsInRange(w.engine, tool, anchor.sectionIdx, anchor.paraIdx, anchor.charOffset, anchor.paraIdx, anchor.charOffset + anchor.length);
+    }
     return {
       sectionIdx: anchor.sectionIdx, startPara: anchor.paraIdx, startOffset: anchor.charOffset,
       endPara: anchor.paraIdx, endOffset: anchor.charOffset + anchor.length, cell: anchor.cell, anchor, shift: 0,
@@ -303,7 +321,45 @@ function rangeTarget(w: WriteScope, args: Record<string, unknown>, tool: string)
   validateAddress(engine, sectionIdx, startPara, startOffset, cell);
   validateAddress(engine, sectionIdx, endPara, endOffset, cell);
   if (startPara === endPara && endOffset < startOffset) throw invalidArgs('endCharOffset must be >= startCharOffset');
+  if (!cell) refuseObjectsInRange(engine, tool, sectionIdx, startPara, startOffset, endPara, endOffset);
   return { sectionIdx, startPara, startOffset, endPara, endOffset, cell, shift };
+}
+
+function describeObjects(objects: Array<{ kind: string; sectionIdx: number; paraIdx: number; controlIdx: number }>): string {
+  return objects.slice(0, 4).map((o) => `${o.kind} s${o.sectionIdx} p${o.paraIdx} c${o.controlIdx}`).join(', ')
+    + (objects.length > 4 ? ` (+${objects.length - 4} more)` : '');
+}
+
+/**
+ * 본문 범위 안에 놓인 개체(표·그림·도형·수식)를 찾는다. 개체는 글자 오프셋을 차지하지 않아 범위의 양 끝이
+ * 모호하다 — 여러 문단을 잇는 삭제는 끝 문단의 오프셋 0 에 걸린 표까지 지운다. 그래서 여러 문단 범위는 양 끝을
+ * 포함으로, 한 문단 범위는 [start, end) 로 본다.
+ */
+function objectsInRange(engine: Engine, sectionIdx: number, startPara: number, startOffset: number, endPara: number, endOffset: number) {
+  if (startPara === endPara && startOffset === endOffset) return [];
+  return engine.objectsIn(sectionIdx, startPara, endPara).filter((o) => {
+    if (startPara === endPara) return o.charOffset >= startOffset && o.charOffset < endOffset;
+    if (o.paraIdx === startPara) return o.charOffset >= startOffset;
+    if (o.paraIdx === endPara) return o.charOffset <= endOffset;
+    return true;
+  });
+}
+
+/** 글 범위 도구는 개체를 지우지 않는다 — 걸리면 고칠 방법과 함께 거절한다. */
+function refuseObjectsInRange(engine: Engine, tool: string, sectionIdx: number, startPara: number, startOffset: number, endPara: number, endOffset: number): void {
+  const hit = objectsInRange(engine, sectionIdx, startPara, startOffset, endPara, endOffset);
+  if (hit.length === 0) return;
+  const atEnd = hit.every((o) => o.paraIdx === endPara) && endOffset === 0 && endPara > startPara;
+  const prevLen = atEnd ? engine.length(sectionIdx, endPara - 1) : 0;
+  throw new DoogleToolError(
+    'RANGE_HAS_OBJECTS',
+    `${tool} range s${sectionIdx} p${startPara}@${startOffset}..p${endPara}@${endOffset} would also delete ${describeObjects(hit)} — text ranges never remove objects. `
+      + (atEnd
+        ? `The range ends at offset 0 of p${endPara}, which holds that object: to remove whole paragraphs use delete_paragraphs {startParaIdx:${startPara}, endParaIdx:${endPara - 1}}`
+          + ` (or end the range at p${endPara - 1}@${prevLen}).`
+        : 'Narrow the range to the text itself, or remove the object explicitly (delete_table, edit_object delete:true, or delete_paragraphs with includeObjects:true).'),
+    { objects: hit.map((o) => ({ kind: o.kind, sectionIdx: o.sectionIdx, paraIdx: o.paraIdx, controlIdx: o.controlIdx })) },
+  );
 }
 
 function readRange(engine: Engine, t: ReturnType<typeof rangeTarget>): string {
@@ -418,6 +474,53 @@ function parasTargets(w: WriteScope, args: Record<string, unknown>, tool: string
   return { sectionIdx, paras: [...picked].sort((x, y) => x - y), cell };
 }
 
+const CELLS_MAX = 400;
+
+/** [8, [9, 13]] → 정렬된 셀 번호 목록 */
+function cellIndexList(raw: unknown, name: string, cellCount: number): number[] {
+  if (!Array.isArray(raw) || raw.length < 1 || raw.length > 128) {
+    throw invalidArgs(`${name} must list 1..128 entries, each a cellIdx or an inclusive [first, last] range, e.g. [8, [9, 13]]`);
+  }
+  const isIndex = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
+  const picked = new Set<number>();
+  raw.forEach((entry, i) => {
+    let a: number;
+    let b: number;
+    if (isIndex(entry)) { a = entry; b = entry; }
+    else if (Array.isArray(entry) && entry.length === 2 && isIndex(entry[0]) && isIndex(entry[1]) && entry[1] >= entry[0]) { a = entry[0]; b = entry[1]; }
+    else throw invalidArgs(`${name}[${i}] must be a cellIdx or an inclusive [first, last] range (got ${JSON.stringify(entry)})`);
+    if (b >= cellCount) throw invalidArgs(`${name}[${i}] ${JSON.stringify(entry)} is out of range (cellIdx 0..${cellCount - 1})`);
+    for (let c = a; c <= b; c++) picked.add(c);
+    if (picked.size > CELLS_MAX) throw invalidArgs(`${name} covers more than ${CELLS_MAX} cells — split it into several items`);
+  });
+  return [...picked].sort((x, y) => x - y);
+}
+
+/** cells:{paraIdx, controlIdx, cellIdxs:[8,[9,13]]} → 그 셀들 (셀 안 문단 전부가 대상) */
+function cellsTargets(w: WriteScope, args: Record<string, unknown>, tool: string): { sectionIdx: number; cells: CellAddr[] } | null {
+  const raw = args['cells'];
+  if (!given(raw)) return null;
+  const clash = ['paraIdx', 'paras', 'startOffset', 'endOffset', 'find', 'anchor', 'cell', 'cellPath'].filter((k) => given(args[k]));
+  if (clash.length > 0) throw invalidArgs(`cells already names the target cells — drop ${clash.join(', ')}, or send that target as a separate item`);
+  const c = asRecord(raw);
+  for (const k of ['paraIdx', 'controlIdx']) {
+    if (typeof c[k] !== 'number' || !Number.isSafeInteger(c[k]) || (c[k] as number) < 0) {
+      throw invalidArgs('cells must be {paraIdx, controlIdx, cellIdxs:[cellIdx | [first,last], …]} with the table address from its get_structure line');
+    }
+  }
+  const { engine } = w;
+  const sectionIdx = sectionOf(engine, args, tool);
+  const shift = w.requireRevision(args, sectionIdx, c['paraIdx'] as number, c['paraIdx'] as number);
+  const paraIdx = (c['paraIdx'] as number) + shift;
+  const controlIdx = c['controlIdx'] as number;
+  let dims;
+  try { dims = engine.tableDims(sectionIdx, paraIdx, controlIdx); } catch {
+    throw invalidArgs(`cells {paraIdx:${paraIdx}, controlIdx:${controlIdx}} is not a table — take the address from a get_structure table line`);
+  }
+  const list = cellIndexList(c['cellIdxs'], 'cells.cellIdxs', dims.cellCount);
+  return { sectionIdx, cells: list.map((cellIdx) => ({ paraIdx, controlIdx, cellIdx })) };
+}
+
 function touchParas(w: WriteScope, sectionIdx: number, paras: number[], cell?: CellAddr): void {
   if (cell) {
     w.touches.push(cellHostTouch(sectionIdx, cell, paras[0], paras[paras.length - 1]));
@@ -437,6 +540,21 @@ function touchParas(w: WriteScope, sectionIdx: number, paras: number[], cell?: C
 const applyCharFormat: WriteHandler = (w, args) => {
   const { engine } = w;
   const props = charFormatProps(args, (name) => Number(engine.call('findOrCreateFontId', name)));
+  const many = cellsTargets(w, args, 'apply_char_format');
+  if (many) {
+    let paragraphs = 0;
+    for (const cell of many.cells) {
+      const n = engine.cellParagraphCount(many.sectionIdx, cell);
+      for (let p = 0; p < n; p++) {
+        const len = engine.length(many.sectionIdx, p, cell);
+        if (len === 0) continue;
+        engine.applyCharFormat(many.sectionIdx, p, 0, len, props, cell);
+        paragraphs++;
+      }
+    }
+    w.touches.push({ sectionIdx: many.sectionIdx, paraStart: many.cells[0].paraIdx, paraEnd: many.cells[0].paraIdx, paraDelta: 0, tableCells: many.cells });
+    return { cells: many.cells.length, paragraphs };
+  }
   const targets = parasTargets(w, args, 'apply_char_format');
   if (targets) {
     let skippedEmpty = 0;
@@ -479,6 +597,19 @@ const applyParaFormat: WriteHandler = (w, args) => {
     current: () => engine.paraPropsAt(sec, para, cell),
     ensureBullet: (ch) => Number(engine.call('ensureDefaultBullet', ch)),
   });
+  const many = cellsTargets(w, args, 'apply_para_format');
+  if (many) {
+    let paragraphs = 0;
+    for (const cell of many.cells) {
+      const n = engine.cellParagraphCount(many.sectionIdx, cell);
+      for (let p = 0; p < n; p++) {
+        engine.applyParaFormat(many.sectionIdx, p, build(many.sectionIdx, p, cell), cell);
+        paragraphs++;
+      }
+    }
+    w.touches.push({ sectionIdx: many.sectionIdx, paraStart: many.cells[0].paraIdx, paraEnd: many.cells[0].paraIdx, paraDelta: 0, tableCells: many.cells });
+    return { cells: many.cells.length, paragraphs };
+  }
   const targets = parasTargets(w, args, 'apply_para_format');
   if (targets) {
     for (const p of targets.paras) engine.applyParaFormat(targets.sectionIdx, p, build(targets.sectionIdx, p, targets.cell), targets.cell);
@@ -811,13 +942,27 @@ const createTable: WriteHandler = (w, args) => {
   const widths = Array.isArray(args['colWidthsMm']) ? (args['colWidthsMm'] as number[]) : null;
   if (widths && widths.length !== cols) throw invalidArgs(`colWidthsMm has ${widths.length} entries but the table has ${cols} columns`);
   const before = engine.paragraphCount(sectionIdx);
-  const options: Record<string, unknown> = { sectionIdx, paraIdx, charOffset: offset, rowCount: rows, colCount: cols };
+  // 본문 표는 글자처럼 취급(문단 흐름을 따른다)이 한글의 기본이다 — 떠 있는 표가 필요하면 set_table_props 로 바꾼다.
+  const options: Record<string, unknown> = { sectionIdx, paraIdx, charOffset: offset, rowCount: rows, colCount: cols, treatAsChar: true };
   if (widths) options['colWidths'] = widths.map(mmToHu);
   const created = engine.has('createTableEx')
     ? engine.json<{ paraIdx: number; controlIdx: number }>('createTableEx', JSON.stringify(options))
     : engine.json<{ paraIdx: number; controlIdx: number }>('createTable', sectionIdx, paraIdx, offset, rows, cols);
   engine.invalidate();
   const table = { paraIdx: created.paraIdx, controlIdx: created.controlIdx };
+  let fitted: string | undefined;
+  if (!widths) {
+    // 표는 놓인 문단의 왼쪽 여백만큼 밀려 본문 오른쪽 끝을 넘을 수 있다(앞 문단 모양을 이은 빈 문단).
+    // 표만 있는 문단이면 그 여백을 0 으로 하고, 그래도 넘으면 본문 폭에 맞춘다.
+    if (tableOverflow(engine, sectionIdx, table) > 2 && engine.length(sectionIdx, table.paraIdx) === 0) {
+      engine.applyParaFormat(sectionIdx, table.paraIdx, { marginLeft: 0, marginRight: 0, indent: 0 });
+      fitted = 'host paragraph margins reset';
+    }
+    if (tableOverflow(engine, sectionIdx, table) > 2 && engine.has('fitTableToPage')) {
+      engine.json('fitTableToPage', sectionIdx, table.paraIdx, table.controlIdx);
+      fitted = 'fit to body width';
+    }
+  }
   if (cells) {
     cells.forEach((row, r) => row.forEach((text, c) => {
       if (!text || c >= cols || r >= rows) return;
@@ -842,11 +987,40 @@ const createTable: WriteHandler = (w, args) => {
         }
       }
     }
+    if (args['headerBold'] !== false) {
+      // 머리행만 굵게 — 표가 굵은 문단(제목 서식을 이은 빈 문단) 자리에 놓이면 셀 글이 모두 굵게 들어온다
+      for (let i = cols; i < rows * cols; i++) {
+        const cell: CellAddr = { paraIdx: table.paraIdx, controlIdx: table.controlIdx, cellIdx: i };
+        const n = engine.cellParagraphCount(sectionIdx, cell);
+        for (let cp = 0; cp < n; cp++) {
+          const len = engine.length(sectionIdx, cp, cell);
+          if (len > 0 && engine.charPropsAt(sectionIdx, cp, 0, cell)['bold'] === true) {
+            engine.applyCharFormat(sectionIdx, cp, 0, len, { bold: false }, cell);
+          }
+        }
+      }
+    }
   }
   const delta = engine.paragraphCount(sectionIdx) - before;
   w.touches.push({ sectionIdx, paraStart: paraIdx, paraEnd: Math.max(paraIdx, table.paraIdx), paraDelta: delta, table });
-  return { paraIdx: table.paraIdx, controlIdx: table.controlIdx, rowCount: rows, colCount: cols, cellCount: rows * cols };
+  return {
+    paraIdx: table.paraIdx, controlIdx: table.controlIdx, rowCount: rows, colCount: cols, cellCount: rows * cols,
+    ...(fitted ? { fitted } : {}),
+  };
 };
+
+/** 표가 본문 오른쪽 끝을 넘은 양(px) — 잴 수 없으면 0 */
+function tableOverflow(engine: Engine, sectionIdx: number, table: { paraIdx: number; controlIdx: number }): number {
+  const boxes = engine.tableCellBoxes(sectionIdx, table.paraIdx, table.controlIdx);
+  if (boxes.length === 0) return 0;
+  try {
+    const frame = engine.pageInfo(boxes[0].pageIndex);
+    if (typeof frame['bodyRight'] !== 'number') return 0;
+    return Math.max(0, Math.max(...boxes.map((b) => b.x + b.w)) - frame['bodyRight']);
+  } catch {
+    return 0;
+  }
+}
 
 function tableTarget(w: WriteScope, args: Record<string, unknown>, tool: string): { sectionIdx: number; paraIdx: number; controlIdx: number } {
   const sectionIdx = sectionOf(w.engine, args, tool);
@@ -859,7 +1033,21 @@ function tableTarget(w: WriteScope, args: Record<string, unknown>, tool: string)
   } catch {
     throw invalidArgs(`s${sectionIdx} p${paraIdx} c${controlIdx} is not a table — take the address from a get_structure table line`);
   }
+  w.noteTableBefore?.(sectionIdx, paraIdx, controlIdx);
   return { sectionIdx, paraIdx, controlIdx };
+}
+
+/** 표의 한 행·열에 놓인 셀 번호 (병합 셀은 시작 칸 기준) */
+function cellsOfLine(engine: Engine, t: { sectionIdx: number; paraIdx: number; controlIdx: number }, axis: 'row' | 'col', index: number): number[] {
+  const dims = engine.tableDims(t.sectionIdx, t.paraIdx, t.controlIdx);
+  const out: number[] = [];
+  for (let i = 0; i < dims.cellCount; i++) {
+    try {
+      const info = engine.cellInfo(t.sectionIdx, t.paraIdx, t.controlIdx, i);
+      if ((axis === 'row' ? info.row : info.col) === index) out.push(i);
+    } catch { /* 건너뛴다 */ }
+  }
+  return out;
 }
 
 function cellIdxAt(engine: Engine, t: { sectionIdx: number; paraIdx: number; controlIdx: number }, row: number, col: number): number {
@@ -907,9 +1095,20 @@ const editTable: WriteHandler = (w, args) => {
     return v;
   };
   let note: string | undefined;
+  let added: { axis: 'row' | 'col'; index: number } | undefined;
   switch (op) {
-    case 'insert_row': engine.json('insertTableRow', sectionIdx, paraIdx, controlIdx, idx('rowIdx', dims.rowCount), args['below'] !== false); break;
-    case 'insert_col': engine.json('insertTableColumn', sectionIdx, paraIdx, controlIdx, idx('colIdx', dims.colCount), args['right'] !== false); break;
+    case 'insert_row': {
+      const at = idx('rowIdx', dims.rowCount);
+      engine.json('insertTableRow', sectionIdx, paraIdx, controlIdx, at, args['below'] !== false);
+      added = { axis: 'row', index: args['below'] !== false ? at + 1 : at };
+      break;
+    }
+    case 'insert_col': {
+      const at = idx('colIdx', dims.colCount);
+      engine.json('insertTableColumn', sectionIdx, paraIdx, controlIdx, at, args['right'] !== false);
+      added = { axis: 'col', index: args['right'] !== false ? at + 1 : at };
+      break;
+    }
     case 'delete_row':
       if (dims.rowCount <= 1) throw invalidArgs('cannot delete the only row — use delete_table');
       engine.json('deleteTableRow', sectionIdx, paraIdx, controlIdx, idx('rowIdx', dims.rowCount)); break;
@@ -964,20 +1163,22 @@ const editTable: WriteHandler = (w, args) => {
       engine.json('setTableCellFormula', sectionIdx, paraIdx, controlIdx, cellIdx, formula, JSON.stringify(fmt));
       break;
     }
-    case 'set_caption': {
-      // ENGINE_GAPS.md: setTableCaptionText 는 agent A 가 이식 중 — 없으면 engine.json 이 ENGINE_UNSUPPORTED
-      const text = reqString(args, 'text');
-      const r = engine.json<{ captionText?: string }>('setTableCaptionText', sectionIdx, paraIdx, controlIdx, text, args['withNumber'] !== false);
-      if (typeof r?.captionText === 'string') note = `caption: ${r.captionText}`;
-      break;
-    }
+    case 'set_caption':
+      // 엔진에 표 캡션 생성 경로가 없다(ENGINE_GAPS.md §2) — 도구 정의에서도 뺐다.
+      throw new DoogleToolError('ENGINE_UNSUPPORTED', 'Table captions cannot be edited in this build — type the caption as an ordinary paragraph above or below the table.');
     default:
-      throw invalidArgs('op must be insert_row|insert_col|delete_row|delete_col|merge_cells|split_cell|set_column_widths|fit_to_page|apply_formula|set_caption');
+      throw invalidArgs('op must be insert_row|insert_col|delete_row|delete_col|merge_cells|split_cell|set_column_widths|fit_to_page|apply_formula');
   }
   engine.invalidate();
   const after = engine.tableDims(sectionIdx, paraIdx, controlIdx);
   w.touches.push({ sectionIdx, paraStart: paraIdx, paraEnd: paraIdx, paraDelta: 0, table: { paraIdx, controlIdx } });
-  return { rowCount: after.rowCount, colCount: after.colCount, cellCount: after.cellCount, ...(note ? { note } : {}) };
+  // 새 행·열의 셀 번호를 바로 돌려준다 — 값을 채우려고 구조를 다시 읽지 않아도 된다.
+  const newCells = added ? cellsOfLine(engine, t, added.axis, added.index) : null;
+  return {
+    rowCount: after.rowCount, colCount: after.colCount, cellCount: after.cellCount,
+    ...(added && newCells ? { [added.axis === 'row' ? 'newRow' : 'newCol']: { [added.axis === 'row' ? 'rowIdx' : 'colIdx']: added.index, cellIdxs: newCells } } : {}),
+    ...(note ? { note } : {}),
+  };
 };
 
 const setTableProps: WriteHandler = (w, args) => {
@@ -990,13 +1191,20 @@ const setTableProps: WriteHandler = (w, args) => {
 
 const setCellProps: WriteHandler = (w, args) => {
   const t = tableTarget(w, args, 'set_cell_props');
-  const cellIdx = reqInt(args, 'cellIdx');
   const dims = w.engine.tableDims(t.sectionIdx, t.paraIdx, t.controlIdx);
-  if (cellIdx >= dims.cellCount) throw invalidArgs(`cellIdx ${cellIdx} is out of range (0..${dims.cellCount - 1})`);
-  const props = parseCellProps(asRecord(args['cellProps']));
-  w.engine.json('setCellProperties', t.sectionIdx, t.paraIdx, t.controlIdx, cellIdx, JSON.stringify(props));
+  let cells: number[];
+  if (given(args['cellIdxs'])) {
+    if (given(args['cellIdx'])) throw invalidArgs('send cellIdx (one cell) or cellIdxs (several), not both');
+    cells = cellIndexList(args['cellIdxs'], 'cellIdxs', dims.cellCount);
+  } else {
+    const cellIdx = reqInt(args, 'cellIdx');
+    if (cellIdx >= dims.cellCount) throw invalidArgs(`cellIdx ${cellIdx} is out of range (0..${dims.cellCount - 1})`);
+    cells = [cellIdx];
+  }
+  const props = JSON.stringify(parseCellProps(asRecord(args['cellProps'])));
+  for (const cellIdx of cells) w.engine.json('setCellProperties', t.sectionIdx, t.paraIdx, t.controlIdx, cellIdx, props);
   w.touches.push({ sectionIdx: t.sectionIdx, paraStart: t.paraIdx, paraEnd: t.paraIdx, paraDelta: 0, table: { paraIdx: t.paraIdx, controlIdx: t.controlIdx } });
-  return {};
+  return cells.length > 1 ? { cells: cells.length } : {};
 };
 
 const setZoneBorders: WriteHandler = (w, args) => {
@@ -1019,15 +1227,31 @@ const setZoneBorders: WriteHandler = (w, args) => {
     if (typeof b['color'] !== 'string' || !HEX_COLOR_RE.test(b['color'] as string)) throw invalidArgs(`${key}.color must be "#RRGGBB"`);
     props[key] = { type: b['type'], width: b['width'], color: b['color'] };
   }
-  if (typeof args['fillColor'] === 'string') { props['fillType'] = 'solid'; props['fillColor'] = args['fillColor']; }
+  const fill = args['fillColor'];
+  if (given(fill) && (typeof fill !== 'string' || !HEX_COLOR_RE.test(fill))) throw invalidArgs('fillColor must be "#RRGGBB"');
   for (const key of ['diagonalLine', 'diagonalSlash', 'diagonalBackSlash', 'diagonalWidth', 'diagonalColor', 'centerLine']) {
     if (given(args[key])) props[key] = args[key];
   }
-  if (Object.keys(props).length === 0) throw invalidArgs('set_zone_borders needs at least one border, fillColor, diagonal or centerLine');
-  w.engine.json('setCellZoneProperties', t.sectionIdx, t.paraIdx, t.controlIdx,
-    Math.min(s.row, e.row), Math.min(s.col, e.col), Math.max(s.row, e.row), Math.max(s.col, e.col), JSON.stringify(props));
+  if (Object.keys(props).length === 0 && !given(fill)) throw invalidArgs('set_zone_borders needs at least one border, fillColor, diagonal or centerLine');
+  const r0 = Math.min(s.row, e.row); const c0 = Math.min(s.col, e.col);
+  const r1 = Math.max(s.row, e.row); const c1 = Math.max(s.col, e.col);
+  if (Object.keys(props).length > 0) {
+    w.engine.json('setCellZoneProperties', t.sectionIdx, t.paraIdx, t.controlIdx, r0, c0, r1, c1, JSON.stringify(props));
+  }
+  let filled = 0;
+  if (typeof fill === 'string') {
+    // 영역 채움은 셀이 자기 채움을 갖고 있으면 그 아래에 깔려 보이지 않는다(값은 바뀐 것처럼 읽힌다).
+    // 그래서 채움은 영역 안 셀마다 직접 넣는다 — 결과가 화면과 같다.
+    const cellFill = JSON.stringify({ fillType: 'solid', fillColor: fill });
+    for (let i = 0; i < dims.cellCount; i++) {
+      const info = w.engine.cellInfo(t.sectionIdx, t.paraIdx, t.controlIdx, i);
+      if (info.row < r0 || info.row > r1 || info.col < c0 || info.col > c1) continue;
+      w.engine.json('setCellProperties', t.sectionIdx, t.paraIdx, t.controlIdx, i, cellFill);
+      filled++;
+    }
+  }
   w.touches.push({ sectionIdx: t.sectionIdx, paraStart: t.paraIdx, paraEnd: t.paraIdx, paraDelta: 0, table: { paraIdx: t.paraIdx, controlIdx: t.controlIdx } });
-  return {};
+  return filled > 0 ? { filledCells: filled } : {};
 };
 
 const deleteTable: WriteHandler = (w, args) => {
@@ -1038,6 +1262,153 @@ const deleteTable: WriteHandler = (w, args) => {
   const delta = w.engine.paragraphCount(t.sectionIdx) - before;
   w.touches.push({ sectionIdx: t.sectionIdx, paraStart: t.paraIdx, paraEnd: t.paraIdx, paraDelta: delta });
   return { deleted: { paraIdx: t.paraIdx, controlIdx: t.controlIdx } };
+};
+
+// ─── 문단 단위 ─────────────────────────────────────────
+
+const PARAGRAPHS_MAX = 100;
+
+/** 문단 목록 인자 — "\n" 이 든 항목은 여러 문단으로 푼다 */
+function paragraphTexts(raw: unknown): string[] {
+  if (!Array.isArray(raw) || raw.length < 1) throw invalidArgs('paragraphs must be a non-empty array of strings (one item = one paragraph; "" = an empty paragraph)');
+  const out: string[] = [];
+  raw.forEach((item, i) => {
+    if (typeof item !== 'string') throw invalidArgs(`paragraphs[${i}] must be a string`);
+    for (const part of item.replace(/\r\n?/g, '\n').split('\n')) out.push(part);
+  });
+  if (out.length > PARAGRAPHS_MAX) throw invalidArgs(`insert_paragraphs is limited to ${PARAGRAPHS_MAX} paragraphs per call`);
+  if (out.reduce((n, t) => n + t.length, 0) > 20000) throw invalidArgs('insert_paragraphs is limited to 20000 characters per call');
+  return out;
+}
+
+/**
+ * 새 문단을 기준 문단의 앞·뒤에 넣는다. 기준 문단에 표·그림이 있어도 그 개체를 건드리지 않고 문단째로 넣으므로
+ * "표 뒤에 줄 추가"·"문서 맨 끝에 추가"에 쓴다. 새 문단은 앞 문단의 모양을 잇고, formatFrom 을 주면 그 문단의
+ * 문단 모양·글자 모양을 그대로 따른다.
+ */
+const insertParagraphs: WriteHandler = (w, args) => {
+  const { engine } = w;
+  const sectionIdx = sectionOf(engine, args, 'insert_paragraphs');
+  const rawRef = reqInt(args, 'paraIdx');
+  const where = args['where'] ?? 'after';
+  if (where !== 'after' && where !== 'before') throw invalidArgs('where must be "after" or "before"');
+  const texts = paragraphTexts(args['paragraphs']);
+  const shift = w.requireRevision(args, sectionIdx, rawRef, rawRef);
+  const ref = rawRef + shift;
+  const count = engine.paragraphCount(sectionIdx);
+  if (ref >= count) throw invalidArgs(`paraIdx ${ref} is out of range for section ${sectionIdx} (0..${count - 1})`);
+  let shapes: { paraShapeId: number | null; charShapeId: number | null } | null = null;
+  const formatFrom = optInt(args, 'formatFrom');
+  if (formatFrom !== undefined) {
+    const src = formatFrom + shift;
+    if (src >= count) throw invalidArgs(`formatFrom ${src} is out of range for section ${sectionIdx} (0..${count - 1})`);
+    shapes = engine.shapeIds(sectionIdx, src);
+  }
+  const at = where === 'before' ? ref : ref + 1;
+  texts.forEach((text, i) => {
+    const p = at + i;
+    engine.insertParagraph(sectionIdx, p);
+    if (text.length > 0) engine.json('insertText', sectionIdx, p, 0, text);
+    if (shapes) {
+      if (shapes.paraShapeId !== null) engine.setParaShapeId(sectionIdx, p, shapes.paraShapeId);
+      if (shapes.charShapeId !== null) engine.setCharShapeId(sectionIdx, p, 0, scalarLength(text), shapes.charShapeId);
+    }
+  });
+  w.touches.push(bodyTouch(sectionIdx, at, at + texts.length - 1, texts.length));
+  return {
+    inserted: { sectionIdx, firstParaIdx: at, lastParaIdx: at + texts.length - 1 },
+    ...(shift ? { rebasedParaShift: shift } : {}),
+  };
+};
+
+/** 문단을 통째로 지운다 (앞뒤 문단과 합치지 않는다). 개체가 든 문단은 includeObjects:true 일 때만. */
+const deleteParagraphs: WriteHandler = (w, args) => {
+  const { engine } = w;
+  const sectionIdx = sectionOf(engine, args, 'delete_paragraphs');
+  const startRaw = reqInt(args, 'startParaIdx');
+  const endRaw = optInt(args, 'endParaIdx') ?? startRaw;
+  if (endRaw < startRaw) throw invalidArgs('endParaIdx must be >= startParaIdx');
+  const shift = w.requireRevision(args, sectionIdx, startRaw, endRaw);
+  const start = startRaw + shift;
+  const end = endRaw + shift;
+  const count = engine.paragraphCount(sectionIdx);
+  if (end >= count) throw invalidArgs(`endParaIdx ${end} is out of range for section ${sectionIdx} (0..${count - 1})`);
+  const n = end - start + 1;
+  if (n >= count) {
+    throw invalidArgs(`a section keeps at least one paragraph — to empty it, delete paragraphs ${start}..${end - 1} and clear the last one with delete_range`);
+  }
+  const objects = engine.objectsIn(sectionIdx, start, end);
+  if (objects.length > 0 && args['includeObjects'] !== true) {
+    throw new DoogleToolError(
+      'RANGE_HAS_OBJECTS',
+      `paragraphs ${start}..${end} hold ${describeObjects(objects)}. Deleting them removes those objects too — resend with includeObjects:true if that is intended, or narrow the range.`,
+      { objects: objects.map((o) => ({ kind: o.kind, sectionIdx: o.sectionIdx, paraIdx: o.paraIdx, controlIdx: o.controlIdx })) },
+    );
+  }
+  const parts: string[] = [];
+  for (let p = start; p <= end && parts.join('\n').length < 240; p++) parts.push(engine.text(sectionIdx, p, undefined, 0, 200));
+  const removed = parts.join('\n');
+  w.noteRemoval(removed);
+  for (let p = end; p >= start; p--) engine.deleteParagraph(sectionIdx, p);
+  const at = Math.min(start, engine.paragraphCount(sectionIdx) - 1);
+  w.touches.push(bodyTouch(sectionIdx, at, at, -n));
+  return {
+    deletedParagraphs: n, deleted: clip200(removed),
+    ...(objects.length > 0 ? { deletedObjects: objects.length } : {}),
+    ...(shift ? { rebasedParaShift: shift } : {}),
+  };
+};
+
+/**
+ * 문단을 다른 자리로 옮긴다 — 글자·문단 모양과 문단 안 개체(표·그림)를 그대로 가져간다.
+ * 내부 클립보드를 쓴다(복사 → 빈 문단에 붙이기 → 원래 문단 지우기).
+ */
+const moveParagraphs: WriteHandler = (w, args) => {
+  const { engine } = w;
+  const sectionIdx = sectionOf(engine, args, 'move_paragraphs');
+  const startRaw = reqInt(args, 'startParaIdx');
+  const endRaw = optInt(args, 'endParaIdx') ?? startRaw;
+  if (endRaw < startRaw) throw invalidArgs('endParaIdx must be >= startParaIdx');
+  const toRaw = reqInt(args, 'toParaIdx');
+  const where = args['where'] ?? 'before';
+  if (where !== 'after' && where !== 'before') throw invalidArgs('where must be "before" or "after"');
+  // 옮기는 범위와 목적지 사이 전체가 움직인다 — 그 구간으로 revision 을 검사한다
+  const shift = w.requireRevision(args, sectionIdx, Math.min(startRaw, toRaw), Math.max(endRaw, toRaw));
+  const start = startRaw + shift;
+  const end = endRaw + shift;
+  const to = toRaw + shift;
+  const count = engine.paragraphCount(sectionIdx);
+  if (end >= count) throw invalidArgs(`endParaIdx ${end} is out of range for section ${sectionIdx} (0..${count - 1})`);
+  if (to >= count) throw invalidArgs(`toParaIdx ${to} is out of range for section ${sectionIdx} (0..${count - 1})`);
+  const n = end - start + 1;
+  const dest = where === 'after' ? to + 1 : to;
+  if (dest >= start && dest <= end + 1) {
+    throw invalidArgs(`the destination (${where} p${to}) is inside or next to the moved paragraphs ${start}..${end} — nothing would move`);
+  }
+  const firstShape = engine.shapeIds(sectionIdx, start).paraShapeId;
+  engine.copySelection(sectionIdx, start, 0, end, engine.length(sectionIdx, end));
+  engine.insertParagraph(sectionIdx, dest);
+  engine.pasteInternal(sectionIdx, dest, 0);
+  const grown = engine.paragraphCount(sectionIdx) - count;
+  if (grown === n + 1 && engine.length(sectionIdx, dest + n) === 0 && engine.objectsIn(sectionIdx, dest + n, dest + n).length === 0) {
+    // 붙여넣기가 빈 문단 하나를 남겼다
+    engine.deleteParagraph(sectionIdx, dest + n);
+  } else if (grown !== n) {
+    throw new DoogleToolError('ENGINE_ERROR', `move_paragraphs: paste produced ${grown} paragraph(s) for ${n} copied — nothing was changed`);
+  }
+  // 붙여넣은 첫 문단은 받아 준 빈 문단의 모양을 따른다 — 원래 모양으로 되돌린다
+  if (firstShape !== null) engine.setParaShapeId(sectionIdx, dest, firstShape);
+  const srcStart = dest <= start ? start + n : start;
+  for (let p = srcStart + n - 1; p >= srcStart; p--) engine.deleteParagraph(sectionIdx, p);
+  const newStart = dest <= start ? dest : dest - n;
+  // 옮긴 범위와 목적지 사이의 문단 번호가 모두 바뀐다 — 그 구간을 통째로 건드린 것으로 적는다(밖은 그대로)
+  const lo = Math.min(start, newStart);
+  const hi = Math.max(end, newStart + n - 1);
+  w.touches.push(bodyTouch(sectionIdx, lo, hi, 0));
+  return {
+    moved: { paragraphs: n, from: [start, end], to: [newStart, newStart + n - 1] },
+    ...(shift ? { rebasedParaShift: shift } : {}),
+  };
 };
 
 // ─── 개체 ─────────────────────────────────────────────
@@ -1237,6 +1608,9 @@ export const WRITE_HANDLERS: Readonly<Record<string, WriteHandler>> = Object.fre
   apply_para_format: applyParaFormat,
   apply_style: applyStyle,
   apply_list: applyList,
+  insert_paragraphs: insertParagraphs,
+  delete_paragraphs: deleteParagraphs,
+  move_paragraphs: moveParagraphs,
   set_field_value: setFieldValue,
   insert_page_break: insertPageBreak,
   insert_footnote: insertFootnote,
@@ -1259,7 +1633,7 @@ export const WRITE_HANDLERS: Readonly<Record<string, WriteHandler>> = Object.fre
 /** apply_edits 항목으로 받는 도구 — doogle-agent/src/tools/definitions.mjs BATCHABLE_EDIT_TOOL_NAMES 와 같아야 한다 */
 export const BATCHABLE_EDIT_TOOLS: ReadonlySet<string> = new Set([
   'insert_text', 'delete_range', 'replace_range', 'apply_char_format', 'apply_para_format', 'apply_style', 'apply_list',
-  'set_field_value', 'insert_page_break', 'insert_footnote', 'edit_footnote', 'set_bookmark', 'edit_header_footer',
+  'insert_paragraphs', 'delete_paragraphs', 'move_paragraphs', 'set_field_value', 'insert_page_break', 'insert_footnote', 'edit_footnote', 'set_bookmark', 'edit_header_footer',
   'set_page_layout', 'create_table', 'edit_table', 'set_table_props', 'set_cell_props', 'set_zone_borders', 'delete_table',
   'insert_equation', 'edit_object', 'insert_shape',
 ]);

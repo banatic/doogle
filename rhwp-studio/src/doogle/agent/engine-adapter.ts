@@ -34,6 +34,13 @@ function safeRead(read: () => Record<string, unknown>): Record<string, unknown> 
   }
 }
 
+/** 문서를 바꾸지 않는 엔진 메서드 이름 (읽기·질의·그리기·클립보드 복사·스냅샷 관리) */
+const READ_ONLY_METHOD_RE = /^(get|search|render|pageCount|logicalTo|textTo|evaluate|measure|export|copy|saveSnapshot|discardSnapshot|has[A-Z])/;
+
+function isEngineTrap(error: unknown): boolean {
+  return typeof WebAssembly !== 'undefined' && error instanceof WebAssembly.RuntimeError;
+}
+
 function engineMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   if (typeof error === 'string') return error;
@@ -48,6 +55,8 @@ export class Engine {
    * 서식 diff 를 그린다. 읽기에 실패해도 쓰기는 그대로 진행한다.
    */
   formatLog: FormatDiff[] | null = null;
+  /** 문서를 바꿀 수 있는 엔진 호출 횟수 — 실패한 쓰기가 되돌릴 것이 있는지 판단한다 */
+  mutations = 0;
 
   constructor(doc: EngineDoc) {
     this.doc = doc;
@@ -67,9 +76,13 @@ export class Engine {
         { method },
       );
     }
+    if (!READ_ONLY_METHOD_RE.test(method)) this.mutations++;
     try {
       return fn.apply(this.doc, args);
     } catch (error) {
+      // 엔진 트랩(메모리 접근 오류 등)은 도구 오류로 감싸지 않는다 — 엔진 상태를 믿을 수 없으므로
+      // studio 의 명령 실패 복구가 문서를 잠그게 그대로 올린다.
+      if (isEngineTrap(error)) throw error;
       throw new DoogleToolError('ENGINE_ERROR', `${method} failed: ${engineMessage(error)}`, { method });
     }
   }
@@ -379,6 +392,112 @@ export class Engine {
 
   cellInfo(sectionIdx: number, paraIdx: number, controlIdx: number, cellIdx: number): CellInfo {
     return this.json<CellInfo>('getCellInfo', sectionIdx, paraIdx, controlIdx, cellIdx);
+  }
+
+  /** 중첩 셀 정보 — path 의 마지막 항목이 그 셀이다. */
+  cellInfoByPath(sectionIdx: number, paraIdx: number, path: CellPathEntry[]): CellInfo {
+    return this.json<CellInfo>('getCellInfoByPath', sectionIdx, paraIdx, JSON.stringify(path));
+  }
+
+  /**
+   * 이 셀(중첩 포함) 안에 놓인 표들 — 각 항목은 그 표의 첫 셀까지의 경로다
+   * (마지막 항목의 controlIndex 가 표 컨트롤, cellParaIndex 앞 항목이 표가 놓인 셀 문단).
+   * 엔진에 질의가 없으면 빈 배열.
+   */
+  nestedTables(sectionIdx: number, cell: CellAddr): CellPathEntry[][] {
+    if (!this.has('getTableControlsInSelection')) return [];
+    try {
+      const count = this.cellParagraphCount(sectionIdx, cell);
+      if (count < 1) return [];
+      // 끝 오프셋은 문단 길이보다 넉넉히 — 표만 든 문단은 길이가 0 이라 [0,0) 으로 물으면 아무것도 안 잡힌다
+      const raw = this.json<Array<{ cellPath?: CellPathEntry[] }>>(
+        'getTableControlsInSelection', sectionIdx, cell.paraIdx, this.pathJson(cell, 0), 0, 0, count - 1, 1_000_000,
+      );
+      return (Array.isArray(raw) ? raw : []).map((r) => r.cellPath ?? []).filter((p) => p.length >= 2);
+    } catch {
+      return [];
+    }
+  }
+
+  // ─── 문단 단위 ─────────────────────────────────────────
+
+  /** 문단 안 컨트롤들의 글자 위치 (컨트롤 번호 순). */
+  controlPositions(sectionIdx: number, paraIdx: number): number[] {
+    try {
+      const raw = this.json<unknown>('getControlTextPositions', sectionIdx, paraIdx);
+      return Array.isArray(raw) ? raw.map((v) => Number(v) || 0) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** 본문 문단 범위에 놓인 개체(표·그림·도형·수식) — 글자 위치를 함께 준다. */
+  objectsIn(sectionIdx: number, paraStart: number, paraEnd: number): Array<ObjectRef & { charOffset: number }> {
+    const out: Array<ObjectRef & { charOffset: number }> = [];
+    for (const o of this.objects()) {
+      if (o.sectionIdx !== sectionIdx || o.paraIdx < paraStart || o.paraIdx > paraEnd) continue;
+      const positions = this.controlPositions(sectionIdx, o.paraIdx);
+      out.push({ ...o, charOffset: positions[o.controlIdx] ?? 0 });
+    }
+    return out;
+  }
+
+  /** paraIdx 자리에 빈 문단을 넣는다(0..문단 수). 새 문단은 앞 문단의 모양을 잇는다. */
+  insertParagraph(sectionIdx: number, paraIdx: number): void {
+    this.json('insertParagraph', sectionIdx, paraIdx);
+    this.invalidate();
+  }
+
+  /** 문단 하나를 통째로 지운다 — 그 문단의 개체도 함께 사라진다. */
+  deleteParagraph(sectionIdx: number, paraIdx: number): void {
+    this.json('deleteParagraph', sectionIdx, paraIdx);
+    this.invalidate();
+  }
+
+  /** 문단 모양·글자 모양 번호 (서식 복사용). 못 읽으면 null. */
+  shapeIds(sectionIdx: number, paraIdx: number): { paraShapeId: number | null; charShapeId: number | null } {
+    let paraShapeId: number | null = null;
+    let charShapeId: number | null = null;
+    try {
+      const v = this.paraPropsAt(sectionIdx, paraIdx)['paraShapeId'];
+      if (typeof v === 'number') paraShapeId = v;
+    } catch { /* 없음 */ }
+    try {
+      const len = this.length(sectionIdx, paraIdx);
+      const runs = len > 0 ? this.charShapeRuns(sectionIdx, paraIdx, 0, len) : [];
+      // 가장 긴 구간의 글자 모양을 그 문단의 대표로 본다
+      let best = -1;
+      for (const r of runs) {
+        const span = r.endOffset - r.startOffset;
+        if (span > best) { best = span; charShapeId = r.charShapeId; }
+      }
+      if (charShapeId === null) {
+        const c = this.charPropsAt(sectionIdx, paraIdx, 0)['charShapeId'];
+        if (typeof c === 'number') charShapeId = c;
+      }
+    } catch { /* 없음 */ }
+    return { paraShapeId, charShapeId };
+  }
+
+  setParaShapeId(sectionIdx: number, paraIdx: number, id: number): void {
+    this.json('setParaShapeId', sectionIdx, paraIdx, id);
+  }
+
+  /** 글자 모양 번호를 입힌다. 빈 문단(0..0)에도 부른다 — 그 문단에 이어 쓰는 글과 그 자리에 만드는 표가 따른다. */
+  setCharShapeId(sectionIdx: number, paraIdx: number, start: number, end: number, id: number): void {
+    if (end >= start) this.json('setCharShapeId', sectionIdx, paraIdx, start, end, id);
+  }
+
+  /** 본문 범위를 내부 클립보드에 복사한다(개체 포함). */
+  copySelection(sectionIdx: number, startPara: number, startOffset: number, endPara: number, endOffset: number): void {
+    this.json('copySelection', sectionIdx, startPara, startOffset, endPara, endOffset);
+  }
+
+  /** 내부 클립보드를 붙인다 — 끝난 자리를 돌려준다. */
+  pasteInternal(sectionIdx: number, paraIdx: number, offset: number): { paraIdx: number; charOffset: number } {
+    const r = this.json<{ paraIdx?: number; charOffset?: number }>('pasteInternal', sectionIdx, paraIdx, offset);
+    this.invalidate();
+    return { paraIdx: r?.paraIdx ?? paraIdx, charOffset: r?.charOffset ?? 0 };
   }
 
   /** 셀 주소가 가리키는 셀이 실제로 있는지 확인한다. */

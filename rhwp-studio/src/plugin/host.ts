@@ -118,6 +118,7 @@ class PluginHostFacade implements PluginHost {
 
     let deferred = false;
     let ran = false;
+    let unchanged = false; // [doogle] tx.noChange()
     let result!: T;
 
     const tx: Tx = {
@@ -127,6 +128,7 @@ class PluginHostFacade implements PluginHost {
         deferred = true;
         this.deps.wasm.beginDeferredPagination();
       },
+      noChange: () => { unchanged = true; },
     };
 
     this.ledger.activeTx += 1;
@@ -139,7 +141,8 @@ class PluginHostFacade implements PluginHost {
           ran = true;
           // 조판은 커밋 직전에 한 번만 turn — 호출당 재조판을 없애는 자리다.
           if (deferred) this.deps.wasm.flushDeferredPagination();
-          return ih.getCursorPosition();
+          // [doogle] 무변경이면 null — SnapshotCommand 가 기록·갱신 없이 끝낸다([Task #2370] 경로).
+          return unchanged ? null : ih.getCursorPosition();
         },
       });
     } finally {

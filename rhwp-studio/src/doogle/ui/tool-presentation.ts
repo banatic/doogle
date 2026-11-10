@@ -308,6 +308,15 @@ const SPECS: Record<string, ToolSpec> = {
       ]);
     },
   },
+  insert_paragraphs: {
+    category: 'edit', label: '문단 삽입',
+    summary: (a) => join([para(a), Array.isArray(a['paragraphs']) ? quote(str(a['paragraphs'].find((t: unknown) => typeof t === 'string' && t) ?? ''), 32) : '']),
+  },
+  delete_paragraphs: { category: 'edit', label: '문단 삭제', summary: (a) => paraRange(a, 'startParaIdx', 'endParaIdx') },
+  move_paragraphs: {
+    category: 'edit', label: '문단 이동',
+    summary: (a) => join([paraRange(a, 'startParaIdx', 'endParaIdx'), num(a['toParaIdx']) !== null ? `→ ${para(a, 'toParaIdx')}` : '']),
+  },
   set_table_props: { category: 'edit', label: '표 속성 변경', summary: (a) => table(a) },
   set_cell_props: { category: 'edit', label: '셀 속성 변경', summary: (a) => table(a) },
   set_zone_borders: { category: 'edit', label: '셀 테두리 변경', summary: (a) => table(a) },

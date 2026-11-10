@@ -54,7 +54,7 @@ function point(caret: PluginCaret): SelectionPoint {
 export function depsFromHost(host: PluginHost): DoogleAgentDeps {
   return {
     getDocument: () => (host.borrowDocument()?.handle as unknown as EngineDoc | undefined) ?? null,
-    transaction: (label, fn) => host.transaction(label, (tx) => fn(tx.doc() as unknown as EngineDoc)),
+    transaction: (label, fn) => host.transaction(label, (tx) => fn(tx.doc() as unknown as EngineDoc, { noChange: () => tx.noChange() })),
     events: {
       on: (event, handler) => host.events.on(event, (payload) => handler(payload)),
     },

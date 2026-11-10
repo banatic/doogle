@@ -123,8 +123,12 @@ export interface DoogleAgentDeps {
   /**
    * 문서를 바꾸는 유일한 통로 — undo 한 단계. fn 이 던지면 문서는 호출 전으로 되돌아가야 한다
    * (업스트림 PluginHost.transaction / SnapshotCommand 가 그렇게 한다).
+   *
+   * tx.noChange() 는 "문서를 바꾸지 않았다(바꿨다가 되돌렸다)"는 신호다 — 호스트가 지원하면 undo 기록과
+   * 화면 갱신을 남기지 않는다. 실행기는 예상된 도구 실패를 던지지 않고 이 경로로 끝낸다: studio 의 명령 실패
+   * 복구(롤백 확인)를 타면 확인이 어긋날 때 문서 편집이 통째로 잠기기 때문이다.
    */
-  transaction<T>(label: string, fn: (doc: EngineDoc) => T): T;
+  transaction<T>(label: string, fn: (doc: EngineDoc, tx?: { noChange(): void }) => T): T;
   /** 문서 변경 이벤트 원천 (EventBus). 사용자 편집도 revision 을 올리게 한다. */
   events?: EventSourceLike;
   /** 문서 인스턴스 번호 (문서 교체 시 바뀐다) — WasmBridge.documentGeneration 등. */

@@ -205,6 +205,21 @@ export function parasParam() {
   return z.array(z.unknown()).optional().describe('paraIdx or [first,last]');
 }
 
+/**
+ * 한 표의 여러 셀 대상 (서식 tool 공용) — {paraIdx, controlIdx, cellIdxs:[cellIdx | [first,last], …]}.
+ * 셀 안 문단 전부가 대상이다. 모양·범위는 스튜디오 executor 가 본다.
+ */
+export function cellsParam() {
+  return z.object({
+    paraIdx: z.number().int(),
+    controlIdx: z.number().int(),
+    cellIdxs: z.array(z.unknown()).min(1),
+  }).optional().describe('Many cells of one table: cellIdxs = cellIdx or [first,last]');
+}
+
+/** cells 와 함께 올 수 없는 주소 인자 — cells 가 대상을 이미 정한다. */
+const CELLS_CLASH_KEYS = ['paraIdx', 'paras', 'startOffset', 'endOffset', 'find', 'anchor', 'cell', 'cellPath'];
+
 /** find/anchor 와 함께 올 수 없는 글자 오프셋 — 둘 다 위치를 정한다 (문단 좌표·cell 은 검색 범위라 괜찮다). */
 const CHAR_OFFSET_KEYS = ['charOffset', 'startCharOffset', 'endCharOffset', 'startOffset', 'endOffset'];
 
@@ -240,10 +255,17 @@ export function validateParas(args) {
  * @param {string} tool 오류 메시지에 싣는 tool 이름
  * @param {Record<string, unknown>} args
  * @param {string[]} coordKeys 좌표 방식의 전체 키 — 누락 오류가 통째로 알려준다
- * @param {{anchor?: boolean, paras?: boolean}} [accepts] 좌표 대신 받는 주소 방식
+ * @param {{anchor?: boolean, paras?: boolean, cells?: boolean}} [accepts] 좌표 대신 받는 주소 방식
  */
-export function validateAnchorTool(tool, args, coordKeys, { anchor = true, paras = false } = {}) {
+export function validateAnchorTool(tool, args, coordKeys, { anchor = true, paras = false, cells = false } = {}) {
   const present = (k) => args[k] !== undefined && args[k] !== null;
+  if (cells && present('cells')) {
+    const clash = CELLS_CLASH_KEYS.filter(present);
+    if (clash.length > 0) {
+      throw invalidArgs(`cells already names the target cells — drop ${clash.join(', ')}, or send that target as a separate item`);
+    }
+    return;
+  }
   if (paras && present('paras')) {
     validateParas(args);
     return;
@@ -264,7 +286,7 @@ export function validateAnchorTool(tool, args, coordKeys, { anchor = true, paras
   const missing = keys.filter((k) => k !== 'sectionIdx' && k !== 'endParaIdx' && !present(k)
     && !(k === 'startParaIdx' && present('paraIdx')));
   if (missing.length > 0) {
-    const alternatives = [anchor ? 'find' : '', paras ? 'paras' : ''].filter(Boolean).join(' or ');
+    const alternatives = [anchor ? 'find' : '', paras ? 'paras' : '', cells ? 'cells' : ''].filter(Boolean).join(' or ');
     throw invalidArgs(`${tool} needs ${keys.join(', ')} — or ${alternatives} (missing ${missing.join(', ')})`);
   }
 }
@@ -410,7 +432,6 @@ const EDIT_TABLE_REQUIRED_PARAMS = {
   set_column_widths: ['columnWidthsMm'],
   fit_to_page: [],
   apply_formula: ['row', 'col', 'formula'],
-  set_caption: ['text'],
 };
 
 export function validateEditTable(args) {

@@ -60,16 +60,27 @@ MIT이므로 저작권 표시(LICENSE 3줄)만 유지하면 코드 그대로 가
 | `apply_char_format` | `find` / 범위 / 문단 / `paras`; `bold, italic, underline, strikethrough, fontSizePt, textColor, fontFamily, widthPercent(장평), letterSpacingPercent(자간)` … 절대값 |
 | `apply_para_format` | 정렬, 간격, 줄간격, 들여쓰기, 탭, 테두리 … |
 | `apply_style` / `apply_list` | 스타일, 번호/글머리 |
+| `insert_paragraphs` / `delete_paragraphs` / `move_paragraphs` | **두글 추가.** 문단을 통째로 넣고·지우고·옮긴다 (표 뒤·문서 끝 삽입, `formatFrom` 서식 복사, 이동 시 서식·표 유지). 글자 좌표로 문단을 잇고 끊는 방식은 표를 지우는 사고를 냈다 — [AGENT_EVAL.md](AGENT_EVAL.md) |
 | `create_table` / `edit_table` / `set_table_props` / `set_cell_props` / `set_zone_borders` / `delete_table` | `edit_table`에 행/열 삽입삭제, 병합/분할, `fit_to_page`, `set_column_widths` |
 | `set_field_value` | 누름틀 채우기 |
 | `insert_page_break` / `set_page_layout` / `edit_header_footer` | |
 | `insert_footnote` / `edit_footnote` / `set_bookmark` | |
-| `insert_image` / `insert_equation` / `preview_equation` / `insert_shape` / `insert_chart` / `edit_object` | image·chart는 비동기라 배치 불가 |
+| `insert_image` / `insert_equation` / `preview_equation` / `insert_shape` / `edit_object` | image는 비동기라 배치 불가. `insert_chart`는 엔진 경로가 없어 뺐다 |
 | `apply_edits` | `edits[{tool, …인자}]` ≤32, 원자적 |
 | `apply_engine_edits` / `prepare_engine_edit_session` | escape hatch |
 
 ### 대화 제어
-`ask_user_question`, `request_permission`, `present_implementation_plan`, `update_todos`
+`ask_user_question`, `request_permission`, `present_implementation_plan`, `update_todos` — **v1 에서는 싣지 않는다.**
+hub·사이드바에 응답 화면이 없어 부르면 반드시 실패했다(`NOT_HANDLED_IN_STUDIO`). 모델은 글로 묻고 턴을 끝낸다.
+질문 카드 UI 가 생기면 `definitions.mjs` 에 되살린다.
+
+### 두글에서 바꾼 점 (rhwp-x 대비)
+- `get_structure` 범례는 결과마다 싣지 않고 `TOOL_RULES` 의 "Structure text" 에 한 번만 둔다. 중첩 표를 `▦` 와 `nested table in [n] … cellPath […]` 줄로 보인다.
+- 글 범위 도구(`delete_range`, `replace_range`)는 표·그림·수식이 걸린 범위를 `RANGE_HAS_OBJECTS` 로 거절한다.
+- `apply_char_format` / `apply_para_format` 의 `cells:{paraIdx,controlIdx,cellIdxs}`, `set_cell_props` 의 `cellIdxs` — 여러 셀을 한 번에.
+- `edit_table` 의 `insert_row` / `insert_col` 은 새 셀 번호(`newRow` / `newCol`)를 돌려준다. `set_caption` 은 엔진 경로가 없어 뺐다.
+- 쓰기 결과의 쪽 넘김은 `after.reflow`(참고), 이번 쓰기가 만든 문제만 `after.warnings`.
+- `get_engine_edit_capabilities` 는 시그니처를 주고, `apply_engine_edits` 는 인자를 시그니처와 대조한 뒤 부른다(틀린 인자는 엔진을 죽인다).
 
 ## 3. v1에서 제외
 | 영역 | tool | 이유 |

@@ -8,16 +8,25 @@
  * 그 문단에 대해서는 빠짐없다(태그가 없으면 굵게도 없다).
  */
 import { Engine } from './engine-adapter.ts';
-import { scalarLength, scalarSlice, type CellAddr } from './types.ts';
+import { scalarLength, scalarSlice, type CellAddr, type CellPathEntry } from './types.ts';
 
 export const STRUCTURE_FULL_TEXT_CHARS = 16_000;
+/** 미리보기(기본) 읽기의 글자 예산 — 긴 문서를 인자 없이 읽어도 결과가 수만 자로 불어나지 않게 한다 */
+export const STRUCTURE_PREVIEW_CHARS = 30_000;
 const STRUCTURE_TAG_MAX_CHARS = 60;
 const STRUCTURE_TAG_MAX_RANGES = 3;
 const STRUCTURE_CELL_TAG_LIMIT = 200;
 const STRUCTURE_BODY_SIZE_SAMPLES = 64;
 const CELL_PREVIEW_CHARS = 80;
 export const PAGE_START_SCAN_LIMIT = 600;
+/** 중첩 표를 따라 내려가는 깊이와 한 번의 읽기에서 살피는 셀 수 한도 */
+const NESTED_TABLE_MAX_DEPTH = 3;
+const NESTED_PROBE_CELL_LIMIT = 4000;
 
+/**
+ * 구조 텍스트의 읽는 법. 결과마다 싣지 않는다 — doogle-agent 의 TOOL_RULES("Structure text")가 같은 내용을
+ * 한 번만 말한다(읽기마다 1,100자를 되풀이하지 않으려는 것). 여기 문구를 바꾸면 rules.mjs 도 함께 고친다.
+ */
 export const STRUCTURE_LEGEND = 'Lines: "s<sec> p<paraIdx> (<length>) <text>"; … = text cut, ⇥ = tab, "pA-pB empty" = empty paragraphs. '
   + 'Text is verbatim, usable in anchors as is; "quoted" = exact text as a JSON string, used when it starts or ends with a space. '
   + '"-- page N (pageIndex N-1) --" = lines below are on the page the user calls page N; tools take the 0-based pageIndex ("pX continues" = it starts inside pX). '
@@ -27,7 +36,9 @@ export const STRUCTURE_LEGEND = 'Lines: "s<sec> p<paraIdx> (<length>) <text>"; �
   + 'Each table follows its anchor paragraph as "table s<sec> p<paraIdx> c<controlIdx> <rows>x<cols>" plus "r<row> [cellIdx] text | …" lines; '
   + 'after the cellIdx: rsN/csN = span when not 1, then its B/I/U/Npt tags. '
   + '⏎ = next cell paragraph (cellParaIdx 0,1,…). '
-  + 'cell = {paraIdx: table p, controlIdx: table c, cellIdx}. format:"json" gives JSON.';
+  + 'cell = {paraIdx: table p, controlIdx: table c, cellIdx}. format:"json" gives JSON. '
+  + '▦ after a cellIdx = that cell holds a nested table, listed under the outer table as "nested table in [cellIdx] … cellPath […]"; '
+  + 'address its cells with the outer cell plus that cellPath, replacing n by the nested [n].';
 
 export interface StructureEmphasis { marks: string[]; size: number | null; mixedSize: boolean }
 
@@ -39,7 +50,11 @@ export interface StructureParagraph {
 }
 
 export interface StructureCellParagraph { cellParaIdx: number; length: number; text: string; tag?: string }
-export interface StructureCell { cellIdx: number; row: number; col: number; rowSpan: number; colSpan: number; paragraphs: StructureCellParagraph[] }
+export interface StructureCell {
+  cellIdx: number; row: number; col: number; rowSpan: number; colSpan: number; paragraphs: StructureCellParagraph[];
+  /** 이 셀 안에 놓인 표 (중첩) */
+  nested?: StructureTable[];
+}
 export interface StructureTable {
   paraIdx: number;
   controlIdx: number;
@@ -47,6 +62,8 @@ export interface StructureTable {
   colCount: number;
   cells: StructureCell[];
   untaggedFromCellIdx?: number;
+  /** 중첩 표일 때: 이 표의 첫 셀까지의 경로 (마지막 항목의 cellIndex 를 셀 번호로 바꿔 주소를 만든다) */
+  path?: CellPathEntry[];
 }
 
 export interface StructurePageMark { page: number; sectionIdx: number; paraIdx: number; continued: boolean }
@@ -172,6 +189,7 @@ export class StructureReader {
   private bodySizeMemo: number | null | undefined;
   private shapeMemo = new Map<number, { bold: boolean; italic: boolean; underline: boolean; size: number | null }>();
   private cellTagBudget = STRUCTURE_CELL_TAG_LIMIT;
+  private nestedProbeBudget = NESTED_PROBE_CELL_LIMIT;
 
   constructor(engine: Engine) {
     this.engine = engine;
@@ -259,14 +277,32 @@ export class StructureReader {
     return out;
   }
 
-  table(sectionIdx: number, paraIdx: number, controlIdx: number, maxChars: number): StructureTable | null {
+  /**
+   * 표 하나(본문 표 또는 중첩 표)를 읽는다. tablePath 가 있으면 그 경로의 중첩 표다 —
+   * 마지막 항목의 controlIndex 가 표 컨트롤이고, 그 cellIndex 를 셀 번호로 바꾸면 셀 경로가 된다.
+   */
+  table(sectionIdx: number, paraIdx: number, controlIdx: number, maxChars: number, tablePath?: CellPathEntry[]): StructureTable | null {
     let dims;
-    try { dims = this.engine.tableDims(sectionIdx, paraIdx, controlIdx); } catch { return null; }
-    const table: StructureTable = { paraIdx, controlIdx, rowCount: dims.rowCount, colCount: dims.colCount, cells: [] };
+    try {
+      dims = tablePath ? this.engine.tableDimsByPath(sectionIdx, paraIdx, tablePath) : this.engine.tableDims(sectionIdx, paraIdx, controlIdx);
+    } catch { return null; }
+    const table: StructureTable = {
+      paraIdx, controlIdx, rowCount: dims.rowCount, colCount: dims.colCount, cells: [],
+      ...(tablePath ? { path: tablePath.map((e) => ({ ...e })) } : {}),
+    };
+    const depth = tablePath ? tablePath.length - 1 : 0;
     for (let cellIdx = 0; cellIdx < dims.cellCount; cellIdx++) {
       let info = { row: 0, col: cellIdx, rowSpan: 1, colSpan: 1 };
-      try { info = this.engine.cellInfo(sectionIdx, paraIdx, controlIdx, cellIdx); } catch { /* keep */ }
-      const cell: CellAddr = { paraIdx, controlIdx, cellIdx };
+      let cell: CellAddr;
+      if (tablePath) {
+        const path = tablePath.map((e) => ({ ...e }));
+        path[path.length - 1] = { ...path[path.length - 1], cellIndex: cellIdx, cellParaIndex: 0 };
+        cell = { paraIdx, controlIdx: path[0].controlIndex, cellIdx: path[0].cellIndex, path };
+        try { info = this.engine.cellInfoByPath(sectionIdx, paraIdx, path); } catch { /* keep */ }
+      } else {
+        cell = { paraIdx, controlIdx, cellIdx };
+        try { info = this.engine.cellInfo(sectionIdx, paraIdx, controlIdx, cellIdx); } catch { /* keep */ }
+      }
       const paragraphs: StructureCellParagraph[] = [];
       let n = 0;
       try { n = this.engine.cellParagraphCount(sectionIdx, cell); } catch { n = 0; }
@@ -285,7 +321,17 @@ export class StructureReader {
         }
         paragraphs.push(para);
       }
-      table.cells.push({ cellIdx, row: info.row, col: info.col, rowSpan: info.rowSpan, colSpan: info.colSpan, paragraphs });
+      const out: StructureCell = { cellIdx, row: info.row, col: info.col, rowSpan: info.rowSpan, colSpan: info.colSpan, paragraphs };
+      if (depth < NESTED_TABLE_MAX_DEPTH && this.nestedProbeBudget > 0) {
+        this.nestedProbeBudget--;
+        const nested: StructureTable[] = [];
+        for (const path of this.engine.nestedTables(sectionIdx, cell)) {
+          const inner = this.table(sectionIdx, paraIdx, controlIdx, maxChars, path);
+          if (inner) nested.push(inner);
+        }
+        if (nested.length > 0) out.nested = nested;
+      }
+      table.cells.push(out);
     }
     return table;
   }
@@ -334,7 +380,7 @@ export class StructureReader {
       list.push({ paraIdx: t.paraIdx, controlIdx: t.controlIdx });
       tablesBySection.set(t.sectionIdx, list);
     }
-    let budget = opts.fullText ? STRUCTURE_FULL_TEXT_CHARS : Number.POSITIVE_INFINITY;
+    let budget = opts.fullText ? STRUCTURE_FULL_TEXT_CHARS : STRUCTURE_PREVIEW_CHARS;
     let paragraphsLeft = opts.maxParagraphs;
     for (const [sec, [lo, hi]] of [...spans.entries()].sort((a, b) => a[0] - b[0])) {
       const section: StructureSection = { sectionIdx: sec, paragraphCount: engine.paragraphCount(sec), paragraphs: [], tables: [] };
@@ -352,16 +398,15 @@ export class StructureReader {
         const para = this.paragraph(sec, p, maxChars);
         section.paragraphs.push(para);
         paragraphsLeft--;
-        if (opts.fullText) budget -= scalarLength(para.text);
+        // 줄마다 붙는 주소·태그(약 16자)도 예산에 넣는다
+        budget -= scalarLength(para.text) + (opts.fullText ? 0 : 16);
         for (const t of tablesBySection.get(sec) ?? []) {
           if (t.paraIdx !== p) continue;
           const cellChars = opts.fullText ? Math.max(1, Math.min(budget, 2000)) : Math.min(opts.maxPreviewChars, CELL_PREVIEW_CHARS);
           const table = this.table(sec, t.paraIdx, t.controlIdx, cellChars);
           if (!table) continue;
           section.tables.push(table);
-          if (opts.fullText) {
-            for (const c of table.cells) for (const cp of c.paragraphs) budget -= scalarLength(cp.text);
-          }
+          budget -= tableTextChars(table) + (opts.fullText ? 0 : table.cells.length * 6);
         }
       }
     }
@@ -378,13 +423,36 @@ function cellTags(paragraphs: StructureCellParagraph[]): string {
   return paragraphs.filter((p) => p.tag).map((p) => ` p${p.cellParaIdx} ${p.tag}`).join('');
 }
 
-function emitTable(lines: string[], sec: number, table: StructureTable): void {
+/** 표(중첩 포함)에 든 글자 수 — full-text 예산 계산용 */
+function tableTextChars(table: StructureTable): number {
+  let n = 0;
+  for (const c of table.cells) {
+    for (const cp of c.paragraphs) n += scalarLength(cp.text);
+    for (const inner of c.nested ?? []) n += tableTextChars(inner);
+  }
+  return n;
+}
+
+/** 중첩 표 주소 줄 — 마지막 항목의 cellIndex 자리를 n 으로 비워 보인다 */
+function nestedPathText(path: CellPathEntry[]): string {
+  const last = path.length - 1;
+  const items = path.map((e, i) => `{"controlIndex":${e.controlIndex},"cellIndex":${i === last ? 'n' : e.cellIndex},"cellParaIndex":${i === last ? 0 : e.cellParaIndex}}`);
+  return `[${items.join(',')}]`;
+}
+
+function emitTable(lines: string[], sec: number, table: StructureTable, indent = '  ', parentCellIdx?: number): void {
   const untagged = table.untaggedFromCellIdx;
-  lines.push(`  table s${sec} p${table.paraIdx} c${table.controlIdx} ${table.rowCount}x${table.colCount}`
-    + (untagged === undefined ? '' : untagged === 0 ? ' (no cell tags)' : ` (no cell tags from [${untagged}])`));
+  const tags = untagged === undefined ? '' : untagged === 0 ? ' (no cell tags)' : ` (no cell tags from [${untagged}])`;
+  if (table.path) {
+    const top = table.path[0];
+    lines.push(`${indent}nested table in [${parentCellIdx ?? top.cellIndex}] ${table.rowCount}x${table.colCount}`
+      + ` · cell {paraIdx:${table.paraIdx},controlIdx:${top.controlIndex},cellIdx:${top.cellIndex}} + cellPath ${nestedPathText(table.path)}${tags}`);
+  } else {
+    lines.push(`${indent}table s${sec} p${table.paraIdx} c${table.controlIdx} ${table.rowCount}x${table.colCount}${tags}`);
+  }
   const rows = new Map<number, string[]>();
   for (const cell of table.cells) {
-    const spans = `${cell.rowSpan !== 1 ? ` rs${cell.rowSpan}` : ''}${cell.colSpan !== 1 ? ` cs${cell.colSpan}` : ''}`;
+    const spans = `${cell.rowSpan !== 1 ? ` rs${cell.rowSpan}` : ''}${cell.colSpan !== 1 ? ` cs${cell.colSpan}` : ''}${cell.nested ? ' ▦' : ''}`;
     const body = cell.paragraphs.map((p) => {
       if (p.length === 0) return '';
       const cut = scalarLength(p.text) < p.length;
@@ -395,7 +463,10 @@ function emitTable(lines: string[], sec: number, table: StructureTable): void {
     rows.set(cell.row, row);
   }
   for (const [row, cells] of [...rows.entries()].sort((a, b) => a[0] - b[0])) {
-    lines.push(`  r${row} ${cells.join(' | ')}`);
+    lines.push(`${indent}r${row} ${cells.join(' | ')}`);
+  }
+  for (const cell of table.cells) {
+    for (const inner of cell.nested ?? []) emitTable(lines, sec, inner, `${indent}  `, cell.cellIdx);
   }
 }
 
@@ -410,11 +481,10 @@ export function renderCompactStructure(data: StructureData, revisionLabel: strin
   const truncation = !data.truncated
     ? ''
     : cont
-      ? ` · TRUNCATED — continue with range {sectionIdx:${cont.sectionIdx}, fromPara:${cont.fromPara}, toPara:${cont.toPara}} text:"full"`
+      ? ` · TRUNCATED — continue with range {sectionIdx:${cont.sectionIdx}, fromPara:${cont.fromPara}, toPara:${cont.toPara}}${data.fullText ? ' text:"full"' : ' (or locate with find_text and read just that slice)'}`
       : ' · TRUNCATED by maxParagraphs (raise it, pass pages/range, or use find_text)';
   lines.push(`${revisionLabel} · ${data.pageCount} pages · ${data.sectionCount} ${sectionWord}${scope}`
     + (data.fullText ? ' · full text' : '') + truncation);
-  lines.push(STRUCTURE_LEGEND);
   for (const section of data.sections) {
     const sec = section.sectionIdx;
     lines.push(`s${sec} · ${section.paragraphCount} paragraphs`);

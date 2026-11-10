@@ -63,6 +63,8 @@ function textDiff(tool: string, a: Args): { del: string; ins: string } | null {
   switch (tool) {
     case 'replace_range': return { del: anchorFind(a), ins: str(a['text']) };
     case 'insert_text': return { del: '', ins: str(a['text']) };
+    case 'insert_paragraphs':
+      return { del: '', ins: Array.isArray(a['paragraphs']) ? a['paragraphs'].filter((t) => typeof t === 'string').join('\n') : '' };
     case 'delete_range': {
       const find = anchorFind(a);
       return find ? { del: find, ins: '' } : null;

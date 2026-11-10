@@ -3,8 +3,14 @@
 // Copyright (c) banatic, Hataewook/Rauhwpx, Edward Kim/rhwp — MIT License.
 //
 // 두글 v1 tool 정의 — 순서가 MCP/provider 에 노출되는 순서다. 순수 데이터 모듈.
-// v1 목록은 D:/dev/두글/TOOLS.md §2. 범위 밖(browser_*, project_*, reference_*, template_*,
+// v1 목록은 docs/doogle/TOOLS.md §2. 범위 밖(browser_*, project_*, reference_*, template_*,
 // copy_layout, 다중 문서/버전, 스킬 편집)과 documentId 인자는 뺐다.
+//
+// 여기에는 스튜디오 실행기가 실제로 처리하는 도구만 둔다. 실행기가 없는 도구를 실으면 모델이 부르고
+// 실패한다(평가 기록: docs/doogle/AGENT_EVAL.md). 그래서 다음은 뺐다:
+//  - 대화 제어(ask_user_question · request_permission · present_implementation_plan · update_todos):
+//    hub·사이드바에 응답 화면이 없다. 모델은 글로 묻고 턴을 끝낸다(system-prompt.mjs).
+//  - insert_chart: 엔진에 차트 삽입 경로가 없다. edit_table 의 set_caption: 표 캡션 생성 경로가 없다.
 import {
   z,
   anchorParam,
@@ -12,6 +18,7 @@ import {
   cellParam,
   cellPathParam,
   cellPropsParam,
+  cellsParam,
   findParams,
   invalidArgs,
   paraBordersParam,
@@ -50,6 +57,9 @@ export const BATCHABLE_EDIT_TOOL_NAMES = Object.freeze([
   'apply_para_format',
   'apply_style',
   'apply_list',
+  'insert_paragraphs',
+  'delete_paragraphs',
+  'move_paragraphs',
   'set_field_value',
   'insert_page_break',
   'insert_footnote',
@@ -94,63 +104,6 @@ export const BATCHABLE_READ_TOOL_NAMES = Object.freeze([
   'verify_changes',
 ]);
 
-// ─── 대화 제어 스키마 (rhwp-x user-question.mjs / IMPLEMENTATION_PLAN_SHAPE) ───
-
-export const USER_QUESTION_LIMITS = Object.freeze({
-  questions: 4,
-  options: 4,
-  header: 12,
-  question: 500,
-  label: 80,
-  description: 240,
-  otherText: 2_000,
-});
-
-const boundedText = (name, max) => z.string().trim().min(1, `${name} is required`).max(max);
-
-export const USER_QUESTION_SHAPE = Object.freeze({
-  questions: z.array(z.object({
-    id: boundedText('question id', 128),
-    header: boundedText('header', USER_QUESTION_LIMITS.header),
-    question: boundedText('question', USER_QUESTION_LIMITS.question),
-    options: z.array(z.object({
-      label: boundedText('option label', USER_QUESTION_LIMITS.label),
-      description: boundedText('option description', USER_QUESTION_LIMITS.description),
-    }).strict()).min(2).max(USER_QUESTION_LIMITS.options),
-    multiSelect: z.boolean().optional(),
-    allowOther: z.boolean().optional(),
-  }).strict()).min(1).max(USER_QUESTION_LIMITS.questions),
-});
-
-/** request_permission 으로 청할 수 있는 권한. v1 은 문서 편집(에이전트/전체 mode 전환) 하나뿐이다. */
-export const GRANTABLE_PERMISSIONS = Object.freeze(['edit-document']);
-
-function implementationPlanShape() {
-  return {
-    goal: z.string().min(1).max(2_000).describe('The user outcome this plan achieves'),
-    title: z.string().min(1).max(200),
-    summary: z.string().min(1).max(5_000).describe('Concise approach and intended outcome'),
-    assumptions: z.array(z.string().min(1).max(1_000)).max(50),
-    decisions: z.array(z.string().min(1).max(2_000)).min(1).max(100),
-    steps: z.array(z.object({
-      id: z.string().min(1).max(100).optional(),
-      title: z.string().min(1).max(300).describe('One-line imperative todo, e.g. "Rewrite the 개요 paragraph so the goal comes first" or "Verify the schedule table fits one page via get_page_geometry"'),
-      details: z.string().min(1).max(3_000).optional().describe('Only when the one-liner cannot carry a needed detail'),
-      target: z.string().min(1).max(1_000).optional().describe('Affected section, paragraph, table, or page'),
-      preview: z.string().min(1).max(3_000).optional().describe('Proposed text or the visible result'),
-    }).strict()).min(1).max(100).describe('Ordered todo list, verification todos included'),
-    validation: z.array(z.string().min(1).max(1_000)).max(100).describe('Checks beyond the verification todos; may be empty'),
-    risks: z.array(z.string().min(1).max(2_000)).max(100),
-    exclusions: z.array(z.string().min(1).max(1_000)).max(100),
-    sources: z.array(z.object({
-      title: z.string().min(1).max(500),
-      url: z.string().url().max(8_000).refine((value) => /^https?:\/\//i.test(value), 'url must use http or https').optional(),
-      note: z.string().min(1).max(2_000).optional(),
-    }).strict()).max(100).optional(),
-    changeSummary: z.string().min(1).max(2_000).optional().describe('What changed from the previous plan'),
-  };
-}
-
 // get_structure: 쪽/문단 구간이 거꾸로면 고칠 꼴을 알려 준다 (두글 추가 검증).
 function validateGetStructure(args) {
   if (Array.isArray(args.pages) && args.pages.length === 2 && args.pages[1] < args.pages[0]) {
@@ -163,7 +116,7 @@ function validateGetStructure(args) {
 
 /**
  * v1 tool 정의.
- * kind: 'read' = 문서를 바꾸지 않음, 'write' = 문서를 바꿈(expectedRevision 필요), 'control' = 대화 제어(사용자 응답 대기 등).
+ * kind: 'read' = 문서를 바꾸지 않음, 'write' = 문서를 바꿈(expectedRevision 필요). ('control' = 대화 제어 — v1 에는 없다.)
  * label: 사이드바 표시용 한국어 이름 (rhwp-x tool-presentation.ts).
  * @type {Array<{name: string, kind: 'read'|'write'|'control', label: string, description: string, shape: Record<string, any>, validate?: (args: any) => void}>}
  */
@@ -173,7 +126,7 @@ const DEFINITIONS = [
     name: 'get_structure',
     kind: 'read',
     label: '문서 구조 읽기',
-    description: `Entry point: compact lines with addresses, text, page breaks and heading/bold tags; tables as cellIdx grids after their anchor paragraph. pages:[first,last] (0-based) reads those pages; text:"full" gives whole texts (16k-char budget).`,
+    description: `Entry point: compact lines with addresses, text, page breaks and heading/bold tags; tables (nested ones too) as cellIdx grids after their anchor paragraph — how to read it: rhwp tool rules, "Structure text". pages:[first,last] (0-based) reads those pages; text:"full" gives whole texts (16k-char budget).`,
     shape: {
       maxPreviewChars: z.number().int().min(0).default(120).optional(),
       maxParagraphs: z.number().int().min(1).default(500).optional(),
@@ -224,7 +177,7 @@ const DEFINITIONS = [
     name: 'find_text',
     kind: 'read',
     label: '텍스트 찾기',
-    description: `Search body and table cell text (nested too) for a string. Returns sectionIdx, paraIdx, charOffset, length, context. Cell matches carry cell, nested ones cellPath; pass as-is to read/write tools (paraIdx is relative to that cell). Never spans paragraphs.`,
+    description: `Search body and table cell text (nested too) for a string. Returns sectionIdx, paraIdx, charOffset, length, context. Cell matches carry cell, nested ones also cellPath; pass both as-is to read/write tools (paraIdx is relative to that cell). Never spans paragraphs.`,
     shape: {
       query: z.string().min(1),
       caseSensitive: z.boolean().default(false).optional(),
@@ -244,7 +197,7 @@ const DEFINITIONS = [
     name: 'get_fields',
     kind: 'read',
     label: '필드 목록 읽기',
-    description: `List form fields: fieldId, fieldType, name, guide, value and location.`,
+    description: `List form fields (누름틀): name, guide, value, fieldType, sectionIdx/paraIdx and charOffset/length of the value. Fill by name with set_field_value; fields flagged duplicateName share a name and are edited by position instead.`,
     shape: {},
   },
   {
@@ -330,7 +283,7 @@ const DEFINITIONS = [
     name: 'render_page',
     kind: 'read',
     label: '쪽 그림 보기',
-    description: `Render one page (0-based pageIndex) as a PNG block. regionMm crops it. format "svg" returns raw markup (~800KB cap). Measure positions with get_page_geometry.`,
+    description: `Render one page (0-based pageIndex) as a PNG block; regionMm crops it (zoom in with scale). format "svg" returns raw markup for nearly empty pages only (100KB cap) — prefer PNG. Measure positions with get_page_geometry.`,
     shape: {
       pageIndex: z.number().int(),
       format: z.enum(['png', 'svg']).default('png').optional(),
@@ -354,10 +307,11 @@ const DEFINITIONS = [
     name: 'preview_equation',
     kind: 'read',
     label: '수식 미리보기',
-    description: `Render an HWP equation script without inserting it (SVG, size in mm, warnings); fix until warnings is empty, then insert_equation it. ${EQUATION_SYNTAX}`,
+    description: `Check an HWP equation script without inserting it: size in mm and warnings (includeSvg:true adds the SVG markup); fix until warnings is empty, then insert_equation it. ${EQUATION_SYNTAX}`,
     shape: {
       script: z.string().min(1),
       fontSizePt: z.number().positive().optional(),
+      includeSvg: z.boolean().optional(),
     },
   },
   {
@@ -375,7 +329,7 @@ const DEFINITIONS = [
     name: 'get_engine_edit_capabilities',
     kind: 'read',
     label: '엔진 기능 찾기',
-    description: `Agent-editable engine methods (document mutations plus paste-session setup). Without query: names by kind. query or detail:true adds TypeScript signatures, argumentGuide and referenced typeDefinitions. Call before apply_engine_edits.`,
+    description: `Agent-editable engine methods (document mutations plus paste-session setup). Without query: names by kind. query (a name fragment) or detail:true adds each method's exact positional signature. Call before apply_engine_edits — arguments are checked against the signature.`,
     shape: {
       query: z.string().optional(),
       detail: z.boolean().optional(),
@@ -399,7 +353,7 @@ const DEFINITIONS = [
     name: 'insert_text',
     kind: 'write',
     label: '텍스트 삽입',
-    description: `Insert text at charOffset (omitted: paragraph end), or before/after the text matched by find (position, default after). "\\n" splits paragraphs. ${WRITE_POINTER}`,
+    description: `Insert text at charOffset (omitted: paragraph end), or before/after the text matched by find (position, default after). "\\n" splits paragraphs. For whole new paragraphs — also after a table or at the document end — use insert_paragraphs. ${WRITE_POINTER}`,
     shape: {
       expectedRevision: z.number().int(),
       render: renderParam(),
@@ -441,7 +395,7 @@ const DEFINITIONS = [
     name: 'delete_range',
     kind: 'write',
     label: '텍스트 삭제',
-    description: `Delete the text matched by find, or a coordinate range. A range may not cross a table (edit inside with cell/cellPath). ${WRITE_POINTER}`,
+    description: `Delete the text matched by find, or a coordinate range. A range holding a table, picture or equation is refused (RANGE_HAS_OBJECTS) — whole paragraphs go with delete_paragraphs, text inside a table with cell/cellPath. ${WRITE_POINTER}`,
     shape: {
       expectedRevision: z.number().int(),
       render: renderParam(),
@@ -476,7 +430,7 @@ const DEFINITIONS = [
     name: 'apply_char_format',
     kind: 'write',
     label: '글자 서식',
-    description: `Format the text matched by find, startOffset..endOffset of paraIdx, the whole paragraph without offsets, or every paragraph in paras. Absolute values; no need to read the format first. ${WRITE_POINTER}`,
+    description: `Format the text matched by find, startOffset..endOffset of paraIdx, the whole paragraph without offsets, every paragraph in paras, or all text in many table cells at once with cells:{paraIdx,controlIdx,cellIdxs:[8,[9,13]]}. Absolute values; no need to read the format first. ${WRITE_POINTER}`,
     shape: {
       expectedRevision: z.number().int(),
       render: renderParam(),
@@ -484,6 +438,7 @@ const DEFINITIONS = [
       paraIdx: z.number().int().optional(),
       ...findParams(),
       paras: parasParam(),
+      cells: cellsParam(),
       startOffset: z.number().int().optional(),
       endOffset: z.number().int().optional(),
       anchor: anchorParam(),
@@ -502,13 +457,13 @@ const DEFINITIONS = [
       letterSpacingPercent: z.union([z.number().min(-50).max(50), z.array(z.number()).length(7)]).optional()
         .describe('Glyph tracking percent (자간)'),
     },
-    validate: (args) => validateAnchorTool('apply_char_format', args, ['sectionIdx', 'paraIdx', 'startOffset', 'endOffset'], { paras: true }),
+    validate: (args) => validateAnchorTool('apply_char_format', args, ['sectionIdx', 'paraIdx', 'startOffset', 'endOffset'], { paras: true, cells: true }),
   },
   {
     name: 'apply_para_format',
     kind: 'write',
     label: '문단 서식',
-    description: `Format paragraph paraIdx, every paragraph in paras, or the paragraph matched by find. Line spacing: lineSpacingPercent or lineSpacingType + lineSpacingPt; headType "none" clears a list (new lists: apply_list). ${WRITE_POINTER}`,
+    description: `Format paragraph paraIdx, every paragraph in paras, the paragraph matched by find, or every paragraph of many table cells at once with cells:{paraIdx,controlIdx,cellIdxs:[8,[9,13]]}. Line spacing: lineSpacingPercent or lineSpacingType + lineSpacingPt; headType "none" clears a list (new lists: apply_list). ${WRITE_POINTER}`,
     shape: {
       expectedRevision: z.number().int(),
       render: renderParam(),
@@ -516,6 +471,7 @@ const DEFINITIONS = [
       paraIdx: z.number().int().optional(),
       ...findParams(),
       paras: parasParam(),
+      cells: cellsParam(),
       anchor: anchorParam(),
       cell: cellParam(),
       cellPath: cellPathParam(),
@@ -538,7 +494,7 @@ const DEFINITIONS = [
       paraLevel: z.number().int().max(6).optional(),
       bulletChar: z.string().optional(),
     },
-    validate: (args) => validateAnchorTool('apply_para_format', args, ['sectionIdx', 'paraIdx'], { paras: true }),
+    validate: (args) => validateAnchorTool('apply_para_format', args, ['sectionIdx', 'paraIdx'], { paras: true, cells: true }),
   },
   {
     name: 'apply_style',
@@ -576,6 +532,50 @@ const DEFINITIONS = [
     validate: validateApplyList,
   },
   {
+    name: 'insert_paragraphs',
+    kind: 'write',
+    label: '문단 삽입',
+    description: `Insert whole new body paragraphs after (default) or before paragraph paraIdx — the safe way to add lines after a table, between paragraphs or at the document end (paraIdx = last paragraph). paragraphs: one string per paragraph ("" = empty line). They take the format of the paragraph before the insertion point, or of formatFrom (a paraIdx whose paragraph + character format is copied, e.g. a sibling list item). Returns firstParaIdx/lastParaIdx. ${WRITE_POINTER}`,
+    shape: {
+      expectedRevision: z.number().int(),
+      render: renderParam(),
+      sectionIdx: z.number().int().optional(),
+      paraIdx: z.number().int(),
+      where: z.enum(['after', 'before']).optional(),
+      paragraphs: z.array(z.string()).min(1).max(100),
+      formatFrom: z.number().int().optional(),
+    },
+  },
+  {
+    name: 'delete_paragraphs',
+    kind: 'write',
+    label: '문단 삭제',
+    description: `Delete whole body paragraphs startParaIdx..endParaIdx (inclusive; endParaIdx omitted = one paragraph) without merging their neighbours — use this, not delete_range, to remove paragraphs or empty lines. Paragraphs holding a table or picture are refused unless includeObjects:true. Later paragraphs move up by the count deleted. ${WRITE_POINTER}`,
+    shape: {
+      expectedRevision: z.number().int(),
+      render: renderParam(),
+      sectionIdx: z.number().int().optional(),
+      startParaIdx: z.number().int(),
+      endParaIdx: z.number().int().optional(),
+      includeObjects: z.boolean().optional(),
+    },
+  },
+  {
+    name: 'move_paragraphs',
+    kind: 'write',
+    label: '문단 이동',
+    description: `Move body paragraphs startParaIdx..endParaIdx (inclusive) to before (default) or after paragraph toParaIdx, keeping their formatting and any tables/pictures in them — never retype text to move it. Indexes are the ones before the move; returns the new range. ${WRITE_POINTER}`,
+    shape: {
+      expectedRevision: z.number().int(),
+      render: renderParam(),
+      sectionIdx: z.number().int().optional(),
+      startParaIdx: z.number().int(),
+      endParaIdx: z.number().int().optional(),
+      toParaIdx: z.number().int(),
+      where: z.enum(['before', 'after']).optional(),
+    },
+  },
+  {
     name: 'create_table',
     kind: 'write',
     label: '표 만들기',
@@ -600,7 +600,7 @@ const DEFINITIONS = [
     name: 'edit_table',
     kind: 'write',
     label: '표 구조 변경',
-    description: `Change a table's structure (address: get_structure table line). op(args): insert_row(rowIdx,below=true) · insert_col(colIdx,right=true) · delete_row(rowIdx) · delete_col(colIdx) · merge_cells(startRow,startCol,endRow,endCol) · split_cell(rowIdx,colIdx,splitRows,splitCols) · set_column_widths(columnWidthsMm per column) · fit_to_page() shrinks to body width · apply_formula(row,col,formula,format?) · set_caption(text, withNumber=true keeps "표 N"). Append by targeting the last index. Returns the new rowCount/colCount/cellCount; cellIdx renumbers. ${WRITE_POINTER}`,
+    description: `Change a table's structure (address: get_structure table line). op(args): insert_row(rowIdx,below=true) · insert_col(colIdx,right=true) · delete_row(rowIdx) · delete_col(colIdx) · merge_cells(startRow,startCol,endRow,endCol) · split_cell(rowIdx,colIdx,splitRows,splitCols) · set_column_widths(columnWidthsMm per column) · fit_to_page() shrinks to body width · apply_formula(row,col,formula,format?). Append by targeting the last index. Returns the new rowCount/colCount/cellCount; cellIdx renumbers — insert_row/insert_col also return newRow/newCol {cellIdxs} so you can fill the new cells without re-reading. ${WRITE_POINTER}`,
     shape: {
       expectedRevision: z.number().int(),
       render: renderParam(),
@@ -609,7 +609,7 @@ const DEFINITIONS = [
       controlIdx: z.number().int(),
       op: z.enum([
         'insert_row', 'insert_col', 'delete_row', 'delete_col', 'merge_cells', 'split_cell',
-        'set_column_widths', 'fit_to_page', 'apply_formula', 'set_caption',
+        'set_column_widths', 'fit_to_page', 'apply_formula',
       ]),
       rowIdx: z.number().int().optional(),
       colIdx: z.number().int().optional(),
@@ -631,8 +631,6 @@ const DEFINITIONS = [
         prefix: z.string().optional(),
         suffix: z.string().optional(),
       }).optional(),
-      text: z.string().optional(),
-      withNumber: z.boolean().optional(),
     },
     validate: validateEditTable,
   },
@@ -655,23 +653,29 @@ const DEFINITIONS = [
     name: 'set_cell_props',
     kind: 'write',
     label: '셀 속성 변경',
-    description: `Set one cell's fill, vertical align, header flag, size, padding, text direction, protection, form editability or field name. cellIdx comes from the get_structure grid. ${WRITE_POINTER}`,
+    description: `Set fill (background colour), vertical align, header flag, size, padding, text direction, protection, form editability or field name on one cell (cellIdx) or several at once (cellIdxs:[0,[1,7]]). cellIdx values come from the get_structure grid. ${WRITE_POINTER}`,
     shape: {
       expectedRevision: z.number().int(),
       render: renderParam(),
       sectionIdx: z.number().int(),
       paraIdx: z.number().int(),
       controlIdx: z.number().int(),
-      cellIdx: z.number().int(),
+      cellIdx: z.number().int().optional(),
+      cellIdxs: z.array(z.unknown()).optional().describe('cellIdx or [first,last]'),
       cellProps: cellPropsParam(),
     },
-    validate: (args) => requireSomeKeys('cellProps', args.cellProps, CELL_PROPS_KEYS),
+    validate: (args) => {
+      requireSomeKeys('cellProps', args.cellProps, CELL_PROPS_KEYS);
+      const one = args.cellIdx !== undefined && args.cellIdx !== null;
+      const many = args.cellIdxs !== undefined && args.cellIdxs !== null;
+      if (one === many) throw invalidArgs('set_cell_props needs cellIdx (one cell) or cellIdxs (several, e.g. [0,[1,7]]) — exactly one of them');
+    },
   },
   {
     name: 'set_zone_borders',
     kind: 'write',
     label: '셀 테두리 변경',
-    description: `Style the cell rectangle startCell..endCell {row,col} as one zone: outline borders (not inner edges), fill, diagonals, center line. borderXxx = {type,width,color}: type 0 none, 1 solid, 2 dashed, 3 dotted, 4 dash-dot, 8 double; width 0-6 (0 = 0.1mm). ${WRITE_POINTER}`,
+    description: `Style the cell rectangle startCell..endCell {row,col}: outline borders of the block (not inner edges), diagonals, center line, and fillColor (applied to every cell in it). borderXxx = {type,width,color}: type 0 none, 1 solid, 2 dashed, 3 dotted, 4 dash-dot, 8 double; width 0-6 (0 = 0.1mm). ${WRITE_POINTER}`,
     shape: {
       expectedRevision: z.number().int(),
       render: renderParam(),
@@ -893,32 +897,6 @@ const DEFINITIONS = [
     },
   },
   {
-    name: 'insert_chart',
-    kind: 'write',
-    label: '차트 삽입',
-    description: `Insert a rendered chart as a picture at charOffset: bar, line, pie (one series), scatter (x,y pairs); categories label the x-axis or slices and match the value count. Not editable as a chart later. ${WRITE_POINTER}`,
-    shape: {
-      expectedRevision: z.number().int(),
-      render: renderParam(),
-      sectionIdx: z.number().int(),
-      paraIdx: z.number().int(),
-      charOffset: z.number().int(),
-      spec: z.object({
-        type: z.enum(['bar', 'line', 'pie', 'scatter']),
-        title: z.string().optional(),
-        series: z.array(z.object({
-          name: z.string(),
-          values: z.array(z.number()).min(1),
-        })).min(1),
-        categories: z.array(z.string()).optional(),
-        xLabel: z.string().optional(),
-        yLabel: z.string().optional(),
-      }),
-      widthMm: z.number().positive().optional(),
-      heightMm: z.number().positive().optional(),
-    },
-  },
-  {
     name: 'edit_object',
     kind: 'write',
     label: '개체 편집',
@@ -984,46 +962,6 @@ const DEFINITIONS = [
     },
   },
 
-  // ─── 대화 제어 ───
-  {
-    name: 'ask_user_question',
-    kind: 'control',
-    label: '질문하기',
-    description: 'Ask the user 1-4 focused multiple-choice questions (2-4 concise options each; multiSelect only when several may apply; “Other” is on by default) and wait for one response. Root conversation only — subagents report uncertainty to the root agent.',
-    shape: USER_QUESTION_SHAPE,
-  },
-  {
-    name: 'request_permission',
-    kind: 'control',
-    label: '권한 요청',
-    description: 'Request a missing permission, explaining why. edit-document asks the user to switch this chat to 에이전트 or 전체 mode so document writes are allowed. Returns pending: end the turn; the chat resumes when the user answers.',
-    shape: {
-      capability: z.enum(GRANTABLE_PERMISSIONS),
-      reason: z.string().trim().min(1).max(1_000),
-    },
-  },
-  {
-    name: 'present_implementation_plan',
-    kind: 'control',
-    label: '계획 제시',
-    description: 'Present a complete document-editing plan for user review, or revise an existing plan after concrete feedback. Include document targets, proposed changes and actual sources. Do not say the plan is ready before this tool returns; it returns the planId to use with update_todos.',
-    shape: implementationPlanShape(),
-  },
-  {
-    name: 'update_todos',
-    kind: 'control',
-    label: '할 일 갱신',
-    description: 'Replace the todo list of the approved plan; the user sees it as a live timeline. It starts as the plan steps (ids step-1…). Send the whole list each time: one-line imperative items, typically one in-progress at a time; split, add or reorder items as the work reveals them. completed means the work and its check succeeded; blocked carries a note. Does not approve or commit document changes.',
-    shape: {
-      planId: z.string().min(1).max(256),
-      todos: z.array(z.object({
-        id: z.string().min(1).max(100).optional().describe('Keep an existing id when updating that item; omit for a new item'),
-        content: z.string().min(1).max(300).describe('One-line imperative task'),
-        status: z.enum(['pending', 'in-progress', 'completed', 'blocked']),
-        note: z.string().min(1).max(2_000).optional(),
-      }).strict()).min(1).max(100),
-    },
-  },
 ];
 
 export const TOOLS = Object.freeze(DEFINITIONS.map((definition) => Object.freeze({
