@@ -50,6 +50,10 @@ function fakeProvider() {
         await new Promise((resolve) => p.signal.addEventListener('abort', resolve, { once: true }));
         return { messages: p.messages };
       }
+      if (p.userText.includes('pause')) {
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        p.emit({ kind: 'text_delta', text: ' 끊긴 사이' });
+      }
       let toolRes = null;
       if (p.userText.includes('tool')) toolRes = await p.callTool('get_structure', { pages: [0, 0] });
       if (p.userText.includes('boom')) throw Object.assign(new Error('폭발'), { code: 'BOOM' });
@@ -360,6 +364,40 @@ describe('doogle hub', () => {
     s.close();
   });
 
+  test('thread_delete — 파일과 목록에서 사라지고, 응답 중인 대화는 THREAD_BUSY', async () => {
+    const s = new Client(studioUrl());
+    await s.open();
+    s.send({ type: 'chat_send', threadId: 't40', providerId: 'fake', text: '지울 대화', mode: 'agent' });
+    await s.collectTurn('t40');
+    const file = path.join(dataDir, 'threads', 't40.json');
+    await fs.access(file);
+    s.send({ type: 'thread_delete', reqId: 'd1', threadId: 't40' });
+    const done = await s.next((m) => m.type === 'thread_deleted' && m.reqId === 'd1');
+    assert.equal(done.ok, true);
+    assert.equal(done.threadId, 't40');
+    await assert.rejects(fs.access(file), (e) => e.code === 'ENOENT');
+    s.send({ type: 'threads_query', reqId: 'd2' });
+    const list = await s.next((m) => m.type === 'threads' && m.reqId === 'd2');
+    assert.equal(list.list.some((t) => t.id === 't40'), false);
+    // 뒤늦게 온 검토 결정이 지운 대화를 되살리지 않는다
+    s.send({ type: 'review_decision', threadId: 't40', decision: 'accept_all' });
+    await new Promise((r) => setTimeout(r, 80));
+    await assert.rejects(fs.access(file), (e) => e.code === 'ENOENT');
+
+    s.send({ type: 'chat_send', threadId: 't41', providerId: 'fake', text: 'wait 지우기 금지', mode: 'agent' });
+    await s.next((m) => m.type === 'agent_event' && m.threadId === 't41' && m.event.kind === 'text_delta');
+    s.send({ type: 'thread_delete', reqId: 'd3', threadId: 't41' });
+    const busy = await s.next((m) => m.type === 'thread_deleted' && m.reqId === 'd3');
+    assert.equal(busy.ok, false);
+    assert.equal(busy.error.code, 'THREAD_BUSY');
+    s.send({ type: 'chat_cancel', threadId: 't41' });
+    await s.next((m) => m.type === 'agent_event' && m.threadId === 't41' && m.event.kind === 'turn_end');
+    s.send({ type: 'thread_delete', reqId: 'd4' });
+    const bad = await s.next((m) => m.type === 'thread_deleted' && m.reqId === 'd4');
+    assert.equal(bad.error.code, 'INVALID_ARGS');
+    s.close();
+  });
+
   test('provider 예외 → error 이벤트 + turn_end error, 없는 provider', async () => {
     const s = new Client(studioUrl());
     await s.open();
@@ -410,5 +448,139 @@ describe('doogle hub', () => {
     s.send({ type: 'secrets_set', key: 'claude-oauth', value: 'x' });
     assert.equal((await s.next((m) => m.type === 'secret_ack')).ok, false);
     s.close();
+  });
+});
+
+describe('doogle hub — 연결이 뜻밖에 끊겼을 때', () => {
+  let hub;
+  let dataDir;
+  const GRACE_MS = 500;
+  const url = (client) => `ws://127.0.0.1:${hub.port}/studio?token=${encodeURIComponent(hub.token)}${client ? `&client=${client}` : ''}`;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  /** 대화의 마지막 기록 줄 */
+  const lastEntry = async (s, threadId) => {
+    const reqId = `l-${threadId}`;
+    s.send({ type: 'thread_load', reqId, threadId });
+    const loaded = await s.next((m) => m.type === 'thread' && m.reqId === reqId);
+    return { running: loaded.running, last: loaded.transcript.at(-1) };
+  };
+
+  before(async () => {
+    dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'doogle-hub-grace-'));
+    hub = await createHub({
+      port: 0,
+      dataDir,
+      providers: [fakeProvider()],
+      tools: fakeTools(),
+      toolTimeouts: { read: 3000, write: 3000 },
+      reconnectGraceMs: GRACE_MS,
+      log: () => {},
+    });
+  });
+
+  after(async () => {
+    await hub.close();
+    await fs.rm(dataDir, { recursive: true, force: true });
+  });
+
+  test('같은 화면이 제때 돌아오면 응답을 이어 간다 — 끊긴 사이의 글과 tool_call 이 순서대로 온다', async () => {
+    const s = new Client(url('page-aaaa-1111'));
+    await s.open();
+    s.send({ type: 'hello', role: 'studio', protocol: 1 });
+    assert.equal((await s.next((m) => m.type === 'welcome')).resumed, false);
+    s.send({ type: 'chat_send', threadId: 'g1', providerId: 'fake', text: 'pause tool 이어 가기', mode: 'agent' });
+    await s.next((m) => m.type === 'agent_event' && m.threadId === 'g1' && m.event.kind === 'text_delta');
+    s.ws.terminate(); // 뜻밖의 끊김 (닫는 인사 없이)
+    await sleep(300); // 끊긴 사이: 글 조각 하나와 tool_call 이 나온다
+
+    const s2 = new Client(url('page-aaaa-1111'));
+    await s2.open();
+    // 모아 둔 것이 낸 순서대로 온다
+    const delta = await s2.next((m) => m.type === 'agent_event' || m.type === 'tool_call');
+    assert.equal(delta.type, 'agent_event');
+    assert.deepEqual(delta.event, { kind: 'text_delta', text: ' 끊긴 사이' });
+    const use = await s2.next((m) => m.type === 'agent_event' || m.type === 'tool_call');
+    assert.equal(use.event?.kind, 'tool_use');
+    const call = await s2.next((m) => m.type === 'agent_event' || m.type === 'tool_call');
+    assert.equal(call.type, 'tool_call');
+    s2.send({ type: 'hello', role: 'studio', protocol: 1 });
+    assert.equal((await s2.next((m) => m.type === 'welcome')).resumed, true);
+    // 새 소켓으로 보낸 결과가 그 호출에 닿는다
+    s2.send({ type: 'tool_result', callId: call.callId, ok: true, result: { pages: 1 } });
+    const rest = await s2.collectTurn('g1');
+    assert.deepEqual(rest.map((e) => e.kind), ['tool_result', 'text_done', 'turn_end']);
+    assert.equal(rest[0].ok, true);
+    assert.equal(rest.at(-1).reason, 'done');
+    s2.close();
+  });
+
+  test('끊기기 전에 받은 tool_call 의 결과를 다시 붙은 뒤 보내도 닿는다', async () => {
+    const s = new Client(url('page-bbbb-2222'));
+    await s.open();
+    s.send({ type: 'chat_send', threadId: 'g2', providerId: 'fake', text: 'tool 결과는 나중에', mode: 'agent' });
+    const call = await s.next((m) => m.type === 'tool_call');
+    s.ws.terminate();
+    await sleep(100);
+    const s2 = new Client(url('page-bbbb-2222'));
+    await s2.open();
+    s2.send({ type: 'tool_result', callId: call.callId, ok: true, result: { pages: 2 } });
+    const rest = await s2.collectTurn('g2');
+    assert.equal(rest.at(-1).reason, 'done');
+    s2.close();
+  });
+
+  test('돌아오지 않으면 유예가 끝난 뒤 interrupted 로 멈춘다', async () => {
+    const s = new Client(url('page-cccc-3333'));
+    await s.open();
+    s.send({ type: 'chat_send', threadId: 'g3', providerId: 'fake', text: 'wait 돌아오지 않음', mode: 'agent' });
+    await s.next((m) => m.type === 'agent_event' && m.threadId === 'g3' && m.event.kind === 'text_delta');
+    s.ws.terminate();
+    await sleep(150);
+    // 유예 중에는 아직 돌고 있다 (화면이 없어 확인은 hub 안쪽 상태로)
+    assert.equal(hub.studioConnected, false);
+    await sleep(GRACE_MS + 200);
+    const s2 = new Client(url('page-cccc-3333'));
+    await s2.open();
+    s2.send({ type: 'hello', role: 'studio', protocol: 1 });
+    assert.equal((await s2.next((m) => m.type === 'welcome')).resumed, false);
+    const { running, last } = await lastEntry(s2, 'g3');
+    assert.equal(running, false);
+    assert.deepEqual([last.kind, last.reason], ['turn_end', 'interrupted']);
+    s2.close();
+  });
+
+  test('유예 중에 다른 화면(새로고침)이 붙으면 바로 멈춘다', async () => {
+    const s = new Client(url('page-dddd-4444'));
+    await s.open();
+    s.send({ type: 'chat_send', threadId: 'g4', providerId: 'fake', text: 'wait 새로고침', mode: 'agent' });
+    await s.next((m) => m.type === 'agent_event' && m.threadId === 'g4' && m.event.kind === 'text_delta');
+    s.ws.terminate();
+    await sleep(60);
+    const s2 = new Client(url('page-eeee-5555'));
+    await s2.open();
+    s2.send({ type: 'hello', role: 'studio', protocol: 1 });
+    assert.equal((await s2.next((m) => m.type === 'welcome')).resumed, false);
+    await sleep(60);
+    const { running, last } = await lastEntry(s2, 'g4');
+    assert.equal(running, false);
+    assert.deepEqual([last.kind, last.reason], ['turn_end', 'interrupted']);
+    s2.close();
+  });
+
+  test('화면이 스스로 닫으면(새로고침·창 닫힘) 기다리지 않고 멈춘다', async () => {
+    const s = new Client(url('page-ffff-6666'));
+    await s.open();
+    s.send({ type: 'chat_send', threadId: 'g5', providerId: 'fake', text: 'wait 스스로 닫음', mode: 'agent' });
+    await s.next((m) => m.type === 'agent_event' && m.threadId === 'g5' && m.event.kind === 'text_delta');
+    s.ws.close(1001, 'going away');
+    await sleep(120); // 유예(500ms)보다 훨씬 짧다
+    const s2 = new Client(url('page-ffff-6666'));
+    await s2.open();
+    s2.send({ type: 'hello', role: 'studio', protocol: 1 });
+    assert.equal((await s2.next((m) => m.type === 'welcome')).resumed, false);
+    const { running, last } = await lastEntry(s2, 'g5');
+    assert.equal(running, false);
+    assert.deepEqual([last.kind, last.reason], ['turn_end', 'interrupted']);
+    s2.close();
   });
 });

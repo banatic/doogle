@@ -165,6 +165,8 @@ export interface HubClientOptions {
   createSocket?(url: string): WebSocket;
 }
 
+/** 끊긴 사이 쌓아 두는 tool_result 수 한도 */
+const OUTBOX_MAX = 32;
 const MIN_RETRY_MS = 500;
 const MAX_RETRY_MS = 10_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
@@ -198,6 +200,14 @@ export class HubClient {
   private reqSeq = 0;
   /** 실행 중인 hub→studio tool_call. hub 가 `tool_cancel` 을 보내면 결과를 버린다. */
   private readonly inflight = new Map<string, { cancelled: boolean }>();
+  /**
+   * 이 화면(페이지)의 id — 새로고침하면 바뀐다. hub 는 연결이 뜻밖에 끊겼다가 같은 id 가 돌아오면
+   * 하던 응답을 이어 간다(`welcome.resumed`). 다른 id 면 새 화면으로 보고 옛 응답을 멈춘다.
+   */
+  private readonly clientId = newThreadId();
+  private resumedValue = false;
+  /** 연결이 끊겨 보내지 못한 tool_result — 같은 화면으로 다시 붙으면(resumed) 보낸다 */
+  private outbox: Array<{ type: string; [key: string]: unknown }> = [];
 
   constructor(options: HubClientOptions) {
     this.options = options;
@@ -213,6 +223,11 @@ export class HubClient {
 
   get version(): string {
     return this.hubVersion;
+  }
+
+  /** 방금 붙은 연결이 끊기기 전의 응답을 이어 가는가 (hub 가 `welcome.resumed` 로 알린다) */
+  get resumed(): boolean {
+    return this.resumedValue;
   }
 
   /** 다음 자동 재연결 시각(ms). 예약된 재시도가 없으면 0 — 화면의 "n초 뒤 다시 연결" 카운트다운용. */
@@ -378,6 +393,22 @@ export class HubClient {
     };
   }
 
+  /** 저장된 대화를 지운다 (S→H `thread_delete {threadId}` → H→S `thread_deleted {threadId, ok, error?}`) */
+  async deleteThread(threadId: string): Promise<void> {
+    const response = await this.request<{ type: 'thread_deleted'; threadId: string; ok: boolean; error?: ToolError | string }>(
+      { type: 'thread_delete', threadId },
+      'thread_deleted',
+      { timeoutMs: 10_000, match: (r) => r.threadId === threadId },
+    );
+    if (!response.ok) {
+      const error = response.error;
+      throw new HubRequestError(
+        typeof error === 'object' && error ? error.code : 'DELETE_FAILED',
+        typeof error === 'object' && error ? error.message : String(error ?? '대화를 지우지 못했습니다'),
+      );
+    }
+  }
+
   cancelChat(threadId: string): boolean {
     return this.send({ type: 'chat_cancel', threadId });
   }
@@ -487,7 +518,7 @@ export class HubClient {
       this.scheduleRetry('에이전트 서비스 연결 정보가 없습니다', true);
       return;
     }
-    const url = `ws://127.0.0.1:${endpoint.port}/studio?token=${encodeURIComponent(endpoint.token)}`;
+    const url = `ws://127.0.0.1:${endpoint.port}/studio?token=${encodeURIComponent(endpoint.token)}&client=${encodeURIComponent(this.clientId)}`;
     let socket: WebSocket;
     try {
       socket = this.options.createSocket ? this.options.createSocket(url) : new WebSocket(url);
@@ -528,13 +559,18 @@ export class HubClient {
 
   private dispatch(message: HubMessage): void {
     if (message.type === 'welcome') {
-      const welcome = message as { protocol?: number; hubVersion?: string };
+      const welcome = message as { protocol?: number; hubVersion?: string; resumed?: boolean };
       this.hubVersion = String(welcome.hubVersion ?? '');
       this.retryMs = MIN_RETRY_MS;
       if (welcome.protocol !== undefined && welcome.protocol !== HUB_PROTOCOL) {
         console.warn(`[doogle] hub 프로토콜 ${welcome.protocol} (studio ${HUB_PROTOCOL})`);
       }
+      this.resumedValue = welcome.resumed === true;
       this.setState('open', this.hubVersion);
+      // 끊긴 사이 끝난 tool 의 결과 — hub 가 그 호출을 기다리고 있을 때만(resumed) 보낸다
+      const waiting = this.outbox;
+      this.outbox = [];
+      if (this.resumedValue) for (const reply of waiting) this.send(reply);
     } else if (message.type === 'tool_call') {
       void this.handleToolCall(message as ToolCallMessage);
     } else if (message.type === 'tool_cancel') {
@@ -573,7 +609,9 @@ export class HubClient {
       ? { type: 'tool_result', callId: call.callId, ok: true, result: outcome.result }
       : { type: 'tool_result', callId: call.callId, ok: false, error: outcome.error };
     if (!this.send(reply)) {
-      console.warn(`[doogle] tool_result 를 보내지 못했습니다 (연결 끊김): ${call.name}`);
+      // 연결이 끊겼다 — 같은 화면으로 다시 붙으면 보낸다 (hub 가 잠깐 기다려 준다)
+      if (!this.stopped && this.outbox.length < OUTBOX_MAX) this.outbox.push(reply);
+      else console.warn(`[doogle] tool_result 를 보내지 못했습니다 (연결 끊김): ${call.name}`);
     }
   }
 }

@@ -30,7 +30,7 @@ studio ↔ hub (`/studio`):
 | 방향 | type | 필드 |
 |---|---|---|
 | S→H | `hello` | `{role:"studio", protocol:1}` |
-| H→S | `welcome` | `{protocol:1, hubVersion}` |
+| H→S | `welcome` | `{protocol:1, hubVersion, resumed:boolean}` — `resumed`: 끊기기 전의 응답을 이어 간다(아래 "연결이 끊겼을 때") |
 | S→H | `providers_query` | `{}` |
 | H→S | `providers` | `{list:[{id, label, available:boolean, reason?:string, models:Model[], defaultModel:string\|null, modelsUpdatedAt:string\|null, modelsError?:string, authHint?:string}]}` |
 | S→H | `models_refresh` | `{providerId?}` — 모델 목록을 다시 받은 뒤(없으면 전체) `providers`로 응답 |
@@ -40,6 +40,19 @@ studio ↔ hub (`/studio`):
 | H→S | `tool_call` | `{callId, name, args, origin:"agent"\|"mcp", threadId?}` |
 | S→H | `tool_result` | `{callId, ok:true, result}` 또는 `{callId, ok:false, error:{code, message, data?}}` |
 | S→H | `review_decision` | `{threadId, decision:"accept_all"\|"reject_all"\|"partial", note?}` (스테이징 검토 결과, hub가 다음 턴 컨텍스트로 전달) |
+| S→H | `threads_query` | `{reqId?, limit?, doc?:{key, name}\|null}` — 저장된 대화 목록. `doc` 을 주면 그 문서의 대화만, `doc:null` 이면 빈 목록 |
+| H→S | `threads` | `{reqId?, list:[{id, title, createdAt, updatedAt, turns, doc, running}]}` (최근 것부터) |
+| S→H | `thread_load` | `{reqId?, threadId}` |
+| H→S | `thread` | `{reqId?, threadId, title, doc, createdAt, updatedAt, running, transcript}` — transcript = `{kind:"user", text, providerId, at}` 와 그때 보낸 `agent_event.event` 들 |
+| S→H | `thread_delete` | `{reqId?, threadId}` — 저장된 대화를 지운다(되돌릴 수 없다) |
+| H→S | `thread_deleted` | `{reqId?, threadId, ok, error?:{code, message}}` — 응답 중인 대화는 `THREAD_BUSY` |
+
+**대화 저장** (`doogle-agent/src/threads.mjs`): 대화 하나 = `appDataDir()/threads/<id>.json`. 목록은 색인(`threads/threads.index`)으로 만든다 — 파일마다 수정 시각·크기만 보고 색인과 다른 파일만 다시 읽는다. 색인은 캐시일 뿐이라 지워도 파일에서 다시 만든다. 보관 한도는 500개(`createHub({maxThreads})`, 0 = 한도 없음)이고, 넘으면 hub 기동 때와 턴이 끝날 때 오래 쓰지 않은 대화부터 지운다(응답 중·이번 실행에서 연 대화는 남긴다). 대화를 지워도 Claude Code 가 자기 폴더(`~/.claude/projects/…`)에 남긴 세션 기록은 건드리지 않는다.
+
+**연결이 끊겼을 때**: studio 는 `/studio?token=…&client=<화면 id>` 로 붙는다(화면 id 는 페이지마다 새로 만들고 새로고침하면 바뀐다).
+- 화면이 스스로 닫으면(닫는 코드 1000·1001·1005 — 새로고침·창 닫힘) 문서도 사라졌으므로 hub 는 진행 중 응답을 바로 멈춘다(`turn_end.reason:"interrupted"`).
+- 뜻밖에 끊기면(그 밖의 코드) hub 는 같은 화면 id 가 돌아오길 10초(`createHub({reconnectGraceMs})`) 기다린다. 그동안 화면으로 갈 `agent_event`·`tool_call` 을 모아 두었다가, 돌아오면 순서대로 보내고 `welcome.resumed:true` 로 알린다. studio 는 끊긴 사이 끝난 `tool_result` 를 다시 붙은 뒤 보낸다.
+- 다른 화면 id 가 붙거나 제때 돌아오지 않으면 응답을 멈추고(`interrupted`), 걸려 있던 tool 호출은 `STUDIO_DISCONNECTED` 로 끝낸다. 화면 id 를 주지 않는 연결은 기다리지 않는다.
 
 `Model` = `{id, label, description?, default?:boolean, aliasOf?, resolvedModel?, supportsEffort?, effortLevels?:string[], source:"live"|"cache"|"fallback"}`.
 - `defaultModel` = `default:true` 항목(없으면 첫 항목)의 id. `modelsUpdatedAt` = 목록을 받은 시각(ISO), fallback이면 null. `modelsError` = 마지막 실시간 조회 실패 사유.
@@ -51,7 +64,7 @@ studio ↔ hub (`/studio`):
 mcp ↔ hub (`/mcp`): `tool_call` / `tool_result`만 사용 (hub가 studio로 중계, `origin:"mcp"`). studio 미연결 시 hub가 `{ok:false,error:{code:"NO_DOCUMENT",message:"두글에서 문서를 열어주세요"}}`.
 
 ## 3. agent_event.event
-`{kind:"status", text}` · `{kind:"text_delta", text}` · `{kind:"text_done"}` · `{kind:"tool_use", callId, name, args}` · `{kind:"tool_result", callId, ok, summary}` · `{kind:"usage", inputTokens?, outputTokens?}` · `{kind:"limit", message, resetAt?}` · `{kind:"error", code, message}` · `{kind:"turn_end", reason:"done"|"cancelled"|"error"}`
+`{kind:"status", text}` · `{kind:"text_delta", text}` · `{kind:"text_done"}` · `{kind:"tool_use", callId, name, args}` · `{kind:"tool_result", callId, ok, summary}` · `{kind:"usage", inputTokens?, outputTokens?}` · `{kind:"limit", message, resetAt?}` · `{kind:"error", code, message}` · `{kind:"turn_end", reason:"done"|"cancelled"|"error"|"interrupted"}` (`interrupted`: 화면이 사라져 hub 가 멈췄거나, hub 가 죽어 끝맺지 못한 기록)
 
 ## 4. Tool 정의 모듈 (`doogle-agent/src/tools/index.mjs`)
 ```js

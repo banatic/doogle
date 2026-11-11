@@ -223,6 +223,11 @@ export async function initDoogle(host: PluginHost): Promise<PluginSurface> {
   }
 
   hub.start();
+  // 화면이 사라질 때(새로고침·닫힘)는 연결을 스스로 닫는다 — hub 가 "뜻밖에 끊김" 으로 보고
+  // 같은 화면이 돌아오길 기다리지 않게 (hub.mjs: 1000·1001 로 닫히면 진행 중 응답을 바로 멈춘다)
+  const onPageHide = (event: PageTransitionEvent) => { if (!event.persisted) hub.stop(); };
+  window.addEventListener('pagehide', onPageHide);
+  offs.push(() => window.removeEventListener('pagehide', onPageHide));
   // 첫 실행에만 자동으로 열고, 이후에는 마지막 열림 상태를 따른다
   const remembered = storeGet(STORE_PANEL);
   if (remembered === null || remembered === '1') host.ui.toggleSidePanel(DOOGLE_PANEL_ID, true);

@@ -33,6 +33,16 @@ export const DEFAULT_TOOL_TIMEOUTS = Object.freeze({
   write: 10 * 60_000,
 });
 
+/**
+ * 화면과의 연결이 뜻밖에 끊겼을 때 같은 화면이 돌아오길 기다리는 시간. 그 안에 돌아오면 응답을 이어 간다.
+ * (화면의 재연결 간격은 0.5초부터 두 배씩 — 이 안에 서너 번 시도한다)
+ */
+export const DEFAULT_RECONNECT_GRACE_MS = 10_000;
+/** 끊긴 사이 모아 두는 메시지 수 한도 — 넘치면 돌아오지 않는 것으로 본다 */
+const DETACHED_BUFFER_MAX = 5000;
+/** 화면 id (`/studio?client=`) 로 받을 수 있는 모양 */
+const CLIENT_ID = /^[A-Za-z0-9_-]{8,80}$/;
+
 const DETECT_TIMEOUT_MS = 15_000;
 /** 캐시가 없을 때 providers 응답이 실시간 모델 조회를 기다리는 최대 시간 (넘기면 fallback 후 갱신 push) */
 const MODELS_FIRST_WAIT_MS = 4_000;
@@ -93,6 +103,8 @@ function withTimeout(promise, ms, onTimeout) {
  *   modelCatalog?: ModelCatalog,
  *   modelsFirstWaitMs?: number,
  *   refreshModelsOnStart?: boolean,
+ *   reconnectGraceMs?: number,
+ *   maxThreads?: number,
  *   log?: (msg: string) => void,
  * }} [opts]
  */
@@ -129,11 +141,19 @@ export async function createHub(opts = {}) {
   const store = new ThreadStore({
     dir: opts.persistThreads === false ? null : path.join(dataDir, 'threads'),
     backfill: (t) => backfillFromClaudeSession(t, claudeCwd),
+    ...(opts.maxThreads !== undefined ? { maxThreads: opts.maxThreads } : {}),
   });
+  const reconnectGraceMs = opts.reconnectGraceMs ?? DEFAULT_RECONNECT_GRACE_MS;
 
   /** 현재 studio 소켓 (하나만 유지) */
   /** @type {WebSocket | null} */
   let studio = null;
+  /**
+   * 연결이 뜻밖에 끊긴 화면 — 같은 화면(clientId)이 돌아오길 잠깐 기다린다. 그동안 화면으로 갈 메시지는
+   * 모아 두었다가 돌아오면 순서대로 보낸다. 돌아오지 않으면 진행 중 응답을 멈춘다(dropDetached).
+   * @type {{clientId: string, socket: WebSocket, buffer: any[], timer: ReturnType<typeof setTimeout>} | null}
+   */
+  let detached = null;
   /** callId → pending tool call */
   /** @type {Map<string, {resolve:(r:any)=>void, socket: WebSocket}>} */
   const pending = new Map();
@@ -170,6 +190,37 @@ export async function createHub(opts = {}) {
       t.interrupted = true;
       t.abort.abort();
     }
+  }
+
+  /** 화면으로 보낸다. 화면이 잠깐 끊긴 사이(detached)면 모아 둔다 */
+  function sendStudio(msg) {
+    if (studio) {
+      if (studio.readyState === WebSocket.OPEN) send(studio, msg);
+      // 소켓은 죽었는데 close 처리가 아직인 짧은 틈 — 유예로 넘어가면 이어 보낼 수 있게 붙들어 둔다
+      else if ((studio.doogleLimbo ??= []).length < DETACHED_BUFFER_MAX) studio.doogleLimbo.push(msg);
+      return;
+    }
+    if (!detached) return;
+    if (detached.buffer.length >= DETACHED_BUFFER_MAX) {
+      dropDetached();
+      return;
+    }
+    detached.buffer.push(msg);
+  }
+
+  /** 끊긴 화면이 돌아오지 않았다 — 기다리던 것을 정리하고 진행 중 응답을 멈춘다 */
+  function dropDetached() {
+    const d = detached;
+    if (!d) return;
+    detached = null;
+    clearTimeout(d.timer);
+    interruptTurns();
+    failPendingFor(d.socket);
+  }
+
+  /** old 소켓에 걸려 있던 tool 호출을 새 소켓으로 옮긴다 (같은 화면이 다시 붙었을 때) */
+  function rebindPending(old, ws) {
+    for (const p of pending.values()) if (p.socket === old) p.socket = ws;
   }
 
   // ── tool_call 중계 ─────────────────────────────────────────
@@ -220,21 +271,25 @@ export async function createHub(opts = {}) {
       }
     }
     if (signal?.aborted) return { ok: false, error: { code: 'CANCELLED', message: '취소되었습니다' } };
-    const socket = studio;
-    if (!socket || socket.readyState !== WebSocket.OPEN) return { ok: false, error: { ...NO_DOCUMENT } };
+    // 화면이 잠깐 끊긴 사이면(유예 중, 또는 소켓이 죽고 close 처리가 아직인 틈) 그 화면 앞으로 걸어 둔다 —
+    // 돌아오면 전해지고, 안 돌아오면 STUDIO_DISCONNECTED 로 끝난다
+    const socket = studio ?? detached?.socket ?? null;
+    if (!socket) return { ok: false, error: { ...NO_DOCUMENT } };
 
     // 사용자 응답·검토를 기다릴 수 있는 tool(질문/권한 요청, 쓰기)은 긴 대기 시간
     const waitsForHuman = humanWaitTools.has(name) || def?.kind === 'write';
     const timeoutMs = waitsForHuman ? timeouts.write : timeouts.read;
     return new Promise((resolve) => {
       let settled = false;
+      /** socket 은 같은 화면이 다시 붙으면 새 소켓으로 바뀐다 (rebindPending) */
+      const entry = { resolve: (r) => finish(r), socket };
       const finish = (r, { notifyStudio = false } = {}) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
         signal?.removeEventListener('abort', onAbort);
         pending.delete(callId);
-        if (notifyStudio) send(socket, { type: 'tool_cancel', callId });
+        if (notifyStudio) sendStudio({ type: 'tool_cancel', callId });
         resolve(r);
       };
       const onAbort = () => finish({ ok: false, error: { code: 'CANCELLED', message: '취소되었습니다' } }, { notifyStudio: true });
@@ -243,8 +298,8 @@ export async function createHub(opts = {}) {
         error: { code: 'TIMEOUT', message: `두글이 ${Math.round(timeoutMs / 1000)}초 안에 응답하지 않았습니다 (${name})` },
       }, { notifyStudio: true }), timeoutMs);
       signal?.addEventListener('abort', onAbort, { once: true });
-      pending.set(callId, { resolve: (r) => finish(r), socket });
-      send(socket, { type: 'tool_call', callId, name, args, origin, ...(threadId ? { threadId } : {}) });
+      pending.set(callId, entry);
+      sendStudio({ type: 'tool_call', callId, name, args, origin, ...(threadId ? { threadId } : {}) });
     });
   }
 
@@ -370,7 +425,7 @@ export async function createHub(opts = {}) {
   }
 
   function emitTo(threadId, event) {
-    send(studio, { type: 'agent_event', threadId, event });
+    sendStudio({ type: 'agent_event', threadId, event });
   }
 
   async function startTurn(msg) {
@@ -459,6 +514,7 @@ export async function createHub(opts = {}) {
       }
       thread.lastProviderId = providerId;
       await store.save(thread);
+      pruneThreads();
     } catch (err) {
       reason = 'error';
       emitHub({ kind: 'error', code: 'HUB_ERROR', message: String(err?.message ?? err) });
@@ -502,6 +558,34 @@ export async function createHub(opts = {}) {
       running,
       transcript: Array.isArray(thread.transcript) ? thread.transcript : [],
     });
+  }
+
+  /** 대화 지우기 (S→H `thread_delete {threadId}` → H→S `thread_deleted {threadId, ok, error?}`) */
+  async function onThreadDelete(msg, socket) {
+    const threadId = msg.threadId;
+    const reply = (body) => send(socket, { type: 'thread_deleted', threadId, ...(typeof msg.reqId === 'string' ? { reqId: msg.reqId } : {}), ...body });
+    if (typeof threadId !== 'string' || !threadId || threadId.length > 200) {
+      return reply({ ok: false, error: { code: 'INVALID_ARGS', message: 'threadId가 없습니다' } });
+    }
+    if (turns.has(threadId)) {
+      return reply({ ok: false, error: { code: 'THREAD_BUSY', message: '답변을 만들고 있는 대화는 지울 수 없습니다' } });
+    }
+    const timer = saveTimers.get(threadId);
+    if (timer) clearTimeout(timer);
+    saveTimers.delete(threadId);
+    try {
+      await store.delete(threadId);
+      reply({ ok: true });
+    } catch (err) {
+      reply({ ok: false, error: { code: 'DELETE_FAILED', message: String(err?.message ?? err) } });
+    }
+  }
+
+  /** 보관 한도를 넘은 옛 대화를 뒤에서 정리한다 (응답 중인 대화는 남긴다) */
+  function pruneThreads() {
+    void store.prune((id) => turns.has(id)).then((gone) => {
+      if (gone.length > 0) log(`오래된 대화 ${gone.length}개를 정리했습니다 (보관 한도 ${store.maxThreads}개)`);
+    }).catch((err) => log(`대화 정리: ${err?.message ?? err}`));
   }
 
   async function onReviewDecision(msg) {
@@ -611,21 +695,50 @@ export async function createHub(opts = {}) {
     }
   }
 
-  function onStudioConnection(ws) {
+  /**
+   * @param {WebSocket} ws
+   * @param {string} clientId 화면(페이지) 하나의 id — 새로고침하면 바뀐다. 모르면 ''
+   */
+  function onStudioConnection(ws, clientId = '') {
+    /** 같은 화면이 다시 붙어 진행 중이던 응답을 이어 가는가 (welcome.resumed) */
+    let resumed = false;
+    if (detached) {
+      const d = detached;
+      if (clientId && d.clientId === clientId) {
+        // 끊겼던 그 화면이 돌아왔다 — 걸려 있던 호출을 옮기고 모아 둔 것을 순서대로 보낸다
+        detached = null;
+        clearTimeout(d.timer);
+        rebindPending(d.socket, ws);
+        resumed = true;
+        for (const m of d.buffer) send(ws, m);
+      } else {
+        // 다른 화면이다(새로고침) — 옛 화면의 문서에 대고 하던 응답은 멈춘다
+        dropDetached();
+      }
+    }
     if (studio && studio !== ws) {
       const old = studio;
-      // 새 화면이 붙었다(새로고침) — 옛 화면의 문서에 대고 하던 응답은 멈춘다
-      interruptTurns();
-      failPendingFor(old);
+      if (clientId && old.doogleClientId === clientId) {
+        // 같은 화면이 새 소켓으로 붙었다 — 이어 간다 (죽은 옛 소켓에 붙들려 있던 것도 넘긴다)
+        rebindPending(old, ws);
+        resumed = true;
+        for (const m of old.doogleLimbo ?? []) send(ws, m);
+        old.doogleLimbo = [];
+      } else {
+        // 새 화면이 붙었다(새로고침) — 옛 화면의 문서에 대고 하던 응답은 멈춘다
+        interruptTurns();
+        failPendingFor(old);
+      }
       try { old.close(4000, 'replaced'); } catch { /* ignore */ }
     }
+    ws.doogleClientId = clientId;
     studio = ws;
     ws.on('message', (data) => {
       const msg = parse(data);
       if (!msg) return send(ws, { type: 'error', code: 'BAD_MESSAGE', message: 'JSON 객체가 아닙니다' });
       switch (msg.type) {
         case 'hello':
-          return send(ws, { type: 'welcome', protocol: PROTOCOL_VERSION, hubVersion: HUB_VERSION });
+          return send(ws, { type: 'welcome', protocol: PROTOCOL_VERSION, hubVersion: HUB_VERSION, resumed });
         case 'providers_query':
           return void providersList().then((list) => send(ws, { type: 'providers', list }));
         case 'models_refresh':
@@ -646,6 +759,8 @@ export async function createHub(opts = {}) {
             log(`thread_load: ${e?.message}`);
             send(ws, { type: 'error', reqId: msg.reqId, requestType: 'thread_load', code: 'HUB_ERROR', message: String(e?.message ?? e) });
           });
+        case 'thread_delete':
+          return void onThreadDelete(msg, ws).catch((e) => log(`thread_delete: ${e?.message}`));
         case 'secret_set':
         case 'secrets_set':
         case 'secret_delete':
@@ -664,10 +779,26 @@ export async function createHub(opts = {}) {
           return send(ws, { type: 'error', code: 'UNKNOWN_TYPE', message: `알 수 없는 메시지: ${msg.type}` });
       }
     });
-    ws.on('close', () => {
-      if (studio === ws) interruptTurns();
+    ws.on('close', (code) => {
+      if (studio !== ws) {
+        // 이미 다른 소켓으로 바뀐 옛 소켓 — 옮기지 못하고 남은 호출만 정리한다
+        failPendingFor(ws);
+        return;
+      }
+      studio = null;
+      // 화면이 스스로 닫았으면(1000·1001·1005: 새로고침·창 닫힘) 문서도 사라졌다 — 바로 멈춘다.
+      // 뜻밖에 끊겼고(1006 등) 하던 일이 있으면, 같은 화면이 돌아오길 잠깐 기다린다.
+      // (화면이 hub 재시작 알림을 받고 스스로 다시 붙을 때는 4000 으로 닫는다 — 기다리는 쪽)
+      const left = code === 1000 || code === 1001 || code === 1005;
+      const working = turns.size > 0 || [...pending.values()].some((p) => p.socket === ws);
+      if (!left && clientId && working && reconnectGraceMs > 0 && !closing) {
+        const d = { clientId, socket: ws, buffer: ws.doogleLimbo ?? [], timer: setTimeout(() => { if (detached === d) dropDetached(); }, reconnectGraceMs) };
+        d.timer.unref?.();
+        detached = d;
+        return;
+      }
+      interruptTurns();
       failPendingFor(ws);
-      if (studio === ws) studio = null;
     });
   }
 
@@ -713,8 +844,9 @@ export async function createHub(opts = {}) {
     if (origin !== undefined && !allowedOrigins.has(origin)) return reject(403, 'Forbidden');
     const given = url.searchParams.get('token') ?? req.headers['x-doogle-token'];
     if (!tokenMatches(token, Array.isArray(given) ? given[0] : given)) return reject(401, 'Unauthorized');
+    const client = url.searchParams.get('client') ?? '';
     wss.handleUpgrade(req, socket, head, (ws) => {
-      if (route === '/studio') onStudioConnection(ws);
+      if (route === '/studio') onStudioConnection(ws, CLIENT_ID.test(client) ? client : '');
       else onMcpConnection(ws);
     });
   });
@@ -734,6 +866,9 @@ export async function createHub(opts = {}) {
     await writeHubJson(hubJsonFile, { port, token, pid: process.pid, version: 1 });
   }
 
+  // 기동 시: 보관 한도를 넘은 옛 대화를 뒤에서 정리한다
+  pruneThreads();
+
   if (opts.refreshModelsOnStart !== false) {
     // 기동 시: 캐시가 없거나 오래된 provider만 뒤에서 갱신 (끝나면 연결된 studio에 push)
     void refreshModels(null, { onlyStale: true }).then(() => scheduleProvidersBroadcast());
@@ -744,6 +879,7 @@ export async function createHub(opts = {}) {
     if (broadcastTimer) { clearTimeout(broadcastTimer); broadcastTimer = null; }
     await catalog.idle();
     for (const l of logins.values()) l?.cancel?.();
+    dropDetached();
     interruptTurns();
     await Promise.all([...turns.values()].map((t) => t.done));
     // 미뤄 둔 저장은 지금 쓴다
@@ -781,6 +917,8 @@ export async function createHub(opts = {}) {
     /** 테스트·내부용 */
     callTool,
     get studioConnected() { return !!studio && studio.readyState === WebSocket.OPEN; },
+    /** 테스트·평가용: 화면 소켓을 닫는 인사 없이 끊는다 (뜻밖의 끊김 흉내) */
+    dropStudioConnection() { studio?.terminate(); },
   };
 }
 

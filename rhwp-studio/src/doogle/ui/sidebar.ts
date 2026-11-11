@@ -313,6 +313,12 @@ interface ThreadView {
 
 type MenuKind = 'threads' | 'model';
 
+/**
+ * 응답 도중 연결이 끊겼을 때 화면이 기다리는 시간 — hub 가 기다리는 시간(hub.mjs DEFAULT_RECONNECT_GRACE_MS,
+ * 10초)보다 조금 길게 잡아, hub 가 포기하기 전에 화면이 먼저 포기하지 않게 한다.
+ */
+const RECONNECT_WAIT_MS = 12_000;
+
 export class DoogleSidebar {
   private readonly deps: SidebarDeps;
   private root: HTMLElement | null = null;
@@ -351,6 +357,10 @@ export class DoogleSidebar {
   private clock: ReturnType<typeof setInterval> | null = null;
   /** 지금 문서의 저장된 대화 목록 (아직 화면에 불러오지 않은 것 포함) */
   private savedThreads: SavedThreadInfo[] = [];
+  /** 대화 목록에서 "지울까요?" 를 묻고 있는 대화 */
+  private confirmDeleteId: string | null = null;
+  /** 연결이 끊겨 응답을 잠시 붙들고 있는 동안의 타이머 — 같은 화면으로 다시 붙으면 이어 간다 */
+  private suspendTimer: ReturnType<typeof setTimeout> | null = null;
   /** 지금 문서 — 대화 목록·새 대화가 이 문서를 따른다 */
   private doc: DocIdentity | null = null;
   /** 문서 교체(열기·새 문서)를 알려 온 시각 — 이어지는 이름 변화를 "다른 문서" 로 본다 */
@@ -615,6 +625,23 @@ export class DoogleSidebar {
       items.push(el('div', 'dg-menu-heading', `${this.doc.name.replace(/\.(hwpx|hwp|hml)$/i, '')}의 대화`));
       for (const t of list) {
         const current = t.id === this.thread.id;
+        const row = el('div', 'dg-menu-row');
+        if (this.confirmDeleteId === t.id) {
+          // 지우기는 되돌릴 수 없다 — 그 줄에서 한 번 더 묻는다
+          row.classList.add('dg-menu-confirm');
+          const ask = el('span', 'dg-menu-label', `“${t.title}” 지울까요?`);
+          const yes = button('dg-menu-yes', '지우기', () => { void this.deleteThread(t.id); });
+          yes.setAttribute('role', 'menuitem');
+          const no = button('dg-menu-no', '취소', () => {
+            this.confirmDeleteId = null;
+            this.renderThreadMenu();
+            this.threadMenu.querySelector<HTMLElement>(`[data-del="${CSS.escape(t.id)}"]`)?.focus();
+          });
+          no.setAttribute('role', 'menuitem');
+          row.append(ask, yes, no);
+          items.push(row);
+          continue;
+        }
         const item = button('dg-menu-item', '', () => {
           this.closeMenu(true);
           this.switchThread(t.id);
@@ -623,10 +650,51 @@ export class DoogleSidebar {
         item.setAttribute('aria-checked', String(current));
         item.disabled = this.busy && !current;
         item.append(el('span', 'dg-menu-check', current ? '✓' : ''), el('span', 'dg-menu-label', t.title));
-        items.push(item);
+        const del = iconButton('dg-menu-del', 'close', `대화 지우기: ${t.title}`, () => {
+          this.confirmDeleteId = t.id;
+          this.renderThreadMenu();
+          this.threadMenu.querySelector<HTMLElement>('.dg-menu-no')?.focus();
+        }, 12);
+        del.setAttribute('role', 'menuitem');
+        del.dataset.del = t.id;
+        // 지금 보는 대화는 응답 중이거나 검토할 변경이 남아 있으면 지우지 않는다
+        if (current && (this.busy || reviewStore.count > 0)) {
+          del.disabled = true;
+          del.title = this.busy ? '답변을 만드는 중에는 지울 수 없습니다' : '검토할 변경을 먼저 처리해 주세요';
+        }
+        row.append(item);
+        // 아직 아무것도 보내지 않은 빈 대화는 지울 것이 없다
+        if (!(current && this.thread.turns.length === 0)) row.append(del);
+        items.push(row);
       }
     }
     this.threadMenu.replaceChildren(...items);
+  }
+
+  /** 대화를 지운다 — hub 의 저장 파일과 화면의 대화 모두. 지금 보던 대화면 새 빈 대화로 바꾼다 */
+  private async deleteThread(id: string): Promise<void> {
+    this.confirmDeleteId = null;
+    try {
+      await this.deps.hub.deleteThread(id);
+    } catch (error) {
+      this.closeMenu(false);
+      this.addNotice(`대화를 지우지 못했습니다: ${error instanceof Error ? error.message : String(error)}`, 'error');
+      return;
+    }
+    this.savedThreads = this.savedThreads.filter((t) => t.id !== id);
+    const view = this.threads.get(id);
+    if (view) {
+      this.threads.delete(id);
+      if (view === this.thread) {
+        this.turn = null;
+        this.showThread(this.createThread());
+      }
+    }
+    if (this.openMenuKind === 'threads') {
+      this.renderThreadMenu();
+      this.menuItems(this.threadMenu)[0]?.focus();
+    }
+    this.announce('대화를 지웠습니다');
   }
 
   // ─── 메뉴 공통 ─────────────────────────────────────────
@@ -641,6 +709,7 @@ export class DoogleSidebar {
     this.openMenuKind = kind;
     this.menuTrigger = trigger;
     const menu = kind === 'threads' ? this.threadMenu : this.modelMenu;
+    this.confirmDeleteId = null;
     if (kind === 'threads') this.renderThreadMenu();
     else this.renderModelMenu();
     menu.hidden = false;
@@ -1172,13 +1241,41 @@ export class DoogleSidebar {
       void this.loadDocThreads(this.thread.turns.length === 0);
     }
     this.renderModelButton();
-    if (state !== 'open' && this.busy) {
-      this.addNotice('에이전트 서비스 연결이 끊겨 응답을 더 받지 못했습니다.', 'error');
-      this.endTurn();
-    }
+    if (state !== 'open' && this.busy) this.suspendTurn();
+    else if (state === 'open' && this.suspendTimer !== null) this.resumeTurn();
     this.renderComposer();
     this.sheet?.render();
     this.refreshContext();
+  }
+
+  /**
+   * 응답 도중 연결이 끊겼다 — 곧바로 끝내지 않고 잠깐 붙든다. hub 도 같은 화면이 돌아오길 기다리며
+   * 그사이 일을 모아 두므로(hub.mjs detached), 제때 다시 붙으면 응답이 그대로 이어진다.
+   */
+  private suspendTurn(): void {
+    if (this.suspendTimer !== null) return;
+    if (this.turn) this.setActivity(this.turn, '연결이 끊겨 다시 연결하는 중');
+    this.suspendTimer = setTimeout(() => this.dropSuspendedTurn(), RECONNECT_WAIT_MS);
+  }
+
+  /** 다시 붙었다 — hub 가 응답을 붙들고 있었으면(resumed) 이어 가고, 아니면(hub 가 다시 떴다) 끝낸다 */
+  private resumeTurn(): void {
+    if (this.suspendTimer !== null) clearTimeout(this.suspendTimer);
+    this.suspendTimer = null;
+    if (!this.busy) return;
+    if (this.deps.hub.resumed) {
+      if (this.turn) this.setActivity(this.turn, '이어서 작업하는 중');
+      return;
+    }
+    this.dropSuspendedTurn();
+  }
+
+  private dropSuspendedTurn(): void {
+    if (this.suspendTimer !== null) clearTimeout(this.suspendTimer);
+    this.suspendTimer = null;
+    if (!this.busy) return;
+    this.addNotice('에이전트 서비스 연결이 끊겨 응답을 더 받지 못했습니다.', 'error');
+    this.endTurn();
   }
 
   private openLog(logPath: string): void {
@@ -1616,6 +1713,8 @@ export class DoogleSidebar {
       this.renderSteps(turn);
     }
     this.stopClock();
+    if (this.suspendTimer !== null) clearTimeout(this.suspendTimer);
+    this.suspendTimer = null;
     this.turn = null;
     this.busy = false;
     reviewStore.setBusy(false);

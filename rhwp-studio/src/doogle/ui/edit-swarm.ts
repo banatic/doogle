@@ -18,6 +18,7 @@
  * swarm-cursors(DhvanilPatel)의 "커서 무리가 화면을 만든다" 는 발상에서 영감을 받았고, 코드는 가져오지 않았다.
  */
 import './edit-swarm.css';
+import { commonColor, paperSamplePoints, type Rgba } from './swarm-paper.ts';
 
 interface PageRect { pageIndex: number; x: number; y: number; width: number; height: number }
 /** 실행기가 보내는 자리 — from 은 쓰기 직전 그 자리의 옛 위치 (새로 생긴 자리면 null) */
@@ -262,6 +263,54 @@ export function mountEditSwarm(): EditSwarmHandle {
       && r.left + r.width <= s.box.left + s.box.width + 1 && r.top + r.height <= s.box.top + s.box.height + 1);
   }
 
+  // ─── 종이색 ──────────────────────────────────────────
+  // 덮개는 그 자리의 바탕색으로 깐다. 쪽이 늘 흰 것은 아니다 — 음영을 넣은 표 칸이나 배경색이 있는 쪽에서
+  // 흰 덮개를 깔면 편집하는 동안 흰 조각이 번쩍인다. 화면 그림에서 바탕 픽셀을 읽고, 못 읽으면 흰색.
+  let probe: CanvasRenderingContext2D | null | undefined;
+
+  function pixel(image: HTMLCanvasElement, x: number, y: number): Rgba | null {
+    if (probe === undefined) {
+      const c = document.createElement('canvas');
+      c.width = 1;
+      c.height = 1;
+      probe = c.getContext('2d', { willReadFrequently: true });
+    }
+    if (!probe) return null;
+    try {
+      const sx = Math.max(0, Math.min(image.width - 1, Math.floor(x)));
+      const sy = Math.max(0, Math.min(image.height - 1, Math.floor(y)));
+      probe.clearRect(0, 0, 1, 1);
+      probe.drawImage(image, sx, sy, 1, 1, 0, 0, 1, 1);
+      const d = probe.getImageData(0, 0, 1, 1).data;
+      return [d[0], d[1], d[2], d[3]];
+    } catch {
+      return null; // 읽을 수 없는 캔버스
+    }
+  }
+
+  /** r 자리의 바탕색을 shot(화면 그림)에서 읽는다 */
+  function paperColor(shot: Shot | undefined, r: Box): string {
+    if (!shot) return '#ffffff';
+    const k = shot.image.width / shot.box.width;
+    return commonColor(paperSamplePoints(r).map((p) => pixel(shot.image, (p.x - shot.box.left) * k, (p.y - shot.box.top) * k)));
+  }
+
+  /** 지금 화면에 그려진 쪽 캔버스 중 r 을 품은 것 — 찍어 둔 옛 화면이 없을 때 바탕색을 여기서 읽는다 */
+  function liveShot(r: Box): Shot | undefined {
+    const content = document.getElementById('scroll-content');
+    if (!content) return undefined;
+    const base = content.getBoundingClientRect();
+    for (const canvas of content.querySelectorAll<HTMLCanvasElement>('canvas')) {
+      if (canvas.width < 100 || canvas.height < 100 || canvas.closest('.dg-swarm')) continue;
+      const c = canvas.getBoundingClientRect();
+      if (c.width < 50) continue;
+      const box = { left: c.left - base.left, top: c.top - base.top, width: c.width, height: c.height };
+      if (r.left >= box.left - 1 && r.top >= box.top - 1
+        && r.left + r.width <= box.left + box.width + 1 && r.top + r.height <= box.top + box.height + 1) return { image: canvas, box };
+    }
+    return undefined;
+  }
+
   /**
    * 토막 덮개 — 토막 안의 바뀐 자리마다 종이색을 깔고(.dg-swarm-blank), 그 위에 옛 글을 옛 위치에서 잘라
    * 새 위치에 그린다(.dg-swarm-old). 줄이 늘었거나 칸이 커져 옛 글보다 넓은 곳은 빈 종이 — 거기엔 새 글을 친다.
@@ -286,11 +335,12 @@ export function mountEditSwarm(): EditSwarmHandle {
     const bg = blank.getContext('2d');
     const og = old.getContext('2d');
     if (!bg || !og) return null;
-    bg.fillStyle = og.fillStyle = '#ffffff';
     for (const { box, from } of parts) {
       const a = Math.max(seg.left, box.left);
       const b = Math.min(seg.left + seg.width, box.left + box.width);
       if (b - a < 0.5) continue;
+      // 그 자리의 바탕색 — 고치기 전 화면의 같은 자리에서 읽는다 (음영 칸·색 있는 쪽)
+      bg.fillStyle = og.fillStyle = paperColor(shotOf(box), box);
       const dx = (a - seg.left) * scale;
       const dy = (box.top - seg.top) * scale;
       bg.fillRect(dx, dy, (b - a) * scale, box.height * scale);
@@ -330,6 +380,8 @@ export function mountEditSwarm(): EditSwarmHandle {
     if (!prepared) {
       cover.className = 'dg-swarm-cover';
       Object.assign(cover.style, { left: `${seg.left}px`, top: `${seg.top}px`, width: `${seg.width}px`, height: `${seg.height}px` });
+      // 옛 화면이 없어 통째로 덮는 덮개 — 지금 그려진 쪽에서 바탕색을 읽어 맞춘다
+      cover.style.background = paperColor(liveShot(seg), seg);
       target.append(cover);
     }
     target.append(cursor);
@@ -423,7 +475,8 @@ export function mountEditSwarm(): EditSwarmHandle {
     });
     live += index;
     await Promise.all(jobs);
-    live -= index;
+    // 그사이 clear() 가 집계를 0 으로 되돌렸으면(문서가 바뀜) 빼지 않는다 — 음수가 되면 상한이 풀린다
+    if (gen === generation) live -= index;
   }
 
   const listener = (event: Event) => { void onEdit(event); };

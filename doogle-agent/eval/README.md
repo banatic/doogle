@@ -9,6 +9,7 @@
 | `scenarios.mjs` | 시나리오(문서·요청·결과 검사) |
 | `show.mjs` | 한 시나리오의 호출 기록 요약 보기 |
 | `probe.mjs` + `probes/` | 모델 없이 실제 엔진으로 도구를 직접 불러 검증 |
+| `probes/threads-and-reconnect.mjs` | 혼자 도는 탐침(대본 provider, `node eval/probes/threads-and-reconnect.mjs [--out <dir>]`): 음영 칸에서 편집 표시 덮개 색, 응답 도중 연결이 끊겼다 다시 붙기, 대화 지우기, 새로고침 때 바로 멈추기. 실패하면 던진다 |
 | `ui-shots.mjs` | 모델 없이(대본 provider) 주요 화면 상태 캡처 → `output/ui-audit/` (`--out` 으로 바꾼다). 화면에서 잰 값(안내문·검토 행 문구·좁은 창 배율·풍선 위치 등)은 같은 폴더의 `facts.json` |
 | `debug.mjs` | 문서 하나를 열고 한 턴을 보내 상태를 찍어 본다 |
 | `lib/session.mjs` | hub·브라우저·문서 세션, 기록기 |

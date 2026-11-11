@@ -538,3 +538,25 @@ test('review gutter: positions follow page then paragraph order', () => {
   assert.ok(pos.every((p) => p > 0 && p < 1));
   assert.deepEqual(gutterPositions([row('a', 0, 0)], 0), [0.5]);
 });
+
+test('edit swarm: cover takes the paper colour sampled from the page, not a fixed white', async () => {
+  const { commonColor, paperSamplePoints } = await import('../../ui/swarm-paper.ts');
+  // six points just inside the box: four corners + top/bottom mid — where a line box is normally bare paper
+  const pts = paperSamplePoints({ left: 100, top: 40, width: 60, height: 20 });
+  assert.deepEqual(pts, [
+    { x: 101, y: 41 }, { x: 159, y: 41 }, { x: 101, y: 59 }, { x: 159, y: 59 }, { x: 130, y: 41 }, { x: 130, y: 59 },
+  ]);
+  // a box thinner than the inset still samples inside itself
+  for (const p of paperSamplePoints({ left: 0, top: 0, width: 1, height: 1 })) {
+    assert.ok(p.x >= 0 && p.x <= 1 && p.y >= 0 && p.y <= 1, JSON.stringify(p));
+  }
+  const shade = [217, 226, 243, 255];
+  const ink = [0, 0, 0, 255];
+  // a shaded table cell: the shading wins over the odd glyph pixel
+  assert.equal(commonColor([shade, shade, ink, shade, shade, shade]), 'rgb(217, 226, 243)');
+  // unpainted (transparent) pixels and unreadable samples are ignored; nothing usable → white paper
+  assert.equal(commonColor([[0, 0, 0, 0], null, undefined]), '#ffffff');
+  assert.equal(commonColor([], 'rgb(1, 2, 3)'), 'rgb(1, 2, 3)');
+  // ties keep the first colour seen
+  assert.equal(commonColor([shade, ink]), 'rgb(217, 226, 243)');
+});
