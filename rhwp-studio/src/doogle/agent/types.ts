@@ -241,7 +241,7 @@ export interface PendingApi {
   /** (추가) 지금 문서의 쪽 수 (검토 거터가 변경 위치를 비율로 찍는다) */
   pageCount?(): number;
   /** (추가) 이 변경 자리의 지금 쪽 사각형(쪽 px, 배율 1) — 문서 위에 모든 대기 변경을 한꺼번에 강조한다 */
-  rectsOf?(id: string): SelectionRect[];
+  rectsOf?(id: string): Array<SelectionRect & { item?: number }>;
   /**
    * (추가) 방금 적용한 묶음을 한 번에 되돌릴 수 있으면 그 묶음 — 적용 뒤 문서가 그대로일 때만.
    * 직접 편집·실행 취소·새 쓰기가 있었으면 null (그때는 실행 취소가 맞는 길이다).

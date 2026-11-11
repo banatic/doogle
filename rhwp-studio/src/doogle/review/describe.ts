@@ -338,6 +338,26 @@ function capLines(lines: ChangeLine[]): ChangeLine[] {
   ];
 }
 
+/**
+ * 변경 하나의 한 항목만 — 문서 위 강조에 마우스를 올렸을 때 그 자리의 전·후를 보인다.
+ * 묶음 편집(apply_edits)은 item 번호의 항목, 아니면 변경 전체를 한 줄로.
+ */
+export function describeItem(change: PendingChangeSet, item?: number): ChangeLine {
+  const tool = bareToolName(change.tool);
+  const args = change.args ?? {};
+  const targets = change.targets ?? [];
+  const formats = change.formats ?? [];
+  const page = change.pages[0];
+  if (tool === 'apply_edits' && Array.isArray(args['edits']) && typeof item === 'number') {
+    const edit = rec(args['edits'][item]);
+    const itemTool = str(edit['tool']);
+    if (itemTool) {
+      return lineOf(itemTool, edit, targets.filter((t) => t.item === item), formats.filter((f) => f.item === item), page);
+    }
+  }
+  return describeChange(change).lines[0];
+}
+
 export function describeChange(change: PendingChangeSet): ChangeView {
   const tool = bareToolName(change.tool);
   const args = change.args ?? {};

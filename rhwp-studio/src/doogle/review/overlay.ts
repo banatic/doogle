@@ -14,7 +14,7 @@
 import type { PluginHost, PluginTextRange } from '@/plugin/types';
 import type { PendingApi, PendingChangeSet } from '../agent/types.ts';
 import { icon } from '../ui/icons.ts';
-import { describeChange } from './describe.ts';
+import { describeChange, describeItem } from './describe.ts';
 import { REVIEW_KEYS, gutterPositions, impactSentence, matchReviewKey, rejectLabel, type ReviewKeyAction } from './keys.ts';
 import { chipNode } from './list.ts';
 import { reviewStore } from './state.ts';
@@ -235,6 +235,8 @@ export function mountReviewOverlay(host: PluginHost, pending: PendingApi): Revie
         const at = map(r.pageIndex, r.x, r.y);
         if (!at) continue;
         const mark = el('div', 'dg-review-mark');
+        mark.dataset['changeId'] = row.id;
+        if (typeof r.item === 'number') mark.dataset['item'] = String(r.item);
         if (row.id === current) mark.classList.add('dg-review-mark--cur');
         if (cascadeFrom >= 0 && i >= cascadeFrom) mark.classList.add('dg-review-mark--cascade');
         mark.style.left = `${at.left}px`;
@@ -246,6 +248,100 @@ export function mountReviewOverlay(host: PluginHost, pending: PendingApi): Revie
     });
     marks.replaceChildren(...nodes);
   }
+
+  // ─── 강조에 마우스를 올리면 그 자리의 전·후 ─────────────
+  // 강조는 클릭을 막지 않게 pointer-events: none 이라, 문서 위 포인터 위치로 직접 맞춰 본다.
+  const peek = el('div', 'dg-glass dg-review-peek');
+  peek.dataset['dgFloating'] = '';
+  peek.setAttribute('role', 'tooltip');
+  peek.hidden = true;
+  document.body.append(peek);
+  let peekKey = '';
+  let peekTimer = 0;
+
+  function markAt(x: number, y: number): HTMLElement | null {
+    if (!marks) return null;
+    // 같은 자리에 여러 변경이 겹치면 가장 나중 변경(위에 그려진 것)을 보인다
+    const list = [...marks.children] as HTMLElement[];
+    for (let i = list.length - 1; i >= 0; i--) {
+      const r = list[i].getBoundingClientRect();
+      if (x >= r.left && x <= r.right && y >= r.top - 2 && y <= r.bottom + 2) return list[i];
+    }
+    return null;
+  }
+
+  function hidePeek(): void {
+    window.clearTimeout(peekTimer);
+    peekTimer = 0;
+    peekKey = '';
+    peek.hidden = true;
+  }
+
+  function fillPeek(change: PendingChangeSet, item: number | undefined): void {
+    const line = describeItem(change, item);
+    const body: HTMLElement[] = [];
+    if (line.where) body.push(el('div', 'dg-peek-where', line.where));
+    const row = el('div', 'dg-peek-row');
+    if (line.del || line.ins) {
+      if (line.del) {
+        row.append(el('span', 'dg-peek-tag', '이전'), el('del', 'dg-pop-del', line.delFull || line.del));
+      }
+      if (line.ins) {
+        if (line.del) row.append(el('span', 'dg-pop-arrow', '→'));
+        row.append(el('span', 'dg-peek-tag', line.del ? '이후' : '넣음'), el('ins', 'dg-pop-ins', line.insFull || line.ins));
+      }
+    } else {
+      row.append(el('span', 'dg-peek-what', line.label || '변경'));
+      for (const chip of line.chips) row.append(chipNode(chip, 'dg-pop-chip dg-tnum'));
+    }
+    body.push(row);
+    peek.replaceChildren(...body);
+  }
+
+  function placePeek(x: number, y: number, anchor: DOMRect): void {
+    peek.hidden = false;
+    const w = peek.offsetWidth;
+    const h = peek.offsetHeight;
+    const left = Math.max(8, Math.min(x - 24, window.innerWidth - w - 8));
+    // 강조 바로 위에, 자리가 없으면 아래에
+    const top = anchor.top - h - 8 >= 8 ? anchor.top - h - 8 : anchor.bottom + 8;
+    peek.style.left = `${left}px`;
+    peek.style.top = `${top}px`;
+  }
+
+  const onPeekMove = (event: PointerEvent) => {
+    const mark = markAt(event.clientX, event.clientY);
+    const id = mark?.dataset['changeId'];
+    // 지금 풍선이 떠 있는 변경은 풍선이 이미 보인다
+    if (!mark || !id || (id === reviewStore.currentId && !pop.hidden)) { hidePeek(); return; }
+    const itemText = mark.dataset['item'];
+    const key = `${id}:${itemText ?? ''}`;
+    const anchor = mark.getBoundingClientRect();
+    if (key === peekKey) {
+      if (!peek.hidden) placePeek(event.clientX, event.clientY, anchor);
+      return;
+    }
+    hidePeek();
+    peekKey = key;
+    const { clientX, clientY } = event;
+    peekTimer = window.setTimeout(() => {
+      const change = reviewStore.rows().find((r) => r.id === id);
+      if (!change || peekKey !== key) return;
+      fillPeek(change, itemText !== undefined ? Number(itemText) : undefined);
+      placePeek(clientX, clientY, anchor);
+    }, 220);
+  };
+  const peekScroller = document.getElementById('scroll-container');
+  peekScroller?.addEventListener('pointermove', onPeekMove, { passive: true });
+  peekScroller?.addEventListener('pointerleave', hidePeek);
+  peekScroller?.addEventListener('scroll', hidePeek, { passive: true });
+  offs.push(() => {
+    peekScroller?.removeEventListener('pointermove', onPeekMove);
+    peekScroller?.removeEventListener('pointerleave', hidePeek);
+    peekScroller?.removeEventListener('scroll', hidePeek);
+    window.clearTimeout(peekTimer);
+    peek.remove();
+  });
 
   let revealedId: string | null = null;
   let frame = 0;
