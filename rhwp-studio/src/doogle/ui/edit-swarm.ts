@@ -20,7 +20,13 @@
 import './edit-swarm.css';
 
 interface PageRect { pageIndex: number; x: number; y: number; width: number; height: number }
+/** 실행기가 보내는 자리 — from 은 쓰기 직전 그 자리의 옛 위치 (새로 생긴 자리면 null) */
+interface EditRect extends PageRect { from?: PageRect | null }
 interface Box { left: number; top: number; width: number; height: number }
+/** 바뀐 자리 하나와 그 옛 위치 (#scroll-content 좌표) */
+interface Part { box: Box; from: Box | null }
+/** 한 줄 — 같은 높이의 자리들을 합친 상자 */
+interface Line extends Box { parts: Part[] }
 interface Pt { x: number; y: number }
 
 type PageToContent = (pageIndex: number, x: number, y: number) => { left: number; top: number; zoom: number } | null;
@@ -103,19 +109,23 @@ function fly(el: HTMLElement, from: Pt, to: Pt, bend: number, duration = FLY_MS)
   return done(el.animate(frames, { duration, easing: 'cubic-bezier(0.22, 0.8, 0.25, 1)', fill: 'backwards' }));
 }
 
-/** 줄 사각형들을 위에서 아래로, 같은 줄(겹치는 높이)은 하나로 */
-export function orderLines(boxes: Box[]): Box[] {
-  const sorted = [...boxes].sort((a, b) => a.top - b.top || a.left - b.left);
-  const out: Box[] = [];
-  for (const b of sorted) {
+/** 자리들을 위에서 아래로, 같은 줄(겹치는 높이)은 하나로 — 줄은 제 자리들(옛 위치 포함)을 지닌다 */
+export function orderLines(parts: Part[]): Line[] {
+  const sorted = [...parts].sort((a, b) => a.box.top - b.box.top || a.box.left - b.box.left);
+  const out: Line[] = [];
+  for (const part of sorted) {
+    const b = part.box;
     const last = out[out.length - 1];
     if (last && Math.abs(last.top - b.top) < Math.min(last.height, b.height) * 0.5) {
       const right = Math.max(last.left + last.width, b.left + b.width);
+      const bottom = Math.max(last.top + last.height, b.top + b.height);
       last.left = Math.min(last.left, b.left);
+      last.top = Math.min(last.top, b.top);
       last.width = right - last.left;
-      last.height = Math.max(last.height, b.height);
+      last.height = bottom - last.top;
+      last.parts.push(part);
     } else {
-      out.push({ ...b });
+      out.push({ ...b, parts: [part] });
     }
   }
   return out;
@@ -177,16 +187,19 @@ export function mountEditSwarm(): EditSwarmHandle {
     return layer;
   }
 
-  function toBoxes(rects: PageRect[]): Box[] {
+  function toParts(rects: EditRect[]): Part[] {
     const map = pageToContent();
     if (!map) return [];
-    const boxes: Box[] = [];
-    for (const r of rects) {
+    const box = (r: PageRect): Box | null => {
       const a = map(r.pageIndex, r.x, r.y);
-      if (!a) continue;
-      boxes.push({ left: a.left, top: a.top, width: Math.max(4, r.width * a.zoom), height: Math.max(4, r.height * a.zoom) });
+      return a ? { left: a.left, top: a.top, width: Math.max(4, r.width * a.zoom), height: Math.max(4, r.height * a.zoom) } : null;
+    };
+    const parts: Part[] = [];
+    for (const r of rects) {
+      const b = box(r);
+      if (b) parts.push({ box: b, from: r.from ? box(r.from) : null });
     }
-    return boxes;
+    return parts;
   }
 
   /** 지금 보이는 문서 영역 (#scroll-content 좌표) */
@@ -244,26 +257,59 @@ export function mountEditSwarm(): EditSwarmHandle {
     snapshot = { at: Date.now(), shots };
   }
 
-  /** 토막 자리의 옛 그림을 담은 덮개 (흰 바탕 위 옛 글). 찍어 둔 그림이 그 자리를 덮지 못하면 null */
-  function oldCover(target: HTMLDivElement, seg: Box): HTMLDivElement | null {
-    const shot = snapshot?.shots.find((s) => seg.left >= s.box.left - 1 && seg.top >= s.box.top - 1
-      && seg.left + seg.width <= s.box.left + s.box.width + 1 && seg.top + seg.height <= s.box.top + s.box.height + 1);
-    if (!shot) return null;
+  function shotOf(r: Box): Shot | undefined {
+    return snapshot?.shots.find((s) => r.left >= s.box.left - 1 && r.top >= s.box.top - 1
+      && r.left + r.width <= s.box.left + s.box.width + 1 && r.top + r.height <= s.box.top + s.box.height + 1);
+  }
+
+  /**
+   * 토막 덮개 — 토막 안의 바뀐 자리마다 종이색을 깔고(.dg-swarm-blank), 그 위에 옛 글을 옛 위치에서 잘라
+   * 새 위치에 그린다(.dg-swarm-old). 줄이 늘었거나 칸이 커져 옛 글보다 넓은 곳은 빈 종이 — 거기엔 새 글을 친다.
+   * 바뀐 자리 밖(표 괘선·칸 사이)은 덮지 않는다. 찍어 둔 화면이 없으면 null (흰 덮개가 자라고 걷힌다).
+   */
+  function oldCover(target: HTMLDivElement, seg: Box, parts: Part[]): HTMLDivElement | null {
+    if (!snapshot) return null;
+    const home = shotOf(seg);
+    const scale = home ? home.image.width / home.box.width : window.devicePixelRatio || 1;
     const cover = document.createElement('div');
     cover.className = 'dg-swarm-cover dg-swarm-cover--old';
     Object.assign(cover.style, { left: `${seg.left}px`, top: `${seg.top}px`, width: `${seg.width}px`, height: `${seg.height}px` });
-    const scaleX = shot.image.width / shot.box.width;
-    const scaleY = shot.image.height / shot.box.height;
-    const old = document.createElement('canvas');
-    old.className = 'dg-swarm-old';
-    old.width = Math.max(1, Math.round(seg.width * scaleX));
-    old.height = Math.max(1, Math.round(seg.height * scaleY));
-    old.getContext('2d')?.drawImage(
-      shot.image,
-      (seg.left - shot.box.left) * scaleX, (seg.top - shot.box.top) * scaleY, old.width, old.height,
-      0, 0, old.width, old.height,
-    );
-    cover.append(old);
+    const make = (cls: string) => {
+      const c = document.createElement('canvas');
+      c.className = cls;
+      c.width = Math.max(1, Math.round(seg.width * scale));
+      c.height = Math.max(1, Math.round(seg.height * scale));
+      return c;
+    };
+    const blank = make('dg-swarm-blank');
+    const old = make('dg-swarm-old');
+    const bg = blank.getContext('2d');
+    const og = old.getContext('2d');
+    if (!bg || !og) return null;
+    bg.fillStyle = og.fillStyle = '#ffffff';
+    for (const { box, from } of parts) {
+      const a = Math.max(seg.left, box.left);
+      const b = Math.min(seg.left + seg.width, box.left + box.width);
+      if (b - a < 0.5) continue;
+      const dx = (a - seg.left) * scale;
+      const dy = (box.top - seg.top) * scale;
+      bg.fillRect(dx, dy, (b - a) * scale, box.height * scale);
+      og.fillRect(dx, dy, (b - a) * scale, box.height * scale);
+      if (!from) continue;
+      // 옛 위치에서 같은 몫을 잘라 온다 — 옛 자리가 더 좁거나 낮으면 그만큼만
+      const sx = from.left + (a - box.left);
+      const w = Math.min(b - a, from.left + from.width - sx);
+      const h = Math.min(box.height, from.height);
+      if (w < 0.5 || h < 0.5) continue;
+      const src = { left: sx, top: from.top, width: w, height: h };
+      const shot = shotOf(src);
+      if (!shot) continue;
+      const k = shot.image.width / shot.box.width;
+      // 옛 화면 픽셀을 그대로 옮긴다(늘이지 않게 정수 픽셀로) — 번지면 글이 굵어 보인다
+      const r = Math.round;
+      og.drawImage(shot.image, r((src.left - shot.box.left) * k), r((src.top - shot.box.top) * k), r(w * k), r(h * k), r(dx), r(dy), r(w * k), r(h * k));
+    }
+    cover.append(blank, old);
     target.append(cover);
     return cover;
   }
@@ -321,11 +367,11 @@ export function mountEditSwarm(): EditSwarmHandle {
   }
 
   async function onEdit(event: Event): Promise<void> {
-    const detail = (event as CustomEvent<{ rects?: PageRect[] }>).detail;
+    const detail = (event as CustomEvent<{ rects?: EditRect[] }>).detail;
     const rects = Array.isArray(detail?.rects) ? detail.rects : [];
     const target = ensureLayer();
     if (!target || rects.length === 0) return;
-    const lines = orderLines(toBoxes(rects));
+    const lines = orderLines(toParts(rects));
     if (lines.length === 0) return;
     const calm = reducedMotion();
     // 찍어 둔 옛 화면은 이 편집 한 번에만 쓴다
@@ -342,12 +388,16 @@ export function mountEditSwarm(): EditSwarmHandle {
     }
     // 토막을 나누고, 옛 그림이 있는 토막은 곧바로(스크롤·비행 전에) 옛 글로 덮는다 — 새 글이 먼저 보이지 않게
     const counts = allocateCursors(animated.map((b) => b.width), total);
+    const dpr = window.devicePixelRatio || 1;
     const plan = animated.map((line, li) => {
       const k = Math.max(1, Math.min(counts[li], Math.floor(line.width / 24)));
       const w = line.width / k;
+      // 토막 경계를 화면 픽셀에 맞춘다 — 반 픽셀에 걸리면 옛 글이 번져 굵어 보인다
+      const px = (v: number) => Math.round(v * dpr) / dpr;
       return Array.from({ length: k }, (_, j) => {
-        const seg = { left: line.left + w * j, top: line.top, width: w, height: line.height };
-        return { seg, cover: oldCover(target, seg) };
+        const l = px(line.left + w * j);
+        const seg = { left: l, top: px(line.top), width: px(line.left + w * (j + 1)) - l, height: px(line.height) };
+        return { seg, cover: oldCover(target, seg, line.parts) };
       });
     });
     snapshot = null;

@@ -320,6 +320,8 @@ export class DoogleToolExecutor {
     this.expectedOf(args);
     if (staged) this.staging.claim(thread);
     const baseline = this.captureBaseline(pre);
+    // 편집 표시가 옛 글을 제자리(옛 위치)에서 잘라 새 위치에 그리도록, 바뀔 법한 문단·표의 옛 위치를 적어 둔다
+    const oldPlaces = this.captureOldPlaces(pre, args);
     const revBefore = this.revision;
     this.tableOverflowBefore.clear();
     if (staged) this.staging.beginWrite(thread, pre);
@@ -373,7 +375,7 @@ export class DoogleToolExecutor {
     }
     this.deps.refreshView?.();
     const engine = this.engine();
-    this.announceEdit(engine, tool, touches);
+    this.announceEdit(engine, tool, touches, oldPlaces);
     const after = this.buildAfter(engine, baseline, touches);
     const out: Record<string, unknown> = { revision: revAfter, ...result, after };
     if (staged) {
@@ -551,13 +553,55 @@ export class DoogleToolExecutor {
    * 화면에 "여기를 고쳤다" 를 알린다 — 문서 위 편집 표시(ui/edit-swarm.ts)가 window 이벤트
    * `doogle:agent-edit {rects, tool}` 를 받아 커서 무리를 그 자리로 보낸다. 표시일 뿐이라 실패해도 조용히 넘어간다.
    */
-  private announceEdit(engine: Engine, tool: string, touches: Touch[]): void {
+  private announceEdit(engine: Engine, tool: string, touches: Touch[], old: OldPlaces | null): void {
     const target = (globalThis as { window?: Window }).window;
     if (!target || typeof CustomEvent === 'undefined') return;
     try {
-      const rects = this.touchedRects(engine, touches).slice(0, 40);
+      const rects = swarmRects(engine, touches, old).slice(0, 40);
       if (rects.length > 0) target.dispatchEvent(new CustomEvent('doogle:agent-edit', { detail: { rects, tool } }));
     } catch { /* 위치를 못 얻으면 표시를 건너뛴다 */ }
+  }
+
+  /**
+   * 쓰기 직전 — 인자에 적힌 문단(paraIdx·paras 등)과 그 뒤 몇 문단의 줄 사각형, 인자에 적힌 표의 셀 상자를
+   * 적어 둔다. 쓰기 뒤에는 옛 배치를 물을 수 없어서다. 표시용이라 실패하면 null (옛 글 없이 빈 칸에 친다).
+   */
+  private captureOldPlaces(engine: Engine, args: Record<string, unknown>): OldPlaces | null {
+    try {
+      const paras = new Set<string>();
+      const tables = new Set<string>();
+      const walk = (value: unknown, section: number, depth: number): void => {
+        if (depth > 4 || !value || typeof value !== 'object') return;
+        if (Array.isArray(value)) { value.slice(0, 40).forEach((v) => walk(v, section, depth + 1)); return; }
+        const o = value as Record<string, unknown>;
+        const s = Number.isInteger(o['sectionIdx']) ? (o['sectionIdx'] as number) : section;
+        for (const key of ['paraIdx', 'paraStart', 'paraEnd', 'startPara', 'endPara']) {
+          if (Number.isInteger(o[key])) paras.add(`${s}:${o[key]}`);
+        }
+        if (Array.isArray(o['paras'])) for (const p of o['paras'].slice(0, 40)) if (Number.isInteger(p)) paras.add(`${s}:${p}`);
+        if (Number.isInteger(o['paraIdx']) && Number.isInteger(o['controlIdx'])) tables.add(`${s}:${o['paraIdx']}:${o['controlIdx']}`);
+        for (const v of Object.values(o)) if (v && typeof v === 'object') walk(v, s, depth + 1);
+      };
+      walk(args, 0, 0);
+      const out: OldPlaces = { paras: new Map(), tables: new Map() };
+      for (const key of [...paras].slice(0, 40)) {
+        const [s, p] = key.split(':').map(Number);
+        const count = engine.paragraphCount(s);
+        // 문단이 나뉘거나 붙는 편집도 따라가게 뒤 세 문단까지
+        for (let q = Math.max(0, p); q < Math.min(count, p + 4); q++) {
+          const k = `${s}:${q}`;
+          if (out.paras.has(k)) continue;
+          out.paras.set(k, engine.selectionRects(s, q, 0, q, engine.length(s, q)));
+        }
+      }
+      for (const key of [...tables].slice(0, 8)) {
+        const [s, p, c] = key.split(':').map(Number);
+        try { out.tables.set(key, engine.tableCellBoxes(s, p, c)); } catch { /* 표가 아니면 건너뛴다 */ }
+      }
+      return out;
+    } catch {
+      return null;
+    }
   }
 
   private async renderTouched(engine: Engine, touches: Touch[], pages: number[], mode: 'crop' | 'page'): Promise<Record<string, unknown> | null> {
@@ -1359,3 +1403,59 @@ function summarize(tool: string, args: Record<string, unknown>): string {
 }
 
 export { structureParagraphLine };
+
+// ─── 편집 표시용 위치 (ui/edit-swarm.ts) ──────────────────────────────
+
+type CellBox = { pageIndex: number; x: number; y: number; w: number; h: number; cellIdx: number };
+/** 쓰기 직전의 배치 — 문단 줄 사각형("구역:문단"), 표 셀 상자("구역:문단:컨트롤") */
+interface OldPlaces { paras: Map<string, SelectionRect[]>; tables: Map<string, CellBox[]> }
+/** 바뀐 자리(쪽 px) + 그 자리의 옛 위치. from 이 null 이면 새로 생긴 자리 — 옛 글 없이 빈 칸에 친다 */
+type SwarmRect = SelectionRect & { from: SelectionRect | null };
+
+/** 줄 사각형을 위아래로 조금 — 선택 사각형보다 아래로 내려오는 글자 끝(받침·마침표)까지 덮게 */
+function padLine(r: SelectionRect): SelectionRect {
+  return { ...r, y: r.y - 1, height: r.height + 4 };
+}
+
+/** 셀 상자 안쪽 — 덮개가 괘선을 가리지 않게 */
+function insetCell(b: CellBox): SelectionRect {
+  return { pageIndex: b.pageIndex, x: b.x + 1.5, y: b.y + 1.5, width: Math.max(2, b.w - 3), height: Math.max(2, b.h - 3) };
+}
+
+/**
+ * 커서 무리가 갈 자리. 글은 문단마다 줄 단위로, 옛 문단의 같은 번째 줄을 옛 위치로 짝짓는다
+ * (늘어난 줄·새 문단은 옛 위치 없음). 표는 셀마다 같은 셀 번호의 옛 상자를 짝짓되, 셀 수가 달라진
+ * 구조 편집(행·열 넣기·지우기, 병합·나누기)은 짝이 맞지 않으니 옛 위치를 두지 않는다.
+ */
+function swarmRects(engine: Engine, touches: Touch[], old: OldPlaces | null): SwarmRect[] {
+  const rects: SwarmRect[] = [];
+  for (const t of touches) {
+    const first = t.tableCells?.[0];
+    const table = t.table ?? (t.cell ? { paraIdx: t.cell.paraIdx, controlIdx: t.cell.controlIdx } : first ? { paraIdx: first.paraIdx, controlIdx: first.controlIdx } : null);
+    if (table) {
+      const only = t.table ? null : t.tableCells ? new Set(t.tableCells.map((c) => c.cellIdx)) : t.cell ? new Set([t.cell.cellIdx]) : null;
+      const boxes = engine.tableCellBoxes(t.sectionIdx, table.paraIdx, table.controlIdx);
+      const before = old?.tables.get(`${t.sectionIdx}:${table.paraIdx}:${table.controlIdx}`);
+      const same = before && before.length === boxes.length ? new Map(before.map((b) => [b.cellIdx, b])) : null;
+      for (const b of boxes) {
+        if (only && !only.has(b.cellIdx)) continue;
+        const was = same?.get(b.cellIdx);
+        rects.push({ ...insetCell(b), from: was ? insetCell(was) : null });
+      }
+      continue;
+    }
+    if (t.wholeSection) continue;
+    const count = engine.paragraphCount(t.sectionIdx);
+    const end = Math.min(t.paraEnd, count - 1);
+    const oldEnd = t.paraEnd - t.paraDelta;
+    for (let p = t.paraStart; p <= end && rects.length < 60; p++) {
+      const lines = engine.selectionRects(t.sectionIdx, p, 0, p, engine.length(t.sectionIdx, p));
+      const was = p <= oldEnd ? old?.paras.get(`${t.sectionIdx}:${p}`) : undefined;
+      lines.forEach((r, i) => {
+        const w = was?.[i];
+        rects.push({ ...padLine(r), from: w ? padLine(w) : null });
+      });
+    }
+  }
+  return rects;
+}
