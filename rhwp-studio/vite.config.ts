@@ -2,7 +2,7 @@ import { defineConfig } from 'vite';
 import { resolve, extname, join } from 'path';
 import { readFileSync, readFile, stat } from 'fs';
 import { VitePWA } from 'vite-plugin-pwa';
-import { doogleHtml } from './vite-doogle-html'; // [doogle]
+import { doogleFonts, doogleHtml } from './vite-doogle-html'; // [doogle]
 
 const configDir = import.meta.dirname;
 const pkg = JSON.parse(readFileSync(resolve(configDir, 'package.json'), 'utf-8'));
@@ -105,6 +105,7 @@ export default defineConfig({
   },
   plugins: [
     doogleHtml(configDir), // [doogle] doogle.html 의 <!-- @upstream … --> 를 index.html 조각으로 채운다
+    doogleFonts(configDir), // [doogle] Windows checkout 에서 풀리지 않은 public/fonts 링크 대신 assets/fonts 를 쓴다
     {
       name: 'ignore-subsecond-patch-artifacts',
       handleHotUpdate(context) {
@@ -154,6 +155,10 @@ export default defineConfig({
       },
     },
     VitePWA({
+      // [doogle] 데스크탑(Tauri) 빌드는 서비스 워커를 쓰지 않는다 — WebView2 에서 sw 가 엔진(.wasm)
+      // 요청을 가로채 "Failed to fetch" 가 났다. 이미 설치된 sw 는 자기 삭제 sw.js 로 바꿔 지우고
+      // (캐시 삭제 → 등록 해제 → 새로고침), 등록 스크립트는 넣지 않는다. 웹 빌드는 그대로다.
+      ...(process.env.DOOGLE_DESKTOP === '1' ? { selfDestroying: true, injectRegister: false as const } : {}),
       registerType: 'autoUpdate',
       includeAssets: ['favicon.ico', 'icons/*.png'],
       manifest: {

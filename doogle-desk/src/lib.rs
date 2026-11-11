@@ -253,6 +253,20 @@ fn agent_dir(app: &AppHandle) -> PathBuf {
     app.path().resource_dir().map(|dir| strip_verbatim(dir.join("doogle-agent"))).unwrap_or(development)
 }
 
+/// 데스크탑 앱은 서비스 워커를 쓰지 않는다. 예전 빌드가 WebView2 에 웹(PWA)용 서비스 워커를 등록해
+/// 두었으면 그 워커가 옛 화면 파일을 캐시에서 내주고 엔진(.wasm) 요청을 실패시킨다("WASM 초기화 실패:
+/// Failed to fetch"). 화면이 뜨기 전(WebView2 가 프로필을 열기 전)에 서비스 워커 폴더만 지운다 —
+/// localStorage·쿠키 등 다른 데이터는 건드리지 않는다. 실패해도(다른 인스턴스가 쓰는 중) 넘어간다.
+#[cfg(windows)]
+fn clear_webview_service_workers() {
+    const IDENTIFIER: &str = "com.banatic.doogle"; // tauri.conf.json identifier
+    let Some(base) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) else { return };
+    let dir = base.join(IDENTIFIER).join("EBWebView").join("Default").join("Service Worker");
+    if dir.is_dir() {
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
 /// Windows `canonicalize` 의 `\\?\` 접두어는 Node 가 싫어한다.
 fn strip_verbatim(path: PathBuf) -> PathBuf {
     let text = path.to_string_lossy();
@@ -325,6 +339,8 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(windows)]
+    clear_webview_service_workers();
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
             let paths = files::document_paths_from_args(&argv.into_iter().skip(1).collect::<Vec<_>>(), Some(Path::new(&cwd)));

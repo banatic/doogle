@@ -11,8 +11,8 @@
  * 표시는 index.html 에서 그 글자열을 여는 태그 안에 가진 첫 요소로 바뀐다(닫는 태그까지 통째로).
  * 찾지 못하거나 짝이 맞지 않으면 빌드를 멈춘다 — 조용히 빠진 조각이 런타임 null 로 번지지 않게.
  */
-import { readFileSync } from 'fs';
-import { resolve } from 'path';
+import { cpSync, existsSync, readFileSync, statSync, unlinkSync } from 'fs';
+import { extname, join, resolve } from 'path';
 import type { Plugin } from 'vite';
 
 const MARKER = /<!--\s*@upstream\s+([\s\S]+?)\s*-->/g;
@@ -40,6 +40,52 @@ export function extractElement(html: string, needle: string): string {
     if (depth === 0) return html.slice(start, m.index + m[0].length);
   }
   throw new Error(`[doogle-html] '${needle}' 의 <${tag}> 닫는 태그를 찾지 못했습니다`);
+}
+
+/**
+ * [doogle] 웹 글꼴(public/fonts → ../../assets/fonts 심볼릭 링크) 보정.
+ *
+ * Windows 에서 git 은 심볼릭 링크를 경로 글자가 든 보통 파일로 checkout 한다(core.symlinks=false 기본값 —
+ * GitHub Actions windows 러너도 같다). 그러면 빌드에 글꼴이 하나도 들어가지 않아 문서가
+ * "폰트 로딩 중" 에서 멈춘다. public/fonts 가 폴더가 아니면 개발 서버는 /fonts/* 를 assets/fonts 에서
+ * 내주고, 빌드는 dist/fonts 에 assets/fonts 를 복사한다. 링크가 제대로 풀린 checkout 에서는 아무것도 안 한다.
+ */
+export function doogleFonts(root: string): Plugin {
+  const linked = resolve(root, 'public', 'fonts');
+  const source = resolve(root, '..', 'assets', 'fonts');
+  const broken = () => {
+    try { return !statSync(linked).isDirectory(); } catch { return true; }
+  };
+  const MIME: Record<string, string> = { '.woff2': 'font/woff2', '.woff': 'font/woff', '.ttf': 'font/ttf', '.otf': 'font/otf' };
+  let outDir = resolve(root, 'dist');
+  return {
+    name: 'doogle-fonts',
+    configResolved(config) {
+      outDir = resolve(config.root, config.build.outDir);
+    },
+    configureServer(server) {
+      if (!broken() || !existsSync(source)) return;
+      server.middlewares.use('/fonts', (req, res, next) => {
+        const name = decodeURIComponent((req.url ?? '').split('?')[0]).replace(/^\/+/, '');
+        if (!name || name.includes('..')) return next();
+        try {
+          const data = readFileSync(join(source, name));
+          res.setHeader('Content-Type', MIME[extname(name).toLowerCase()] ?? 'application/octet-stream');
+          res.end(data);
+        } catch {
+          next();
+        }
+      });
+    },
+    writeBundle() {
+      if (!broken() || !existsSync(source)) return;
+      const dest = join(outDir, 'fonts');
+      // 링크 글자 파일이 dist 에 그대로 복사돼 있다 — 지우고 진짜 글꼴로 바꾼다
+      if (existsSync(dest) && !statSync(dest).isDirectory()) unlinkSync(dest);
+      // filter 를 주면 Node 24 의 네이티브 cpSync(비 ASCII 경로에서 0xC0000409 로 죽는다) 대신 JS 구현을 쓴다
+      cpSync(source, dest, { recursive: true, filter: () => true });
+    },
+  };
 }
 
 export function doogleHtml(root: string): Plugin {

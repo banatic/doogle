@@ -40,7 +40,13 @@ function removeTree(p) {
 // 1. 화면 빌드 (빈 dist 에서)
 step('rhwp-studio/dist 지우고 빌드');
 removeTree(path.join(studio, 'dist'));
-const build = spawnSync('npm', ['run', 'build'], { cwd: studio, stdio: 'inherit', shell: process.platform === 'win32' });
+// DOOGLE_DESKTOP=1: 서비스 워커를 넣지 않는 데스크탑 빌드 (rhwp-studio/vite.config.ts)
+const build = spawnSync('npm run build', {
+  cwd: studio,
+  stdio: 'inherit',
+  shell: true,
+  env: { ...process.env, DOOGLE_DESKTOP: '1' },
+});
 if (build.status !== 0) {
   console.error(`[prepare-bundle] rhwp-studio 빌드 실패 (exit ${build.status})`);
   process.exit(1);

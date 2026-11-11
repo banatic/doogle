@@ -190,6 +190,13 @@ export async function initDoogle(host: PluginHost): Promise<PluginSurface> {
   offs.push(() => swarm.dispose(), host.onDocumentSwap(() => swarm.clear()));
 
   if (desk.isDesk()) {
+    // 데스크탑 앱은 서비스 워커를 쓰지 않는다. 예전 빌드가 남긴 sw·캐시가 있으면 지운다
+    // (vite.config.ts 의 자기 삭제 sw.js 와 같은 일 — 그쪽이 먼저 처리하지 못한 경우의 안전망).
+    void (async () => {
+      if (!('serviceWorker' in navigator)) return;
+      for (const reg of await navigator.serviceWorker.getRegistrations()) await reg.unregister();
+      if (typeof caches !== 'undefined') for (const key of await caches.keys()) await caches.delete(key);
+    })().catch((error) => console.warn('[doogle] 서비스 워커 정리 실패', error));
     host.automation.registerCommand({
       id: DOOGLE_OPEN_COMMAND,
       label: '열기(두글)…',
