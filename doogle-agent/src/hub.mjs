@@ -8,6 +8,7 @@ import path from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
 
 import { defaultModelId, ModelCatalog, normalizeModels } from './model-catalog.mjs';
+import { AttachmentStore, attachmentsBlock, normalizeAttachments } from './attachments.mjs';
 import { appDataDir } from './paths.mjs';
 import { loadProviders, sortProviders } from './provider-registry.mjs';
 import { buildSystemPrompt, buildTurnText } from './system-prompt.mjs';
@@ -72,7 +73,12 @@ function summarize(r) {
   if (!r.ok) return `${r.error?.code ?? 'ERROR'}: ${r.error?.message ?? ''}`.slice(0, 2000);
   let s;
   try {
-    s = typeof r.result === 'string' ? r.result : JSON.stringify(r.result);
+    // 그림(base64)은 요약에 싣지 않는다 — 화면과 대화 기록에 뜻 없는 글자열이 남지 않게
+    const image = r.result && typeof r.result === 'object' ? r.result.image : null;
+    const value = image && typeof image === 'object' && typeof image.base64 === 'string'
+      ? { ...r.result, image: `<${image.mimeType ?? 'image'}>` }
+      : r.result;
+    s = typeof value === 'string' ? value : JSON.stringify(value);
   } catch {
     s = String(r.result);
   }
@@ -143,6 +149,8 @@ export async function createHub(opts = {}) {
     backfill: (t) => backfillFromClaudeSession(t, claudeCwd),
     ...(opts.maxThreads !== undefined ? { maxThreads: opts.maxThreads } : {}),
   });
+  /** 대화에 붙인 참고 파일 — 내용은 대화 폴더 옆(`<대화>.files/`)에 둔다 */
+  const attachments = new AttachmentStore({ dir: store.dir });
   const reconnectGraceMs = opts.reconnectGraceMs ?? DEFAULT_RECONNECT_GRACE_MS;
 
   /** 현재 studio 소켓 (하나만 유지) */
@@ -248,6 +256,10 @@ export async function createHub(opts = {}) {
     if (def?.kind === 'control' && origin !== 'agent') {
       return { ok: false, error: { code: 'NOT_AVAILABLE', message: `${name} works only inside the doogle sidebar chat — ask the user in your own conversation instead.` } };
     }
+    // 참고 파일 tool 은 그 대화에 붙인 파일을 읽는다 — 대화가 없는 외부(MCP) 에이전트에는 뜻이 없다.
+    if (def?.kind === 'hub' && (origin !== 'agent' || !threadId)) {
+      return { ok: false, error: { code: 'NOT_AVAILABLE', message: `${name} reads files attached in the doogle sidebar chat — it is not available to external agents.` } };
+    }
     if (def) {
       // insert_image: doogle-mcp가 이미 준비한 인자(naturalWidthPx/HeightPx 포함)는 그 두 필드를 빼고 검증한다.
       const prepared = name === 'insert_image' && args && typeof args === 'object'
@@ -271,6 +283,8 @@ export async function createHub(opts = {}) {
       }
     }
     if (signal?.aborted) return { ok: false, error: { code: 'CANCELLED', message: '취소되었습니다' } };
+    // hub 가 직접 처리하는 tool(참고 파일) — 화면으로 보내지 않는다. 문서가 열려 있지 않아도 된다.
+    if (def?.kind === 'hub') return runHubTool(name, args, threadId);
     // 화면이 잠깐 끊긴 사이면(유예 중, 또는 소켓이 죽고 close 처리가 아직인 틈) 그 화면 앞으로 걸어 둔다 —
     // 돌아오면 전해지고, 안 돌아오면 STUDIO_DISCONNECTED 로 끝난다
     const socket = studio ?? detached?.socket ?? null;
@@ -301,6 +315,18 @@ export async function createHub(opts = {}) {
       pending.set(callId, entry);
       sendStudio({ type: 'tool_call', callId, name, args, origin, ...(threadId ? { threadId } : {}) });
     });
+  }
+
+  /** hub 가 직접 처리하는 tool (kind 'hub') */
+  async function runHubTool(name, args, threadId) {
+    try {
+      const thread = await store.get(threadId);
+      if (name === 'list_attachments') return attachments.list(thread);
+      if (name === 'read_attachment') return await attachments.read(thread, args);
+      return { ok: false, error: { code: 'UNKNOWN_TOOL', message: `알 수 없는 tool: ${name}` } };
+    } catch (err) {
+      return { ok: false, error: { code: 'HUB_TOOL_FAILED', message: String(err?.message ?? err) } };
+    }
   }
 
   function onToolResult(msg, socket) {
@@ -456,24 +482,49 @@ export async function createHub(opts = {}) {
         reason = 'error';
         return;
       }
-      if (typeof msg.text !== 'string' || !msg.text.trim()) {
+      // 참고 파일 — 하나라도 받을 수 없으면 턴을 시작하지 않는다 (사용자가 고쳐 다시 보낸다)
+      const incoming = normalizeAttachments(msg.attachments);
+      if (!incoming.ok) {
+        emitHub({ kind: 'error', code: incoming.error.code, message: incoming.error.message });
+        reason = 'error';
+        return;
+      }
+      const typed = typeof msg.text === 'string' ? msg.text : '';
+      if (!typed.trim() && incoming.list.length === 0) {
         emitHub({ kind: 'error', code: 'INVALID_MESSAGE', message: '메시지가 비어 있습니다' });
         reason = 'error';
         return;
       }
+      // 글 없이 파일만 보냈으면 무엇을 할지 되묻도록 한 줄을 대신 넣는다
+      const userText = typed.trim() ? typed : '첨부한 파일을 확인해 주세요.';
       const mode = msg.mode === 'full' ? 'full' : 'agent';
       const thread = await store.get(threadId);
+      const attached = await attachments.add(thread, incoming.list);
+      if (!attached.ok) {
+        emitHub({ kind: 'error', code: attached.error.code, message: attached.error.message });
+        reason = 'error';
+        return;
+      }
       // 앞선 기록이 끝맺지 못했으면(허브가 죽었던 경우) 먼저 닫는다
       closeDanglingTurn(thread);
-      if (!thread.title) thread.title = msg.text.replace(/\s+/g, ' ').trim().slice(0, 40);
+      if (!thread.title) thread.title = userText.replace(/\s+/g, ' ').trim().slice(0, 40);
       // 대화는 문서에 딸린다 — 마지막으로 보낸 때의 문서(다른 이름으로 저장하면 새 이름을 따른다)
       const doc = normalizeDoc(msg.doc);
       if (doc) thread.doc = doc;
-      (thread.transcript ??= []).push({ kind: 'user', text: msg.text, providerId, at: new Date().toISOString() });
+      (thread.transcript ??= []).push({
+        kind: 'user', text: userText, providerId, at: new Date().toISOString(),
+        // 화면 복원용: 그 요청에 붙인 파일(이름·종류만 — 내용은 따로 둔다)
+        ...(attached.added.length > 0
+          ? { attachments: attached.added.map(({ meta }) => ({ id: meta.id, name: meta.name, kind: meta.kind, size: meta.size, chars: meta.chars, images: meta.images })) }
+          : {}),
+      });
       recordTo = thread;
       saveSoon(thread, true);
       const reviews = thread.pendingReviews.splice(0);
-      const text = buildTurnText({ text: msg.text, mode, context: msg.context, reviews });
+      const text = buildTurnText({
+        text: userText, mode, context: msg.context, reviews,
+        attachments: attachmentsBlock(thread.attachments, attached.added),
+      });
       const messages = Array.isArray(thread.histories[providerId]) ? thread.histories[providerId] : [];
       const emit = (event) => {
         if (!event || typeof event !== 'object' || HUB_OWNED_EVENT_KINDS.has(event.kind)) return;
@@ -486,7 +537,7 @@ export async function createHub(opts = {}) {
           model: typeof msg.model === 'string' && msg.model ? msg.model : undefined,
           messages,
           text,
-          userText: msg.text,
+          userText,
           mode,
           systemPrompt,
           tools: tools.TOOLS,
@@ -557,6 +608,7 @@ export async function createHub(opts = {}) {
       updatedAt: thread.updatedAt,
       running,
       transcript: Array.isArray(thread.transcript) ? thread.transcript : [],
+      attachments: Array.isArray(thread.attachments) ? thread.attachments : [],
     });
   }
 
@@ -575,6 +627,7 @@ export async function createHub(opts = {}) {
     saveTimers.delete(threadId);
     try {
       await store.delete(threadId);
+      attachments.forget(threadId);
       reply({ ok: true });
     } catch (err) {
       reply({ ok: false, error: { code: 'DELETE_FAILED', message: String(err?.message ?? err) } });
@@ -913,6 +966,7 @@ export async function createHub(opts = {}) {
     tools,
     systemPrompt,
     store,
+    attachments,
     close,
     /** 테스트·내부용 */
     callTool,

@@ -1,0 +1,166 @@
+/* 참고 파일 칩 — 입력 상자의 첨부 줄(.dg-attach-row)과 보낸 메시지의 파일 줄(.dg-user-files).
+   색 토큰은 sidebar.css 의 --dg-x-* 를 쓴다(.dg-panel 안에서만 쓰인다). */
+
+.dg-attach-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  /* 네 줄(30px × 4 + 사이 6px × 3)까지 보이고 넘으면 스크롤 */
+  max-height: 138px;
+  overflow-y: auto;
+}
+
+.dg-attach-row[hidden] {
+  display: none;
+}
+
+.dg-file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-width: 0;
+  height: 30px;
+  padding: 0 4px 0 9px;
+  border: 1px solid var(--dg-x-border);
+  border-radius: 9px;
+  background: var(--dg-x-panel);
+  color: var(--dg-x-text);
+  font-size: 12px;
+  line-height: 1;
+}
+
+.dg-file-chip > svg {
+  flex-shrink: 0;
+  color: var(--dg-x-muted);
+}
+
+.dg-file-name {
+  min-width: 0;
+  max-width: 168px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.dg-file-sub {
+  flex-shrink: 0;
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dg-x-muted);
+}
+
+.dg-file-sub:empty {
+  display: none;
+}
+
+.dg-file-remove {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dg-x-muted) !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dg-file-remove:hover,
+.dg-file-remove:focus-visible {
+  background: var(--dg-x-hover);
+  color: var(--dg-x-text) !important;
+}
+
+/* 읽는 중: 이름이 흐리고 설명이 맥박친다 */
+.dg-file-chip[data-state='reading'] .dg-file-name {
+  opacity: 0.6;
+}
+
+.dg-file-chip[data-state='reading'] .dg-file-sub {
+  animation: dg-file-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes dg-file-pulse {
+  50% { opacity: 0.4; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dg-file-chip[data-state='reading'] .dg-file-sub {
+    animation: none;
+  }
+}
+
+/* 읽지 못함: 사유를 그대로 적는다 — 이 칩은 보내지 않는다 */
+.dg-file-chip[data-state='error'] {
+  border-color: var(--dg-x-bad-border);
+  background: var(--dg-x-bad-soft);
+}
+
+.dg-file-chip[data-state='error'] .dg-file-sub,
+.dg-file-chip[data-state='error'] > svg {
+  color: var(--dg-x-bad);
+}
+
+/* 사유는 잘리지 않게 줄을 바꿔 다 보인다 — 무엇을 하면 되는지가 뒤쪽에 있다 */
+.dg-file-chip[data-state='error'] {
+  height: auto;
+  min-height: 30px;
+  align-items: flex-start;
+  padding-top: 7px;
+  padding-bottom: 7px;
+  line-height: 1.35;
+}
+
+.dg-file-chip[data-state='error'] .dg-file-name {
+  flex-shrink: 0;
+  max-width: 120px;
+}
+
+.dg-file-chip[data-state='error'] .dg-file-sub {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: none;
+  white-space: normal;
+  overflow: visible;
+  word-break: keep-all;
+}
+
+.dg-file-chip[data-state='error'] .dg-file-remove {
+  margin-top: -4px;
+}
+
+/* 보낸 메시지에 붙은 파일 — 말풍선 위, 오른쪽 정렬 */
+.dg-user-files {
+  align-self: flex-end;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  max-width: 320px;
+  margin-bottom: -6px;
+}
+
+.dg-user-files .dg-file-chip {
+  padding-right: 9px;
+  background: var(--dg-x-bubble);
+  border-color: transparent;
+}
+
+/* 사이드바에 파일을 끌어 올렸을 때 */
+.dg-panel.dg-drop-on .dg-composer {
+  border-color: var(--dg-x-accent);
+  box-shadow: 0 0 0 3px var(--dg-x-soft);
+}
+
+.dg-panel.dg-drop-on .dg-composer::after {
+  content: '여기에 놓으면 참고 파일로 붙습니다';
+  display: block;
+  margin-top: -4px;
+  font-size: 12px;
+  color: var(--dg-x-accent);
+}

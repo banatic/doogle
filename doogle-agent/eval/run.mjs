@@ -80,12 +80,16 @@ async function runScenario(scenario, ctx) {
         continue;
       }
       log(`▶ ${scenario.id} [${i + 1}/${prompts.length}] ${turnSpec.prompt.slice(0, 60)}`);
+      // 참고 파일: 이 턴의 요청과 함께 올린다 (eval/.fixtures 기준 경로)
+      if (Array.isArray(turnSpec.attach) && turnSpec.attach.length > 0) {
+        await session.attach(turnSpec.attach.map((f) => path.join(FIXTURE_DIR, f)));
+      }
       const turn = await session.send(turnSpec.prompt, { timeoutMs: scenario.timeoutMs });
       for (const [n, image] of turn.images.entries()) {
         await fs.writeFile(path.join(dir, `turn${i + 1}-tool-image-${n}.png`), Buffer.from(image.base64, 'base64'));
       }
       delete turn.images;
-      record.turns.push({ prompt: turnSpec.prompt, ...turn });
+      record.turns.push({ prompt: turnSpec.prompt, ...(turnSpec.attach ? { attach: turnSpec.attach } : {}), ...turn });
     }
 
     const after = await session.structure();

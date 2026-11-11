@@ -34,7 +34,7 @@ studio ↔ hub (`/studio`):
 | S→H | `providers_query` | `{}` |
 | H→S | `providers` | `{list:[{id, label, available:boolean, reason?:string, models:Model[], defaultModel:string\|null, modelsUpdatedAt:string\|null, modelsError?:string, authHint?:string}]}` |
 | S→H | `models_refresh` | `{providerId?}` — 모델 목록을 다시 받은 뒤(없으면 전체) `providers`로 응답 |
-| S→H | `chat_send` | `{threadId, providerId, model?, text, mode:"agent"\|"full", context?:{selection?, documentName?}}` |
+| S→H | `chat_send` | `{threadId, providerId, model?, text, mode:"agent"\|"full", context?:{selection?, documentName?}, doc?:{key, name}\|null, attachments?:Attachment[]}` — `text` 는 `attachments` 가 있으면 비어도 된다 |
 | S→H | `chat_cancel` | `{threadId}` |
 | H→S | `agent_event` | `{threadId, event}` — event는 §3 |
 | H→S | `tool_call` | `{callId, name, args, origin:"agent"\|"mcp", threadId?}` |
@@ -46,6 +46,11 @@ studio ↔ hub (`/studio`):
 | H→S | `thread` | `{reqId?, threadId, title, doc, createdAt, updatedAt, running, transcript}` — transcript = `{kind:"user", text, providerId, at}` 와 그때 보낸 `agent_event.event` 들 |
 | S→H | `thread_delete` | `{reqId?, threadId}` — 저장된 대화를 지운다(되돌릴 수 없다) |
 | H→S | `thread_deleted` | `{reqId?, threadId, ok, error?:{code, message}}` — 응답 중인 대화는 `THREAD_BUSY` |
+
+**참고 파일** (`doogle-agent/src/attachments.mjs`): `Attachment` = `{name, kind:"text"|"hwp"|"pdf"|"docx"|"xlsx"|"pptx"|"image", mime, size, text?, images?:[{mimeType, base64, width?, height?, label?}], meta?:{pages?, sheets?, slides?, encoding?, note?, truncated?}}`.
+studio 가 파일을 읽어 글·그림으로 바꿔 보낸다(원본 바이트는 보내지 않는다). hub 는 내용을 `threads/<대화>.files/<id>.json` 에 두고 대화에는 목록만 붙인다.
+받을 수 없는 첨부가 하나라도 있으면 턴을 시작하지 않고 `error`(`INVALID_ATTACHMENT` · `EMPTY_ATTACHMENT` · `ATTACHMENT_LIMIT` · `ATTACHMENT_TOO_LARGE`) 뒤 `turn_end:"error"` 를 보낸다.
+에이전트는 hub tool `list_attachments` / `read_attachment` 로 읽는다(§4, `docs/doogle/TOOLS.md`). `thread` 응답에는 `attachments`(목록)가, transcript 의 `user` 줄에는 그 요청에 붙인 파일의 `attachments:[{id, name, kind, size}]` 가 실린다.
 
 **대화 저장** (`doogle-agent/src/threads.mjs`): 대화 하나 = `appDataDir()/threads/<id>.json`. 목록은 색인(`threads/threads.index`)으로 만든다 — 파일마다 수정 시각·크기만 보고 색인과 다른 파일만 다시 읽는다. 색인은 캐시일 뿐이라 지워도 파일에서 다시 만든다. 보관 한도는 500개(`createHub({maxThreads})`, 0 = 한도 없음)이고, 넘으면 hub 기동 때와 턴이 끝날 때 오래 쓰지 않은 대화부터 지운다(응답 중·이번 실행에서 연 대화는 남긴다). 대화를 지워도 Claude Code 가 자기 폴더(`~/.claude/projects/…`)에 남긴 세션 기록은 건드리지 않는다.
 
@@ -69,7 +74,7 @@ mcp ↔ hub (`/mcp`): `tool_call` / `tool_result`만 사용 (hub가 studio로 �
 ## 4. Tool 정의 모듈 (`doogle-agent/src/tools/index.mjs`)
 ```js
 export const TOOL_RULES: string            // rhwp-x RHWP_TOOL_RULES 이식(브라우저 문단 제거)
-export const TOOLS: Array<{name, description, kind:'read'|'write'|'control', shape /*zod raw shape*/, validate?(args)}>
+export const TOOLS: Array<{name, description, kind:'read'|'write'|'control'|'hub', shape /*zod raw shape*/, validate?(args)}>
 export const BATCHABLE_EDIT_TOOL_NAMES, BATCHABLE_READ_TOOL_NAMES
 export function getTool(name)
 export function toJsonSchema(name): object // JSON Schema (draft-07, $ref 없음)

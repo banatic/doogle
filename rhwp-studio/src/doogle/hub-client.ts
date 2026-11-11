@@ -113,8 +113,16 @@ export interface SavedThreadInfo {
 
 /** 화면 복원용 기록 한 줄 — 사용자 요청 또는 그때 화면에 보낸 agent_event */
 export type TranscriptEntry =
-  | { kind: 'user'; text: string; providerId?: string; at?: string }
+  | { kind: 'user'; text: string; providerId?: string; at?: string; attachments?: SentAttachment[] }
   | AgentEvent;
+
+/** 요청에 붙였던 참고 파일 (기록에는 이름·종류만 남는다 — 내용은 hub 가 대화 폴더에 둔다) */
+export interface SentAttachment {
+  id?: string;
+  name: string;
+  kind?: string;
+  size?: number;
+}
 
 export interface SavedThread {
   threadId: string;
@@ -362,6 +370,11 @@ export class HubClient {
     context?: ChatContext;
     /** 이 대화가 딸린 문서 — hub 가 대화에 적어 두고 목록을 문서별로 거른다 */
     doc?: DocIdentity | null;
+    /**
+     * 참고 파일 — 화면에서 읽어 낸 글·그림(attach/attach-read.ts). hub 가 대화에 붙여 두고 에이전트가
+     * `read_attachment` 로 읽는다. 원본 바이트는 보내지 않는다.
+     */
+    attachments?: ReadonlyArray<Record<string, unknown>>;
   }): boolean {
     return this.send({ type: 'chat_send', ...input });
   }

@@ -74,6 +74,24 @@ MIT이므로 저작권 표시(LICENSE 3줄)만 유지하면 코드 그대로 가
 |---|---|---|
 | `ask_user_question` | `question, options[{label, description?}] (2~4), allowOther?` | 사이드바에 질문 카드(선택 단추 + "직접 입력")를 띄우고 **곧바로** `{shown:true}` 를 돌려준다. 답을 기다리지 않는다 — 모델은 턴을 끝내고, 사용자의 선택은 다음 메시지로 온다. `kind:'control'` 이라 외부 MCP 에는 싣지 않는다 |
 
+### 참고 파일 (사용자가 대화에 붙인 파일)
+| tool | 인자 | 비고 |
+|---|---|---|
+| `list_attachments` | (없음) | 이 대화에 붙은 참고 파일: 이름, 종류, 글자 수, 그림 수 |
+| `read_attachment` | `name, offset?, maxChars?(기본 12000, 최대 40000), find?, image?` | 글은 조각으로 읽는다(`nextOffset` 으로 이어 읽기). `find` 는 낱말의 자리와 앞뒤 글(20곳까지). `image`(0부터)는 그림 자체를 돌려준다 — 그림 파일, 글이 없는 PDF 쪽 |
+
+- `kind:'hub'` — **hub 가 직접 처리한다.** 화면(studio)으로 보내지 않으므로 문서가 열려 있지 않아도 된다. 그 대화의 파일만 보이고, 외부 MCP 에는 싣지 않는다(`NOT_AVAILABLE`).
+- 올린 파일은 화면에서 글·그림으로 바꿔 보낸다(`rhwp-studio/src/doogle/attach/`). 원본 바이트는 hub 로 가지 않는다.
+  - 글 파일(txt · md · csv · json …): UTF-8 → EUC-KR 순으로 인코딩을 푼다.
+  - docx · xlsx · pptx: zip 안의 XML 에서 글만. 표는 행마다 `| 칸 | 칸 |`, 엑셀 날짜는 `YYYY-MM-DD`, 슬라이드는 발표 순서대로.
+  - hwp · hwpx: 문서 엔진으로 따로 열어 본문 문단과 표를 읽는다. 열린 문서의 주소(`s0 p12`)는 붙이지 않는다 — 읽기 전용 자료라서다. 머리말·꼬리말·각주·글상자는 싣지 않는다.
+  - pdf: 엔진이 연 쪽 배치에서 글을 읽는다(`[N쪽]` 은 원본 쪽 번호). 글이 없는 쪽(스캔본)은 앞에서 8쪽까지 그림으로 보낸다.
+  - 그림(png · jpg · webp · gif · bmp): 긴 변 1568px 로 줄여 보낸다.
+  - 읽지 못하는 것: 옛 Office 형식(doc · xls · ppt), 암호가 걸린 파일, 30MB 를 넘는 파일.
+- 매 턴 사용자 글 앞에 `<doogle_attachments>` 블록으로 목록을 알린다. 새로 붙인 글이 6,000자 이하면 통째로(한 턴에 20,000자까지), 길면 앞 1,200자만 싣고 나머지는 tool 로 읽게 한다. 앞서 붙인 파일은 이름만 다시 알린다.
+- 한 번에 10개, 대화 하나에 40개까지. 파일 하나에서 600,000자까지 보관한다.
+- 내용은 대화 파일 옆 `threads/<대화>.files/<id>.json` 에 둔다(대화 파일에는 목록만). 대화를 지우면 함께 지운다.
+
 `request_permission`, `present_implementation_plan`, `update_todos` — **v1 에서는 싣지 않는다.**
 hub·사이드바에 응답 화면이 없어 부르면 반드시 실패했다(`NOT_HANDLED_IN_STUDIO`).
 

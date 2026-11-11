@@ -6,7 +6,8 @@
  * 모르는 도구는 원래 이름으로 떨어진다. MCP 접두어(`mcp__doogle__`)는 뗀다.
  */
 
-export type ToolCategory = 'edit' | 'read' | 'check' | 'other';
+/** reference = 사용자가 대화에 붙인 참고 파일을 읽는 일 (열린 문서를 읽는 'read' 와 따로 보인다) */
+export type ToolCategory = 'edit' | 'read' | 'check' | 'reference' | 'other';
 
 export interface ToolCallView {
   name: string;
@@ -246,6 +247,13 @@ const SPECS: Record<string, ToolSpec> = {
   read_batch: {
     category: 'read',
     label: (a) => `${Array.isArray(a['reads']) ? a['reads'].length : 0}개 읽기`,
+  },
+
+  // 참고 파일 (사용자가 대화에 붙인 파일 — hub 가 처리한다)
+  list_attachments: { category: 'reference', label: '참고 파일 목록 보기' },
+  read_attachment: {
+    category: 'reference', label: '참고 파일 읽기',
+    summary: (a) => join([quote(str(a['name']), 28), typeof a['find'] === 'string' ? `${quote(str(a['find']), 16)} 찾기` : typeof a['image'] === 'number' ? '그림' : '']),
   },
 
   // 확인

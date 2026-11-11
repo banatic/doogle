@@ -1,6 +1,6 @@
 [package]
 name = "doogle-desk"
-version = "0.1.0"
+version = "0.2.0"
 description = "두글 — rhwp-studio desktop shell with a local AI document agent"
 license = "MIT"
 edition = "2021"

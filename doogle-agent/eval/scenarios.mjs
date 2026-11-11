@@ -324,4 +324,86 @@ export const SCENARIOS = [
       { name: '거절한 제목이 남지 않음', pass: !has(after, '2027년도 사업계획서(안)') },
     ],
   },
+
+  // ── 참고 파일(첨부) ── 견본은 `python scripts/doogle/make-attach-fixtures.py` 가 eval/.fixtures/attach/ 에 만든다
+  {
+    id: 'attach-fill-form',
+    doc: '복학원서.hwpx',
+    turns: [{ prompt: '붙인 파일의 정보로 복학원서를 채워줘.', attach: ['attach/복학생 정보.txt'] }],
+    check: ({ after, record }) => {
+      const want = ['박지우', '20221187', '전자공학과', '010-5555-0142', 'jiwoo.park@example.com'];
+      return [
+        { name: '파일의 값이 들어감', pass: want.every((w) => has(after, w)), detail: want.filter((w) => !has(after, w)).join(', ') },
+        // 파일에 없는 값을 지어내지 않는다 — 지도교수·학부모 연락처는 파일에 없다
+        { name: '파일에 없는 사람을 지어내지 않음', pass: !has(after, '홍길동') && !has(after, '김철수') },
+        { name: '쓰기 실패 없음', pass: writes(record).every((c) => c.ok), detail: writes(record).filter((c) => !c.ok).map((c) => `${c.name}:${c.error?.code}`).join(' | ') },
+        // 짧은 글은 턴 글에 통째로 실리므로 다시 읽을 필요가 없다 — 읽어도 감점은 아니고 오류만 없으면 된다
+        noToolErrors(record),
+      ];
+    },
+  },
+  {
+    id: 'attach-xlsx-table',
+    doc: 'para-001.hwp',
+    turns: [{ prompt: '붙인 엑셀의 "예산" 시트를 문서 맨 끝에 표로 넣어줘. 값은 파일에 있는 그대로.', attach: ['attach/예산.xlsx'] }],
+    check: ({ before, after, record }) => [
+      changed(before, after),
+      { name: '표를 만듦', pass: used(record, 'create_table') },
+      { name: '시트의 값이 들어감', pass: ['항목', '연수비', '교재비', '2026-07-20'].every((w) => has(after, w)) && (has(after, '150000') || has(after, '150,000')), detail: after.split('\n').slice(-8).join(' / ').slice(0, 400) },
+      { name: '다른 시트는 넣지 않음', pass: !has(after, '총무과') },
+      noToolErrors(record),
+    ],
+  },
+  {
+    id: 'attach-image-read',
+    doc: 'para-001.hwp',
+    // 그림 속 글자는 그림을 실제로 봐야 알 수 있다 — read_attachment 가 그림을 돌려주는 길을 본다
+    turns: [{ prompt: '붙인 그림에 크게 적힌 글자를 문서 맨 끝에 새 문단으로 그대로 적어줘.', attach: ['attach/직인.png'] }],
+    check: ({ after, record }) => [
+      { name: '그림을 열어 봄', pass: calls(record, 'read_attachment').some((c) => c.ok) },
+      { name: '그림 속 글자가 문서에 들어감', pass: has(after, 'SEAL-4096'), detail: after.split('\n').slice(-3).join(' / ').slice(0, 300) },
+      noToolErrors(record),
+    ],
+  },
+  {
+    id: 'attach-long-hwp-question',
+    doc: 'para-001.hwp',
+    // 긴 한글 문서(약 50쪽)를 참고 파일로 — 통째로 싣지 않는다. 답이 뒤쪽에 있어 찾아 읽어야 한다
+    turns: [{ prompt: '붙인 제안요청서에서 제안서는 몇 부를 내야 하고, 협상적격자가 되려면 기술평가가 배점한도의 몇 % 이상이어야 해? 문서는 고치지 말고 답만 해줘.', attach: ['kps-ai.hwp'] }],
+    timeoutMs: 15 * 60_000,
+    check: ({ before, after, record }) => {
+      const answer = finalText(record).split(' ').join('');
+      return [
+        unchanged(before, after),
+        { name: '참고 파일을 찾아 읽음', pass: calls(record, 'read_attachment').some((c) => c.ok) },
+        { name: '두 값을 답함 (10부 · 85%)', pass: has(answer, '10부') && has(answer, '85%'), detail: finalText(record).slice(-300) },
+        noToolErrors(record),
+        callsAtMost(record, 8),
+      ];
+    },
+  },
+  {
+    id: 'attach-pdf-question',
+    doc: 'para-001.hwp',
+    turns: [{ prompt: '붙인 규정에서 신청서 제출 기한과 정산 서류 제출 기한을 알려줘. 문서는 고치지 마.', attach: ['attach/지원규정.pdf'] }],
+    check: ({ before, after, record }) => [
+      unchanged(before, after),
+      { name: '두 기한을 답함', pass: /7\s*일/.test(finalText(record)) && /14\s*일/.test(finalText(record)), detail: finalText(record).slice(-300) },
+      noToolErrors(record),
+    ],
+  },
+  {
+    id: 'attach-later-turn',
+    doc: 'para-001.hwp',
+    // 한 번 붙인 파일은 그 대화에 남는다 — 다음 요청에서 다시 붙이지 않아도 읽을 수 있어야 한다
+    turns: [
+      { prompt: '이 파일은 나중에 쓸 참고 자료야. 지금은 문서를 고치지 말고 무슨 파일인지만 한 줄로 말해줘.', attach: ['attach/신청자.txt'] },
+      '아까 붙인 파일에 있는 계좌번호를 문서 맨 끝에 새 문단으로 적어줘.',
+    ],
+    check: ({ after, record }) => [
+      { name: '첫 턴에는 고치지 않음', pass: (record.turns[0].toolCalls ?? []).filter((c) => /^(insert_|replace_|apply_|create_|edit_|set_)/.test(c.name)).length === 0 },
+      { name: '둘째 턴에 계좌번호가 들어감', pass: has(after, '110-234-567890'), detail: after.split('\n').slice(-3).join(' / ').slice(0, 300) },
+      noToolErrors(record),
+    ],
+  },
 ];

@@ -372,7 +372,7 @@ export default {
       t.description ?? '',
       t.shape ?? {},
       async (args) => toCallToolResult(await callTool(t.name, args)),
-      { annotations: { readOnlyHint: t.kind === 'read' } },
+      { annotations: { readOnlyHint: t.kind === 'read' || t.kind === 'hub' } },
     ));
     const server = sdk.createSdkMcpServer({ name: 'doogle', version: '0.1.0', tools: mcpTools, alwaysLoad: true });
 

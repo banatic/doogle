@@ -20,11 +20,11 @@ export function claudeSessionFile(sessionId, cwd, configDir = process.env.CLAUDE
   return path.join(configDir, 'projects', claudeProjectDirName(cwd), `${sessionId}.jsonl`);
 }
 
-/** hub 가 사용자 글 앞에 붙인 안내 블록(<doogle_mode>·<doogle_review>·<doogle_context>)을 떼어 낸다 */
+/** hub 가 사용자 글 앞에 붙인 안내 블록(<doogle_mode>·<doogle_review>·<doogle_context>·<doogle_attachments>)을 떼어 낸다 */
 export function stripTurnText(text) {
   let rest = String(text ?? '');
   for (;;) {
-    const m = /^\s*<doogle_(mode|review|context)\b[^>]*>[\s\S]*?<\/doogle_\1>\s*/.exec(rest);
+    const m = /^\s*<doogle_(mode|review|context|attachments)\b[^>]*>[\s\S]*?<\/doogle_\1>\s*/.exec(rest);
     if (!m) break;
     rest = rest.slice(m[0].length);
   }

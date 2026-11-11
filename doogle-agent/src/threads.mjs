@@ -15,6 +15,7 @@ import path from 'node:path';
  *   title?: string,
  *   transcript?: any[],
  *   doc?: {key: string, name: string}|null,
+ *   attachments?: Array<{id:string, name:string, kind:string, mime:string, size:number, chars:number, images:number, addedAt:string}>,
  * }} Thread
  *
  * transcript: 화면 복원용 기록 — {kind:'user', text, providerId, at} 와 화면에 보낸 agent_event 들.
@@ -39,8 +40,13 @@ const INDEX_SAVE_DELAY_MS = 400;
 /** 보관하는 대화 수의 기본 한도 — 넘치면 오래 쓰지 않은 것부터 지운다 (prune) */
 export const DEFAULT_MAX_THREADS = 500;
 
+/** 대화 id → 파일 이름 줄기 (확장자 없음). 대화에 딸린 폴더(`<줄기>.files` — 첨부 내용)도 이 이름을 쓴다 */
+export function threadFileStem(id) {
+  return SAFE_ID.test(id) ? id : `h-${createHash('sha256').update(id).digest('hex').slice(0, 40)}`;
+}
+
 function fileNameFor(id) {
-  return SAFE_ID.test(id) ? `${id}.json` : `h-${createHash('sha256').update(id).digest('hex').slice(0, 40)}.json`;
+  return `${threadFileStem(id)}.json`;
 }
 
 /** @param {Thread} t @returns {ThreadSummary} */
@@ -213,6 +219,8 @@ export class ThreadStore {
     } catch (err) {
       if (err?.code !== 'ENOENT') throw err;
     }
+    // 대화에 딸린 폴더(첨부한 참고 파일의 내용)도 함께 지운다
+    await fs.rm(path.join(this.dir, `${threadFileStem(id)}.files`), { recursive: true, force: true }).catch(() => {});
     await this.#loadIndex();
     if (this.index.delete(name)) this.#touchIndex();
     return removed || had;

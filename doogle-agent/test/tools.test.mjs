@@ -32,7 +32,7 @@ test('tool list: unique names, v1 only, every tool has kind/label/description', 
   const names = TOOLS.map((t) => t.name);
   assert.equal(new Set(names).size, names.length);
   for (const t of TOOLS) {
-    assert.ok(['read', 'write', 'control'].includes(t.kind), `${t.name} kind`);
+    assert.ok(['read', 'write', 'control', 'hub'].includes(t.kind), `${t.name} kind`);
     assert.ok(t.description.length > 10, `${t.name} description`);
     assert.ok(t.label, `${t.name} label`);
     assert.doesNotMatch(t.name, OUT_OF_SCOPE);
@@ -41,7 +41,7 @@ test('tool list: unique names, v1 only, every tool has kind/label/description', 
     assert.equal(getTool(t.name), t);
   }
   const count = (kind) => TOOLS.filter((t) => t.kind === kind).length;
-  assert.deepEqual({ read: count('read'), write: count('write'), control: count('control') }, { read: 21, write: 31, control: 1 });
+  assert.deepEqual({ read: count('read'), write: count('write'), control: count('control'), hub: count('hub') }, { read: 21, write: 31, control: 1, hub: 2 });
   for (const n of ['get_structure', 'find_text', 'render_page', 'read_batch', 'insert_text', 'replace_range', 'apply_edits',
     'apply_engine_edits', 'insert_image', 'insert_paragraphs', 'delete_paragraphs', 'move_paragraphs']) {
     assert.ok(getTool(n), `missing ${n}`);
@@ -70,6 +70,27 @@ test('ask_user_question: 질문 하나 + 선택지 2~4개, 외부 MCP 에는 싣
   const mcp = toolsForProvider('mcp', { filter: (t) => t.kind !== 'control' });
   assert.equal(mcp.some((t) => t.name === 'ask_user_question'), false);
   assert.equal(toolsForProvider('anthropic').some((t) => t.name === 'ask_user_question'), true);
+});
+
+test('참고 파일 tool: hub 가 처리하고(kind hub) 외부 MCP 에는 싣지 않는다', () => {
+  ok('list_attachments', {});
+  ok('read_attachment', { name: '예산.xlsx' });
+  ok('read_attachment', { name: '예산.xlsx', offset: 12000, maxChars: 4000 });
+  ok('read_attachment', { name: '규정.hwp', find: '제3조' });
+  ok('read_attachment', { name: '도장.png', image: 0 });
+  bad('read_attachment', {});
+  bad('read_attachment', { name: '' });
+  bad('read_attachment', { name: 'a.txt', offset: -1 });
+  bad('read_attachment', { name: 'a.txt', maxChars: 1_000_000 });
+  bad('read_attachment', { name: 'a.txt', find: 'x', image: 0 }, /find or image/);
+  bad('read_attachment', { name: 'a.txt', documentId: 'x' });
+  for (const n of ['list_attachments', 'read_attachment']) {
+    assert.equal(getTool(n).kind, 'hub');
+    assert.equal(getTool(n).shape.expectedRevision, undefined);
+    assert.equal(toolsForProvider('anthropic').some((t) => t.name === n), true);
+  }
+  const mcp = toolsForProvider('mcp', { filter: (t) => t.kind !== 'control' && t.kind !== 'hub' });
+  assert.equal(mcp.some((t) => /attachment/.test(t.name)), false);
 });
 
 test('get_structure 범례는 TOOL_RULES 에 한 번만 있다', () => {

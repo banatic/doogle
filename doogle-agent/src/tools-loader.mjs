@@ -1,7 +1,7 @@
 // src/tools/index.mjs(담당 B) 로더. 모듈이 아직 없거나 로드에 실패해도 hub는 뜬다(빈 tool 목록).
 
 /**
- * @typedef {{name:string, description:string, kind:'read'|'write'|'control', shape:Record<string, any>, validate?:(args:any)=>any}} ToolDef
+ * @typedef {{name:string, description:string, kind:'read'|'write'|'control'|'hub', shape:Record<string, any>, validate?:(args:any)=>any}} ToolDef
  * @typedef {{
  *   TOOL_RULES: string,
  *   TOOLS: ToolDef[],

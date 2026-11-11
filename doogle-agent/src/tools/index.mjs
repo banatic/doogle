@@ -219,7 +219,7 @@ function providerSchema(name) {
 export function toolAnnotations(tool) {
   return {
     ...(tool.label ? { title: tool.label } : {}),
-    readOnlyHint: tool.kind === 'read',
+    readOnlyHint: tool.kind === 'read' || tool.kind === 'hub',
     destructiveHint: false,
     openWorldHint: false,
   };

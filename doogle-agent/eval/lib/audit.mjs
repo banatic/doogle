@@ -20,7 +20,8 @@ function sequentialReadRuns(calls) {
   const runs = [];
   let run = [];
   for (const c of calls) {
-    const read = !isWrite(c.name) && c.name !== 'read_batch' && c.name !== 'render_page';
+    // 참고 파일 tool(hub 가 처리)은 read_batch 에 담을 수 없다 — 묶을 수 있는 읽기로 세지 않는다
+    const read = !isWrite(c.name) && c.name !== 'read_batch' && c.name !== 'render_page' && !/_attachments?$/.test(c.name);
     if (read) { run.push(c); continue; }
     if (run.length >= 2) runs.push(run);
     run = [];

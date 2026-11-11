@@ -300,6 +300,25 @@ export async function openSession({ browser, studioUrl, provider, mode = 'agent'
     return turn;
   }
 
+  /**
+   * 참고 파일을 사이드바에 올린다('+' 단추의 파일 고르기와 같은 길). 모두 읽힐 때까지 기다리고 칩 상태를 돌려준다.
+   * 다음 send 가 이 파일들을 함께 보낸다.
+   */
+  async function attach(files) {
+    const input = await page.waitForSelector('.dg-attach-input', { timeout: 30_000 });
+    await input.uploadFile(...files);
+    const chips = () => page.evaluate(() => [...document.querySelectorAll('.dg-attach-row .dg-file-chip')].map((c) => ({
+      name: c.querySelector('.dg-file-name')?.textContent ?? '',
+      state: c.dataset.state,
+      detail: c.querySelector('.dg-file-sub')?.textContent ?? '',
+    })));
+    await waitFor(async () => { const c = await chips(); return c.length >= files.length && c.every((x) => x.state !== 'reading'); }, 120_000, '첨부 읽기가 끝나지 않았습니다');
+    const list = await chips();
+    const bad = list.filter((c) => c.state !== 'ready');
+    if (bad.length > 0) throw new Error(`첨부를 읽지 못했습니다: ${bad.map((c) => `${c.name} — ${c.detail}`).join(', ')}`);
+    return list;
+  }
+
   /** 검토 대기 변경을 화면 단추로 모두 적용/거절한다. 단추가 없으면 false. */
   async function review(decision) {
     // 문서 위 이동 막대(알약)의 모두 적용/거절 — 대화 쪽 검토 목록은 없앴다
@@ -335,7 +354,7 @@ export async function openSession({ browser, studioUrl, provider, mode = 'agent'
     await fs.rm(dataDir, { recursive: true, force: true }).catch(() => {});
   }
 
-  return { hub, page, recorder, consoleErrors, tool, openDocument, structure, send, review, exportDocument, close };
+  return { hub, page, recorder, consoleErrors, tool, openDocument, structure, send, attach, review, exportDocument, close };
 }
 
 export async function waitFor(pred, timeoutMs, message) {

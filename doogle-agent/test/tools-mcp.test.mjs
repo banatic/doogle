@@ -83,8 +83,9 @@ after(async () => {
 
 test('lists every document tool with JSON schemas and TOOL_RULES as instructions', async () => {
   const { tools } = await client.listTools();
-  // 대화 제어 tool(질문 카드)은 두글 사이드바 대화 전용 — 외부 에이전트에는 싣지 않는다
-  assert.deepEqual(tools.map((t) => t.name), TOOLS.filter((t) => t.kind !== 'control').map((t) => t.name));
+  // 대화 제어 tool(질문 카드)과 참고 파일 tool 은 두글 사이드바 대화 전용 — 외부 에이전트에는 싣지 않는다
+  assert.deepEqual(tools.map((t) => t.name), TOOLS.filter((t) => t.kind !== 'control' && t.kind !== 'hub').map((t) => t.name));
+  assert.equal(tools.some((t) => /attachment/.test(t.name)), false);
   for (const t of tools) assert.equal(t.inputSchema.type, 'object');
   assert.equal(client.getInstructions(), TOOL_RULES);
 });

@@ -24,9 +24,12 @@ import {
   sameDoc,
   type DocIdentity,
   type SavedThreadInfo,
+  type SentAttachment,
   type TranscriptEntry,
   type ToolCallMessage,
 } from '../hub-client.ts';
+import { readAttachment } from '../attach/attach-read.ts';
+import { createAttachTray, sentFileChips, type AttachTray } from './attach-tray.ts';
 import { reviewStore, type DecisionReport } from '../review/state.ts';
 import { countdownText, describeConnection, userWords, type DeskHubStatus } from './connection.ts';
 import type { DeskHubEvent } from './desk-bridge.ts';
@@ -288,6 +291,7 @@ const STEP_LABEL: Record<ToolCategory, string> = {
   read: '문서 살펴보기',
   edit: '고치기',
   check: '결과 확인',
+  reference: '참고 파일 읽기',
   other: '그 밖의 작업',
 };
 
@@ -312,6 +316,9 @@ interface ThreadView {
 }
 
 type MenuKind = 'threads' | 'model';
+
+/** 글 없이 파일만 보냈을 때의 요청 글 (doogle-agent hub.mjs 의 기본 글과 같다) */
+const FILES_ONLY_TEXT = '첨부한 파일을 확인해 주세요.';
 
 /**
  * 응답 도중 연결이 끊겼을 때 화면이 기다리는 시간 — hub 가 기다리는 시간(hub.mjs DEFAULT_RECONNECT_GRACE_MS,
@@ -357,6 +364,9 @@ export class DoogleSidebar {
   private clock: ReturnType<typeof setInterval> | null = null;
   /** 지금 문서의 저장된 대화 목록 (아직 화면에 불러오지 않은 것 포함) */
   private savedThreads: SavedThreadInfo[] = [];
+  /** 입력 상자의 첨부 줄 — 올린 참고 파일 */
+  private tray!: AttachTray;
+  private attachBtn!: HTMLButtonElement;
   /** 대화 목록에서 "지울까요?" 를 묻고 있는 대화 */
   private confirmDeleteId: string | null = null;
   /** 연결이 끊겨 응답을 잠시 붙들고 있는 동안의 타이머 — 같은 화면으로 다시 붙으면 이어 간다 */
@@ -1069,9 +1079,7 @@ export class DoogleSidebar {
         if (!entry || typeof entry !== 'object') continue;
         if (entry.kind === 'user') {
           if (this.turn) this.handleAgentEvent({ type: 'agent_event', threadId: view.id, event: { kind: 'turn_end', reason: 'interrupted' } });
-          const bubble = el('div', 'dg-user', entry.text);
-          bubble.classList.add('dg-keep-all');
-          this.appendToLog(bubble);
+          this.appendUserMessage(entry.text, Array.isArray(entry.attachments) ? entry.attachments : []);
           this.startTurn(entry.text, entry.providerId ?? this.providerId);
           const turn = this.turn as TurnView | null;
           if (turn) {
@@ -1509,9 +1517,18 @@ export class DoogleSidebar {
       this.renderComposer();
     });
 
+    // 참고 파일: '+' 단추·끌어다 놓기·붙여 넣기로 올리면 칩으로 쌓이고, 보낼 때 함께 간다
+    this.tray = createAttachTray({
+      read: readAttachment,
+      onChange: () => this.renderComposer(),
+      notify: (text) => this.addNotice(text, 'info'),
+    });
+    if (this.root) this.offs.push(this.tray.bind(this.root, this.input), () => this.tray.dispose());
+
     const row = el('div', 'dg-composer-row');
-    const attach = iconButton('dg-comp-btn dg-comp-square', 'plus', '파일 첨부 (준비 중)', () => {});
-    attach.disabled = true;
+    const attach = iconButton('dg-comp-btn dg-comp-square', 'plus', '참고 파일 붙이기', () => this.tray.pick());
+    attach.title = '참고 파일 붙이기 — 한글·PDF·Word·Excel·PowerPoint·그림·글 (끌어다 놓아도 됩니다)';
+    this.attachBtn = attach;
 
     this.modeBtn = button('dg-comp-btn dg-mode-chip', '', () => this.setMode(this.mode === 'agent' ? 'full' : 'agent'));
 
@@ -1539,7 +1556,7 @@ export class DoogleSidebar {
     this.sendBtn = button('dg-send', '', () => (this.busy ? this.cancel() : this.submit()));
 
     row.append(attach, this.modeBtn, el('div', 'dg-grow'), this.modelBtn, this.gearBtn, this.sendBtn);
-    box.append(label, this.input, row);
+    box.append(label, this.tray.root, this.input, row);
     wrap.append(this.modelMenu, box);
     return wrap;
   }
@@ -1592,7 +1609,10 @@ export class DoogleSidebar {
       this.sendBtn.replaceChildren(icon('send', 16, 2.2));
       this.sendBtn.setAttribute('aria-label', '보내기');
       this.sendBtn.title = ready ? '보내기 (Enter)' : this.deps.hub.state !== 'open' ? '에이전트 서비스에 연결되어 있지 않습니다' : provider ? `${provider.label}: AI 계정을 연결하세요` : '모델을 고르세요';
-      this.sendBtn.disabled = !ready || this.input.value.trim() === '';
+      // 파일만 붙여 보내도 된다. 파일을 아직 읽는 중이면 기다린다
+      const nothing = this.input.value.trim() === '' && this.tray.count === 0;
+      this.sendBtn.disabled = !ready || nothing || this.tray.busy;
+      if (ready && this.tray.busy) this.sendBtn.title = '붙인 파일을 읽는 중입니다';
       this.sendBtn.classList.remove('dg-send-stop');
     }
     this.renderMode();
@@ -1601,8 +1621,17 @@ export class DoogleSidebar {
   // ─── 보내기 / 턴 ───────────────────────────────────────
 
   private submit(textOverride?: string): void {
-    const text = (textOverride ?? this.input.value).trim();
-    if (!text || this.busy) return;
+    // 다시 시도(textOverride)는 글만 다시 보낸다 — 붙였던 파일은 이미 그 대화에 있다
+    const files = textOverride === undefined ? this.tray.payloads() : [];
+    const typed = (textOverride ?? this.input.value).trim();
+    if ((!typed && files.length === 0) || this.busy) return;
+    if (textOverride === undefined && this.tray.busy) return;
+    if (files.length > 0 && this.tray.tooLarge) {
+      this.addNotice('붙인 파일이 한 번에 보내기에는 너무 큽니다. 몇 개를 빼고 나눠서 보내 주세요.', 'error');
+      return;
+    }
+    // 글 없이 파일만 보냈으면 이 한 줄이 요청이 된다 (hub 의 기본 글과 같다)
+    const text = typed || FILES_ONLY_TEXT;
     const provider = this.currentProvider();
     if (!provider?.available) {
       if (this.providers.some((p) => p.available)) {
@@ -1621,6 +1650,7 @@ export class DoogleSidebar {
       mode: this.mode,
       context: this.deps.getContext(),
       doc: this.doc,
+      ...(files.length > 0 ? { attachments: files as unknown as Array<Record<string, unknown>> } : {}),
     });
     if (!sent) {
       this.addNotice('에이전트 서비스에 연결되어 있지 않습니다.', 'error');
@@ -1634,6 +1664,7 @@ export class DoogleSidebar {
     if (textOverride === undefined) {
       this.input.value = '';
       this.autosize();
+      this.tray.clear();
     }
     if (this.thread.turns.length === 0) {
       this.thread.title = clipTitle(text);
@@ -1642,11 +1673,17 @@ export class DoogleSidebar {
     }
     // 이전 턴의 "다시 시도" 는 마지막 턴에서만
     for (const t of this.thread.turns) t.actions?.querySelector('.dg-act-retry')?.setAttribute('hidden', '');
+    this.appendUserMessage(text, files);
+    this.scrollToBottom();
+    this.startTurn(text, provider.id);
+  }
+
+  /** 사용자 말풍선 — 붙인 파일이 있으면 그 위에 파일 칩 줄 */
+  private appendUserMessage(text: string, files: ReadonlyArray<SentAttachment>): void {
+    if (files.length > 0) this.appendToLog(sentFileChips(files));
     const bubble = el('div', 'dg-user', text);
     bubble.classList.add('dg-keep-all');
     this.appendToLog(bubble);
-    this.scrollToBottom();
-    this.startTurn(text, provider.id);
   }
 
   private cancel(): void {
