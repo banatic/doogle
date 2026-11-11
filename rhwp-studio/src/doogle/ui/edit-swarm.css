@@ -36,19 +36,25 @@
   100% { opacity: 0; }
 }
 
-/* 커서 무리 */
+/* 지우고 치는 덮개 — 종이색으로 토막을 가렸다가(지우기) 왼쪽부터 걷어(치기) 새 글을 드러낸다.
+   오른쪽 끝이 기준이라 지울 때 왼쪽으로 자라고, 칠 때 왼쪽부터 걷힌다 (edit-swarm.ts runSegment) */
+.dg-swarm-cover {
+  position: absolute;
+  background: #ffffff;
+  transform-origin: right center;
+  transform: scaleX(0);
+  z-index: 1;
+}
+
+/* 커서 무리 — 색은 --dg-swarm-color (edit-swarm.ts PALETTE) */
 .dg-swarm-cursor {
   position: absolute;
   left: 0;
   top: 0;
-  opacity: 0;
-  transition: opacity 0.25s ease;
-  will-change: transform;
+  z-index: 2;
+  will-change: transform, opacity;
   filter: drop-shadow(0 1px 2px rgba(15, 23, 42, 0.35));
 }
-
-.dg-swarm-cursor--on { opacity: 1; }
-.dg-swarm-cursor--leaving { opacity: 0; transition-duration: 0.6s; transition-delay: 0.2s; }
 
 .dg-swarm-cursor svg {
   display: block;
@@ -56,18 +62,6 @@
   stroke: #ffffff;
   stroke-width: 1.2;
   stroke-linejoin: round;
-  animation: dg-swarm-drift 2.4s ease-in-out infinite;
-}
-
-.dg-swarm-c0 { --dg-swarm-color: var(--dg-accent, #1f5fbf); }
-.dg-swarm-c1 { --dg-swarm-color: color-mix(in srgb, var(--dg-accent, #1f5fbf) 70%, #14b8a6); }
-.dg-swarm-c2 { --dg-swarm-color: color-mix(in srgb, var(--dg-accent, #1f5fbf) 65%, #8b5cf6); }
-.dg-swarm-c1 svg { animation-delay: -0.8s; }
-.dg-swarm-c2 svg { animation-delay: -1.6s; }
-
-@keyframes dg-swarm-drift {
-  0%, 100% { transform: translate(0, 0); }
-  50% { transform: translate(1.5px, -2px); }
 }
 
 .dg-swarm-tag {
