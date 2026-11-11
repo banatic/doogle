@@ -327,6 +327,12 @@ export class DoogleToolExecutor {
     let result: Record<string, unknown>;
     const formatLog: FormatDiff[] = [];
     let failure: DoogleToolError | null = null;
+    // 화면 편집 표시(ui/edit-swarm.ts)가 고치기 전 화면(옛 글)을 찍어 두게 알린다 — 쓰기 뒤 그 자리를
+    // 옛 글로 덮어 두었다가 커서가 지우고 새 글을 치는 것처럼 보인다. 표시일 뿐이라 실패해도 넘어간다.
+    try {
+      const target = (globalThis as { window?: Window }).window;
+      if (target && typeof CustomEvent !== 'undefined') target.dispatchEvent(new CustomEvent('doogle:agent-edit-before', { detail: { tool } }));
+    } catch { /* 표시용 신호 */ }
     try {
       result = this.deps.transaction(`doogle:${tool}`, (doc, tx) => {
         const scoped = new Engine(doc);

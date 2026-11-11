@@ -214,19 +214,79 @@ export function mountEditSwarm(): EditSwarmHandle {
     mark.addEventListener('animationend', () => mark.remove(), { once: true });
   }
 
-  /** 토막 하나: 날아와서 → 덮개가 오른쪽부터 자라고(지우기) → 왼쪽부터 걷히며(치기) 커서가 따라간다 → 흩어진다 */
-  async function runSegment(target: HTMLDivElement, seg: Box, index: number, delay: number, gen: number): Promise<void> {
+  // ─── 고치기 전 화면 ──────────────────────────────────
+  // 실행기가 쓰기 직전에 `doogle:agent-edit-before` 를 낸다. 그때 보이는 쪽 캔버스(옛 글)를 복사해 두고,
+  // 쓰기 뒤 바뀐 토막을 그 옛 그림으로 덮어 둔다 — 커서가 도착할 때까지 옛 글이 보이고, 커서가 지우고
+  // 새 글을 치는 것처럼 보인다(이미 채운 글을 또 채우지 않게). 화면 밖이라 찍지 못한 자리는 덮지 않는다.
+  interface Shot { image: HTMLCanvasElement; box: Box }
+  let snapshot: { at: number; shots: Shot[] } | null = null;
+  const SNAPSHOT_TTL_MS = 4000;
+
+  function captureBefore(): void {
+    const content = document.getElementById('scroll-content');
+    const sc = document.getElementById('scroll-container');
+    if (!content || !sc || reducedMotion()) { snapshot = null; return; }
+    const base = content.getBoundingClientRect();
+    const view = sc.getBoundingClientRect();
+    const shots: Shot[] = [];
+    for (const canvas of content.querySelectorAll<HTMLCanvasElement>('canvas')) {
+      if (canvas.width < 100 || canvas.height < 100 || canvas.closest('.dg-swarm')) continue;
+      const r = canvas.getBoundingClientRect();
+      if (r.width < 50 || r.bottom < view.top || r.top > view.bottom) continue;
+      try {
+        const copy = document.createElement('canvas');
+        copy.width = canvas.width;
+        copy.height = canvas.height;
+        copy.getContext('2d')?.drawImage(canvas, 0, 0);
+        shots.push({ image: copy, box: { left: r.left - base.left, top: r.top - base.top, width: r.width, height: r.height } });
+      } catch { /* 그릴 수 없는 캔버스는 건너뛴다 */ }
+    }
+    snapshot = { at: Date.now(), shots };
+  }
+
+  /** 토막 자리의 옛 그림을 담은 덮개 (흰 바탕 위 옛 글). 찍어 둔 그림이 그 자리를 덮지 못하면 null */
+  function oldCover(target: HTMLDivElement, seg: Box): HTMLDivElement | null {
+    const shot = snapshot?.shots.find((s) => seg.left >= s.box.left - 1 && seg.top >= s.box.top - 1
+      && seg.left + seg.width <= s.box.left + s.box.width + 1 && seg.top + seg.height <= s.box.top + s.box.height + 1);
+    if (!shot) return null;
+    const cover = document.createElement('div');
+    cover.className = 'dg-swarm-cover dg-swarm-cover--old';
+    Object.assign(cover.style, { left: `${seg.left}px`, top: `${seg.top}px`, width: `${seg.width}px`, height: `${seg.height}px` });
+    const scaleX = shot.image.width / shot.box.width;
+    const scaleY = shot.image.height / shot.box.height;
+    const old = document.createElement('canvas');
+    old.className = 'dg-swarm-old';
+    old.width = Math.max(1, Math.round(seg.width * scaleX));
+    old.height = Math.max(1, Math.round(seg.height * scaleY));
+    old.getContext('2d')?.drawImage(
+      shot.image,
+      (seg.left - shot.box.left) * scaleX, (seg.top - shot.box.top) * scaleY, old.width, old.height,
+      0, 0, old.width, old.height,
+    );
+    cover.append(old);
+    target.append(cover);
+    return cover;
+  }
+
+  /**
+   * 토막 하나: 날아와서 → 지우기(옛 글이 오른쪽부터 사라진다 / 옛 그림이 없으면 덮개가 오른쪽부터 자란다)
+   * → 치기(덮개가 왼쪽부터 걷히며 새 글이 드러나고 커서가 그 끝을 따라간다) → 흩어진다
+   */
+  async function runSegment(target: HTMLDivElement, seg: Box, index: number, delay: number, gen: number, prepared: HTMLDivElement | null): Promise<void> {
     await wait(delay);
     if (gen !== generation) return;
     // 스크롤이 따라 내려갔을 수 있다 — 들어올 변은 지금 보이는 영역 기준
     const v = viewport();
-    if (!v) return;
+    if (!v) { prepared?.remove(); return; }
     const side = (index + Math.floor(Math.random() * 4)) % 4;
     const cursor = makeCursor(PALETTE[index % PALETTE.length], index === 0);
-    const cover = document.createElement('div');
-    cover.className = 'dg-swarm-cover';
-    Object.assign(cover.style, { left: `${seg.left}px`, top: `${seg.top}px`, width: `${seg.width}px`, height: `${seg.height}px` });
-    target.append(cover, cursor);
+    const cover = prepared ?? document.createElement('div');
+    if (!prepared) {
+      cover.className = 'dg-swarm-cover';
+      Object.assign(cover.style, { left: `${seg.left}px`, top: `${seg.top}px`, width: `${seg.width}px`, height: `${seg.height}px` });
+      target.append(cover);
+    }
+    target.append(cursor);
     const y = seg.top + seg.height * 0.45;
     const from = edgePoint(v, side);
     moveTo(cursor, from);
@@ -234,11 +294,13 @@ export function mountEditSwarm(): EditSwarmHandle {
     const right = { x: seg.left + seg.width, y };
     const left = { x: seg.left, y };
     await fly(cursor, from, right, [50, -60, 70, -40][index % 4]);
-    // 지우기: 덮개가 오른쪽에서 왼쪽으로 자라고 커서가 함께 물러난다
+    // 지우기: 커서가 오른쪽에서 왼쪽으로 물러나며 지운다
     // (덮개는 오른쪽 끝이 기준 — 지울 때 왼쪽으로 자라고, 칠 때 왼쪽부터 걷힌다. edit-swarm.css)
     const steps = Math.max(3, Math.min(12, Math.round(seg.width / 12)));
     const erasing = { duration: ERASE_MS, easing: `steps(${steps}, end)`, fill: 'forwards' as const };
-    cover.animate([{ transform: 'scaleX(0)' }, { transform: 'scaleX(1)' }], erasing);
+    const old = cover.querySelector<HTMLElement>('.dg-swarm-old');
+    if (old) old.animate([{ clipPath: 'inset(0 0% 0 0)' }, { clipPath: 'inset(0 100% 0 0)' }], erasing);
+    else cover.animate([{ transform: 'scaleX(0)' }, { transform: 'scaleX(1)' }], erasing);
     await done(cursor.animate([{ transform: `translate(${right.x}px, ${right.y}px)` }, { transform: `translate(${left.x}px, ${left.y}px)` }], erasing));
     await wait(60);
     // 치기: 덮개가 왼쪽부터 걷히며 새 글이 드러나고 커서가 그 끝을 따라간다
@@ -266,34 +328,46 @@ export function mountEditSwarm(): EditSwarmHandle {
     const lines = orderLines(toBoxes(rects));
     if (lines.length === 0) return;
     const calm = reducedMotion();
-    // 스크롤이 편집을 따라간다 — 첫 줄을 화면 3분의 1 지점으로
-    await follow(lines[0], 0.3);
+    // 찍어 둔 옛 화면은 이 편집 한 번에만 쓴다
+    const fresh = snapshot && Date.now() - snapshot.at < SNAPSHOT_TTL_MS;
+    if (!fresh) snapshot = null;
     // 커서는 위에서부터 MAX_LINES 줄까지 맡는다 (나머지는 강조만)
     const animated = lines.slice(0, MAX_LINES);
     const total = Math.min(MAX_CURSORS, Math.max(MIN_CURSORS, animated.length));
     if (calm || live + total > MAX_LIVE) {
+      snapshot = null;
+      await follow(lines[0], 0.3);
       lines.slice(0, 24).forEach((b, i) => sweep(target, b, i * 45, calm));
       return;
     }
+    // 토막을 나누고, 옛 그림이 있는 토막은 곧바로(스크롤·비행 전에) 옛 글로 덮는다 — 새 글이 먼저 보이지 않게
+    const counts = allocateCursors(animated.map((b) => b.width), total);
+    const plan = animated.map((line, li) => {
+      const k = Math.max(1, Math.min(counts[li], Math.floor(line.width / 24)));
+      const w = line.width / k;
+      return Array.from({ length: k }, (_, j) => {
+        const seg = { left: line.left + w * j, top: line.top, width: w, height: line.height };
+        return { seg, cover: oldCover(target, seg) };
+      });
+    });
+    snapshot = null;
+    // 스크롤이 편집을 따라간다 — 첫 줄을 화면 3분의 1 지점으로
+    await follow(lines[0], 0.3);
     lines.slice(MAX_LINES, MAX_LINES + 16).forEach((b, i) => sweep(target, b, 600 + i * 45, false));
 
-    const counts = allocateCursors(animated.map((b) => b.width), total);
     const gen = generation;
     const jobs: Promise<void>[] = [];
     let index = 0;
     animated.forEach((line, li) => {
-      const k = Math.max(1, Math.min(counts[li], Math.floor(line.width / 24)));
-      const w = line.width / k;
       const first = index;
       // 이 줄 차례가 오면, 화면 아래로 벗어나 있을 때 스크롤이 따라 내려간다
       const turn = wait(li * STAGGER_MS).then(() => (gen === generation ? follow(line, 0.6) : undefined));
       const segs: Promise<void>[] = [];
-      for (let j = 0; j < k; j++) {
-        const seg = { left: line.left + w * j, top: line.top, width: w, height: line.height };
+      plan[li].forEach(({ seg, cover }, j) => {
         const at = first + j;
-        segs.push(turn.then(() => runSegment(target, seg, at, j * 45, gen)));
+        segs.push(turn.then(() => runSegment(target, seg, at, j * 45, gen, cover)));
         index++;
-      }
+      });
       // 그 줄의 토막이 모두 쳐지면 줄을 한 번 쓸어 준다
       jobs.push(Promise.all(segs).then(() => { if (gen === generation) sweep(target, line, 0, false); }));
     });
@@ -303,6 +377,7 @@ export function mountEditSwarm(): EditSwarmHandle {
   }
 
   const listener = (event: Event) => { void onEdit(event); };
+  const beforeListener = () => captureBefore();
 
   function clear(): void {
     generation++;
@@ -312,10 +387,12 @@ export function mountEditSwarm(): EditSwarmHandle {
   }
 
   window.addEventListener('doogle:agent-edit', listener);
+  window.addEventListener('doogle:agent-edit-before', beforeListener);
   return {
     clear,
     dispose(): void {
       window.removeEventListener('doogle:agent-edit', listener);
+      window.removeEventListener('doogle:agent-edit-before', beforeListener);
       for (const type of ['wheel', 'touchmove', 'keydown', 'pointerdown']) {
         window.removeEventListener(type, onUserScroll, { capture: true });
       }

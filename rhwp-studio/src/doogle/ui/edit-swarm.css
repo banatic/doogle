@@ -46,6 +46,18 @@
   z-index: 1;
 }
 
+/* 옛 글 덮개 — 쓰기 직전에 찍은 옛 화면 조각. 처음부터 다 덮고 있다가 커서가 오면 지워진다 */
+.dg-swarm-cover--old {
+  transform: none;
+  overflow: hidden;
+}
+
+.dg-swarm-old {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
 /* 커서 무리 — 색은 --dg-swarm-color (edit-swarm.ts PALETTE) */
 .dg-swarm-cursor {
   position: absolute;
