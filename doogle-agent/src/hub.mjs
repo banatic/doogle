@@ -11,7 +11,8 @@ import { defaultModelId, ModelCatalog, normalizeModels } from './model-catalog.m
 import { appDataDir } from './paths.mjs';
 import { loadProviders, sortProviders } from './provider-registry.mjs';
 import { buildSystemPrompt, buildTurnText } from './system-prompt.mjs';
-import { ThreadStore, closeDanglingTurn, recordTranscript } from './threads.mjs';
+import { ThreadStore, closeDanglingTurn, normalizeDoc, recordTranscript } from './threads.mjs';
+import { backfillFromClaudeSession } from './transcript-import.mjs';
 import { loadTools } from './tools-loader.mjs';
 import * as secrets from './secrets.mjs';
 
@@ -123,7 +124,12 @@ export async function createHub(opts = {}) {
   const catalog = opts.modelCatalog ?? new ModelCatalog({ dataDir, log });
   const modelsFirstWaitMs = opts.modelsFirstWaitMs ?? MODELS_FIRST_WAIT_MS;
   let closing = false;
-  const store = new ThreadStore({ dir: opts.persistThreads === false ? null : path.join(dataDir, 'threads') });
+  // 화면 기록이 없는 옛 대화는 claude-sdk 세션 기록(<dataDir>/claude-workspace 의 SDK 프로젝트)에서 다시 만든다
+  const claudeCwd = path.join(dataDir, 'claude-workspace');
+  const store = new ThreadStore({
+    dir: opts.persistThreads === false ? null : path.join(dataDir, 'threads'),
+    backfill: (t) => backfillFromClaudeSession(t, claudeCwd),
+  });
 
   /** 현재 studio 소켓 (하나만 유지) */
   /** @type {WebSocket | null} */
@@ -404,6 +410,9 @@ export async function createHub(opts = {}) {
       // 앞선 기록이 끝맺지 못했으면(허브가 죽었던 경우) 먼저 닫는다
       closeDanglingTurn(thread);
       if (!thread.title) thread.title = msg.text.replace(/\s+/g, ' ').trim().slice(0, 40);
+      // 대화는 문서에 딸린다 — 마지막으로 보낸 때의 문서(다른 이름으로 저장하면 새 이름을 따른다)
+      const doc = normalizeDoc(msg.doc);
+      if (doc) thread.doc = doc;
       (thread.transcript ??= []).push({ kind: 'user', text: msg.text, providerId, at: new Date().toISOString() });
       recordTo = thread;
       saveSoon(thread, true);
@@ -461,7 +470,12 @@ export async function createHub(opts = {}) {
 
   /** 화면 복원 — 대화 목록 */
   async function onThreadsQuery(msg, socket) {
-    const list = await store.list(typeof msg.limit === 'number' ? Math.max(1, Math.min(200, msg.limit)) : 50);
+    const limit = typeof msg.limit === 'number' ? Math.max(1, Math.min(200, msg.limit)) : 50;
+    // doc 을 주면 그 문서의 대화만. doc 이 null 이면(문서 없음·저장 안 한 새 문서) 빈 목록
+    if ('doc' in msg && !normalizeDoc(msg.doc)) {
+      return send(socket, { type: 'threads', ...(typeof msg.reqId === 'string' ? { reqId: msg.reqId } : {}), list: [] });
+    }
+    const list = await store.list(limit, normalizeDoc(msg.doc));
     send(socket, {
       type: 'threads',
       ...(typeof msg.reqId === 'string' ? { reqId: msg.reqId } : {}),
@@ -481,6 +495,7 @@ export async function createHub(opts = {}) {
     reply({
       threadId: thread.id,
       title: thread.title || '대화',
+      doc: thread.doc ?? null,
       createdAt: thread.createdAt,
       updatedAt: thread.updatedAt,
       running,

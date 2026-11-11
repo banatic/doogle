@@ -21,6 +21,8 @@ import {
   type HubMessage,
   type ProviderInfo,
   type ProviderModel,
+  sameDoc,
+  type DocIdentity,
   type SavedThreadInfo,
   type TranscriptEntry,
   type ToolCallMessage,
@@ -42,6 +44,8 @@ export interface SidebarDeps {
   pending: PendingApi | null;
   /** 보낼 때마다 부른다 — 선택 영역·문서 이름 */
   getContext(): ChatContext;
+  /** 지금 열린 문서 — 대화는 문서에 딸린다. 문서가 없거나 저장 안 한 새 문서면 null */
+  getDoc?(): DocIdentity | null;
   openExternal(url: string): Promise<void>;
   /** 모드가 바뀌었을 때 (실행기가 다음 도구 호출부터 반영) */
   onModeChange?(mode: AgentMode): void;
@@ -65,9 +69,6 @@ const STORE_MODE = 'doogle.mode';
 
 /** 첫 실행 체크리스트를 끝냈다(첫 요청을 보냈다) — 다시 보이지 않는다 */
 const STORE_ONBOARDED = 'doogle.onboarded';
-
-/** 마지막으로 보던 대화 — 새로고침하면 hub 에 저장된 그 대화를 다시 연다 */
-const STORE_LAST_THREAD = 'doogle.lastThread';
 
 /** 문서·선택 상황 (상황별 제안 칩·첫 실행 체크리스트) */
 export interface DocContext {
@@ -256,6 +257,8 @@ interface StepsView {
   time: HTMLElement;
   list: HTMLOListElement;
   rows: Map<ToolCategory, HTMLLIElement>;
+  /** 도구가 돌지 않는 동안(생각하는 중·답변 쓰는 중)의 맨 아래 줄 */
+  now: HTMLLIElement;
   summary: HTMLElement;
 }
 
@@ -283,6 +286,8 @@ interface ThreadView {
   log: HTMLElement;
   turns: TurnView[];
   createdAt: number;
+  /** 이 대화가 딸린 문서 (null = 문서 없음·저장 안 한 새 문서) */
+  doc: DocIdentity | null;
 }
 
 type MenuKind = 'threads' | 'model';
@@ -323,13 +328,20 @@ export class DoogleSidebar {
   private scroller!: HTMLElement;
   /** 진행 카드의 걸린 시간을 1초마다 고친다 (진행 중인 턴이 있을 때만) */
   private clock: ReturnType<typeof setInterval> | null = null;
-  /** hub 에 저장된 대화 목록 (아직 화면에 불러오지 않은 것 포함) */
+  /** 지금 문서의 저장된 대화 목록 (아직 화면에 불러오지 않은 것 포함) */
   private savedThreads: SavedThreadInfo[] = [];
-  /** 연결 뒤 마지막 대화 복원을 한 번 해 봤다 */
-  private restoreTried = false;
+  /** 지금 문서 — 대화 목록·새 대화가 이 문서를 따른다 */
+  private doc: DocIdentity | null = null;
+  /** 문서 교체(열기·새 문서)를 알려 온 시각 — 이어지는 이름 변화를 "다른 문서" 로 본다 */
+  private docSwapAt = 0;
+  /** 응답 중에 문서가 바뀌었다 — 응답이 끝나면 대화를 그 문서로 옮긴다 */
+  private docChangeDeferred = false;
   /** 저장된 기록을 다시 그리는 중 — 알림·검토 이동을 하지 않는다 */
   private replaying = false;
   private loadingThread = false;
+  /** 대화 끝을 따라가는 중 (사용자가 위로 올려 읽으면 false) */
+  private stick = true;
+  private onShowThread: (() => void) | null = null;
   private readonly askCards: AskCard[] = [];
   /** "직접 입력" 을 눌러 답을 기다리는 중 — 입력창 안내문이 바뀐다 */
   private awaitingAnswer = false;
@@ -563,19 +575,22 @@ export class DoogleSidebar {
     fresh.setAttribute('role', 'menuitem');
     fresh.append(icon('compose', 14), el('span', '', '새 대화'));
     items.push(fresh);
-    // 화면에 있는 대화 + hub 에 저장된 대화(새로고침 전 것). 최근에 쓴 것부터
+    // 이 문서의 대화만 — 화면에 있는 것 + hub 에 저장된 것(새로고침 전). 최근에 쓴 것부터
     type Row = { id: string; title: string; at: number };
     const rows = new Map<string, Row>();
     for (const t of this.savedThreads) rows.set(t.id, { id: t.id, title: t.title, at: Date.parse(t.updatedAt) || 0 });
     for (const t of this.threads.values()) {
-      if (t.turns.length === 0 && t !== this.thread) continue;
+      if (t !== this.thread && (t.turns.length === 0 || !this.doc || !sameDoc(t.doc, this.doc))) continue;
       const lastTurn = t.turns[t.turns.length - 1];
       const at = Math.max(rows.get(t.id)?.at ?? 0, lastTurn?.endedAt ?? lastTurn?.startedAt ?? t.createdAt);
       rows.set(t.id, { id: t.id, title: t.title, at });
     }
     const list = [...rows.values()].sort((a, b) => b.at - a.at).slice(0, 20);
-    if (list.length > 0) {
-      items.push(el('div', 'dg-menu-heading', '최근 대화'));
+    if (!this.doc) {
+      // 대화는 문서에 딸린다 — 문서를 열어야 그 문서의 지난 대화가 보인다
+      items.push(el('div', 'dg-menu-note', '문서를 열면 그 문서의 지난 대화를 고를 수 있습니다.'));
+    } else if (list.length > 0) {
+      items.push(el('div', 'dg-menu-heading', `${this.doc.name.replace(/\.(hwpx|hwp|hml)$/i, '')}의 대화`));
       for (const t of list) {
         const current = t.id === this.thread.id;
         const item = button('dg-menu-item', '', () => {
@@ -669,12 +684,47 @@ export class DoogleSidebar {
     this.live.setAttribute('aria-atomic', 'true');
 
     body.append(this.conn, this.scroller, this.live);
+    this.watchScroll();
     return body;
+  }
+
+  /**
+   * 자동 스크롤 — 새 내용(글 조각·도구·카드·알림)이 붙으면 맨 아래로 따라간다.
+   * 사용자가 위로 올려 읽는 중이면 따라가지 않고, 다시 맨 아래로 내리거나 새 요청을 보내면 다시 따라간다.
+   */
+  private watchScroll(): void {
+    const scroller = this.scroller;
+    let lastTop = 0;
+    scroller.addEventListener('scroll', () => {
+      const near = this.isNearBottom();
+      // 위로 움직였고 바닥에서 멀어졌으면 사용자가 읽는 중이다. 바닥 가까이 오면 다시 따라간다
+      if (near) this.stick = true;
+      else if (scroller.scrollTop < lastTop - 2) this.stick = false;
+      lastTop = scroller.scrollTop;
+    }, { passive: true });
+    let frame = 0;
+    const follow = () => {
+      if (frame || !this.stick) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        if (this.stick) {
+          scroller.scrollTop = scroller.scrollHeight;
+          lastTop = scroller.scrollTop;
+        }
+      });
+    };
+    const mo = new MutationObserver(follow);
+    mo.observe(scroller, { childList: true, subtree: true, characterData: true });
+    // 글꼴·그림이 늦게 그려져 높이가 바뀌는 경우
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(follow) : null;
+    const observeLog = () => { ro?.disconnect(); if (this.thread?.log) ro?.observe(this.thread.log); };
+    this.onShowThread = observeLog;
+    this.offs.push(() => { mo.disconnect(); ro?.disconnect(); if (frame) cancelAnimationFrame(frame); });
   }
 
   private createThread(id = newThreadId(), title = '새 대화', createdAt = Date.now()): ThreadView {
     const log = el('div', 'dg-log');
-    const view: ThreadView = { id, title, log, turns: [], createdAt };
+    const view: ThreadView = { id, title, log, turns: [], createdAt, doc: this.doc };
     log.append(this.buildEmpty());
     this.threads.set(view.id, view);
     return view;
@@ -783,6 +833,10 @@ export class DoogleSidebar {
     if (this.titleBtn) this.titleBtn.setAttribute('aria-label', `대화: ${view.title}`);
     this.awaitingAnswer = false;
     this.renderPlaceholder();
+    // 다른 대화를 열면 그 끝에서 시작해 따라간다
+    this.stick = true;
+    this.onShowThread?.();
+    requestAnimationFrame(() => this.scrollToBottom());
   }
 
   private newThread(): void {
@@ -793,7 +847,6 @@ export class DoogleSidebar {
     }
     this.turn = null;
     this.showThread(this.createThread());
-    storeSet(STORE_LAST_THREAD, '');
     this.input?.focus();
   }
 
@@ -807,27 +860,80 @@ export class DoogleSidebar {
     if (view === this.thread || this.busy) return;
     this.turn = null;
     this.showThread(view);
-    storeSet(STORE_LAST_THREAD, view.id);
   }
 
-  // ─── 저장된 대화 (새로고침 뒤 복원) ─────────────────────
+  // ─── 문서에 딸린 대화 ─────────────────────────────────
+
+  /** 문서 교체(열기·새 문서)가 일어났다 — 곧 이어지는 문서 이름 변화를 "다른 문서" 로 본다 */
+  noteDocumentSwap(): void {
+    this.docSwapAt = Date.now();
+    this.syncDocument();
+  }
 
   /**
-   * hub 에 연결되면 저장된 대화 목록을 받는다. 처음 한 번은 마지막으로 보던 대화를 다시 연다 —
-   * 새로고침·앱 재시작 뒤에도 대화가 그대로 보인다. hub 는 응답 도중에도 기록을 저장한다.
+   * 열린 문서가 바뀌었는지 본다(문서 상태가 바뀔 때마다 불린다). 대화는 문서에 딸린다:
+   *  - 다른 문서를 열면 → 새 빈 대화로 바꾸고, 그 문서의 지난 대화 중 가장 최근 것을 연다.
+   *  - 문서를 닫았거나 저장 안 한 새 문서면 → 새 빈 대화. 지난 대화는 보이지 않는다.
+   *  - 같은 문서에 경로가 늦게 붙거나 다른 이름으로 저장하면(교체 없음) → 지금 대화가 새 이름을 따른다.
    */
-  private async syncThreads(): Promise<void> {
-    try {
-      this.savedThreads = await this.deps.hub.listThreads();
-    } catch {
-      return; // 예전 hub(목록 요청을 모름) — 복원 없이 지금처럼 쓴다
+  syncDocument(): void {
+    const next = this.currentDoc();
+    if (sameDoc(next, this.doc) && (next?.key ?? '') === (this.doc?.key ?? '')) return;
+    const swapped = Date.now() - this.docSwapAt < 3000;
+    const samePathLater = !!next && !!this.doc && !this.doc.key && !!next.key && sameDoc(next, this.doc);
+    if (samePathLater || (!swapped && this.thread.turns.length > 0)) {
+      // 같은 문서(경로가 늦게 붙음)이거나 다른 이름으로 저장 — 지금 대화가 새 이름을 따른다
+      this.doc = next;
+      this.thread.doc = next;
+      void this.loadDocThreads(false);
+      return;
     }
-    if (this.restoreTried) return;
-    this.restoreTried = true;
-    const last = storeGet(STORE_LAST_THREAD);
-    if (!last || this.busy || this.thread.turns.length > 0) return;
-    if (!this.savedThreads.some((t) => t.id === last)) return;
-    await this.openSavedThread(last);
+    if (this.busy) {
+      // 응답이 끝난 뒤 옮긴다 — 진행 중인 대화를 끊지 않는다
+      this.docChangeDeferred = true;
+      return;
+    }
+    this.applyDocument(next);
+  }
+
+  private currentDoc(): DocIdentity | null {
+    try { return this.deps.getDoc?.() ?? null; } catch { return null; }
+  }
+
+  private applyDocument(next: DocIdentity | null): void {
+    this.docChangeDeferred = false;
+    this.docSwapAt = 0;
+    this.doc = next;
+    this.savedThreads = [];
+    // 그 문서의 새 빈 대화에서 시작한다. 쓰던 빈 대화는 버린다
+    const before = this.thread;
+    this.turn = null;
+    this.showThread(this.createThread());
+    if (before.turns.length === 0) this.threads.delete(before.id);
+    void this.loadDocThreads(true);
+  }
+
+  /**
+   * 지금 문서의 저장된 대화 목록을 받는다. openLatest 면 (빈 대화를 보고 있을 때) 가장 최근 대화를 연다.
+   * hub 는 응답 도중에도 기록을 저장하므로 새로고침·재시작 뒤 문서를 다시 열면 대화가 그대로 있다.
+   */
+  private async loadDocThreads(openLatest: boolean): Promise<void> {
+    const doc = this.doc;
+    if (!doc) {
+      this.savedThreads = [];
+      return;
+    }
+    let list: SavedThreadInfo[];
+    try {
+      list = await this.deps.hub.listThreads(doc);
+    } catch {
+      return; // 예전 hub(목록 요청을 모름)·연결 전 — 연결되면 다시 부른다
+    }
+    if (!sameDoc(doc, this.doc)) return; // 그새 다른 문서로 바뀌었다
+    this.savedThreads = list;
+    if (openLatest && list[0] && !this.busy && this.thread.turns.length === 0) {
+      await this.openSavedThread(list[0].id);
+    }
   }
 
   private async openSavedThread(id: string): Promise<void> {
@@ -850,7 +956,6 @@ export class DoogleSidebar {
       if (before.turns.length === 0 && before !== view) this.threads.delete(before.id);
       this.turn = view.turns.find((t) => !t.done) ?? null;
       this.showThread(view);
-      storeSet(STORE_LAST_THREAD, view.id);
       requestAnimationFrame(() => this.scrollToBottom());
     } catch (error) {
       this.addNotice(`대화를 불러오지 못했습니다: ${error instanceof Error ? error.message : String(error)}`, 'error');
@@ -1041,7 +1146,8 @@ export class DoogleSidebar {
     }
     if (state === 'open') {
       void this.refreshProviders();
-      void this.syncThreads();
+      // 연결되면 지금 문서의 대화 목록을 받는다(문서가 먼저 열려 있었으면 그 문서의 최근 대화를 연다)
+      void this.loadDocThreads(this.thread.turns.length === 0);
     }
     this.renderModelButton();
     if (state !== 'open' && this.busy) {
@@ -1380,13 +1486,15 @@ export class DoogleSidebar {
       text,
       mode: this.mode,
       context: this.deps.getContext(),
+      doc: this.doc,
     });
     if (!sent) {
       this.addNotice('에이전트 서비스에 연결되어 있지 않습니다.', 'error');
       return;
     }
     storeSet(STORE_ONBOARDED, '1');
-    storeSet(STORE_LAST_THREAD, this.thread.id);
+    this.thread.doc = this.doc;
+    this.stick = true; // 새 요청을 보내면 다시 끝을 따라간다
     // 어떤 답이든 보내면 열려 있던 질문 카드는 답한 것이 된다
     this.closeAskCards(this.thread.id, text);
     if (textOverride === undefined) {
@@ -1415,11 +1523,15 @@ export class DoogleSidebar {
 
   private startTurn(userText: string, providerId = this.providerId): void {
     const root = el('div', 'dg-turn');
+    // 진행 줄은 새 내용이 들어갈 자리 표시로만 쓴다 — 지금 하는 일은 진행 카드가 보인다
     const thinking = el('div', 'dg-thinking', '생각하는 중…');
-    root.append(thinking);
+    thinking.hidden = true;
+    // 진행 카드는 요청을 보낸 즉시 — "생각하는 중" 에서도 시간이 흐르고 맥박이 뛰어 멈춘 것이 아님을 보인다
+    const steps = this.buildSteps();
+    root.append(steps.root, thinking);
     const turn: TurnView = {
       threadId: this.thread.id, root, userText, providerId, chip: null, chipText: null, toolList: null, tools: new Map(),
-      text: null, prose: [], thinking, actions: null, changeIds: new Set(), steps: null, startedAt: Date.now(),
+      text: null, prose: [], thinking, actions: null, changeIds: new Set(), steps, startedAt: Date.now(),
       activity: '생각하는 중', actionCards: new Set(), done: false,
     };
     this.turn = turn;
@@ -1430,6 +1542,7 @@ export class DoogleSidebar {
     reviewStore.setBusy(true);
     this.announce('응답을 작성하는 중');
     this.renderComposer();
+    this.renderSteps(turn);
     this.startClock();
   }
 
@@ -1458,6 +1571,11 @@ export class DoogleSidebar {
       }
       turn.actions = this.buildActions(turn);
       turn.root.append(turn.actions);
+      if (turn.tools.size === 0 && turn.steps) {
+        // 도구 없이 답만 한 턴 — 끝나면 진행 카드는 거둔다(답이 곧 결과다)
+        turn.steps.root.remove();
+        turn.steps = null;
+      }
       this.renderSteps(turn);
     }
     this.stopClock();
@@ -1473,6 +1591,12 @@ export class DoogleSidebar {
     if (turn && count > 0 && !this.replaying) {
       const first = reviewStore.rows().find((r) => turn.changeIds.has(r.id)) ?? reviewStore.rows()[0];
       if (first) reviewStore.focus(first.id, true);
+    }
+    // 응답 중에 다른 문서로 바뀌었으면 이제 그 문서의 대화로 옮긴다
+    if (this.docChangeDeferred && !this.replaying) {
+      const next = this.currentDoc();
+      if (sameDoc(next, this.doc)) this.docChangeDeferred = false;
+      else requestAnimationFrame(() => this.applyDocument(next));
     }
   }
 
@@ -1768,11 +1892,8 @@ export class DoogleSidebar {
       turn.chip = chip;
       turn.chipText = text;
       turn.toolList = list;
-      // 진행 카드는 턴 맨 위 — 산문보다 앞. 도구 기록(칩·목록)은 카드 안 맨 아래에 접어 둔다
-      const steps = this.buildSteps();
-      steps.root.append(chip, list);
-      turn.steps = steps;
-      turn.root.prepend(steps.root);
+      // 도구 기록(칩·목록)은 화면에 두지 않는다 — 진행 카드의 단계 줄("N개 끝내지 못함")과
+      // 손써야 하는 실패 카드로 충분하다. 상태 계산용으로만 들고 있는다.
     }
     const li = el('li', 'dg-tool');
     li.dataset.state = 'running';
@@ -1816,19 +1937,23 @@ export class DoogleSidebar {
   // ─── 진행 카드 (단계 체크리스트) ─────────────────────────
 
   private buildSteps(): StepsView {
-    const root = el('section', 'dg-steps');
+    const root = el('section', 'dg-progress');
     root.setAttribute('aria-label', '진행 상황');
-    const head = el('div', 'dg-steps-head');
-    const status = el('span', 'dg-steps-status');
+    const head = el('div', 'dg-progress-head');
+    const status = el('span', 'dg-progress-status');
     status.setAttribute('aria-hidden', 'true');
-    const title = el('span', 'dg-steps-title');
-    const time = el('span', 'dg-steps-time dg-tnum');
+    const title = el('span', 'dg-progress-title');
+    const time = el('span', 'dg-progress-time dg-tnum');
     head.append(status, title, time);
-    const list = el('ol', 'dg-steps-list');
-    const summary = el('div', 'dg-steps-sum');
+    const list = el('ol', 'dg-progress-list');
+    const now = el('li', 'dg-pstep dg-pstep--now');
+    now.dataset.state = 'running';
+    now.append(el('span', 'dg-pstep-icon'), el('span', 'dg-pstep-label'));
+    list.append(now);
+    const summary = el('div', 'dg-progress-sum');
     summary.hidden = true;
     root.append(head, list, summary);
-    return { root, status, title, time, list, rows: new Map(), summary };
+    return { root, status, title, time, list, rows: new Map(), now, summary };
   }
 
   /** 지금 하는 일 — 진행 카드의 진행 중 단계 옆에 보인다 */
@@ -1859,27 +1984,27 @@ export class DoogleSidebar {
     const steps = turn.steps;
     if (!steps) return;
     const entries = [...turn.tools.values()];
-    const order: ToolCategory[] = [];
-    for (const e of entries) if (!order.includes(e.view.category)) order.push(e.view.category);
-    const last = entries[entries.length - 1];
+    // 단계는 가장 최근에 한 순서대로 쌓는다 — 지금 하는 일이 늘 맨 아래, 끝난 일은 그 위
+    const lastUse = new Map<ToolCategory, number>();
+    entries.forEach((e, i) => lastUse.set(e.view.category, i));
+    const order = [...lastUse.keys()].sort((a, b) => lastUse.get(a)! - lastUse.get(b)!);
     const anyRunning = entries.some((e) => e.li.dataset.state === 'running');
     const failedAll = entries.filter((e) => e.li.dataset.state === 'error').length;
     for (const cat of order) {
       let row = steps.rows.get(cat);
       if (!row) {
-        row = el('li', 'dg-step');
-        row.append(el('span', 'dg-step-icon'), el('span', 'dg-step-label', STEP_LABEL[cat]), el('span', 'dg-step-note'));
+        row = el('li', 'dg-pstep');
+        row.append(el('span', 'dg-pstep-icon'), el('span', 'dg-pstep-label', STEP_LABEL[cat]), el('span', 'dg-pstep-note'));
         steps.rows.set(cat, row);
-        steps.list.append(row);
       }
+      // 순서대로 다시 붙인다(이미 있으면 자리만 옮긴다). "지금" 줄은 늘 맨 끝
+      steps.list.insertBefore(row, steps.now);
       const mine = entries.filter((e) => e.view.category === cat);
       const failed = mine.filter((e) => e.li.dataset.state === 'error').length;
-      // 도구 사이(생각하는 중)에도 마지막 단계를 진행 중으로 둔다 — 멈춘 것처럼 보이지 않게
-      const current = !turn.done && (anyRunning
-        ? mine.some((e) => e.li.dataset.state === 'running')
-        : last?.view.category === cat);
+      // 도구가 실제로 도는 단계만 진행 중 — 생각·답변 쓰기는 아래 "지금" 줄이 맡는다
+      const current = !turn.done && mine.some((e) => e.li.dataset.state === 'running');
       row.dataset.state = current ? 'running' : failed > 0 ? 'error' : 'done';
-      const note = row.querySelector('.dg-step-note')!;
+      const note = row.querySelector('.dg-pstep-note')!;
       if (current) {
         note.textContent = turn.activity;
       } else if (failed > 0) {
@@ -1891,6 +2016,11 @@ export class DoogleSidebar {
         note.textContent = '';
       }
     }
+    // "지금" 줄 — 도구가 돌지 않는 동안 무엇을 하는지(생각하는 중·답변 쓰는 중). 끝나면 숨긴다
+    steps.now.hidden = turn.done || anyRunning;
+    steps.list.appendChild(steps.now);
+    steps.now.querySelector('.dg-pstep-label')!.textContent = turn.activity;
+    steps.list.hidden = turn.done && order.length === 0;
     const cancelled = turn.done && turn.root.dataset.cancelled === '1';
     const interrupted = turn.done && turn.root.dataset.interrupted === '1';
     steps.root.dataset.state = !turn.done ? 'running' : cancelled || interrupted ? 'stopped' : failedAll > 0 ? 'error' : 'done';
@@ -1923,9 +2053,9 @@ export class DoogleSidebar {
     }
     box.hidden = !text;
     if (!text) return;
-    const label = el('span', 'dg-steps-sum-text', text);
+    const label = el('span', 'dg-progress-sum-text', text);
     if (pendingIds.length > 0) {
-      const go = button('dg-steps-go', '문서에서 검토', () => reviewStore.focus(pendingIds[0], true));
+      const go = button('dg-progress-go', '문서에서 검토', () => reviewStore.focus(pendingIds[0], true));
       box.replaceChildren(label, go);
     } else {
       box.replaceChildren(label);

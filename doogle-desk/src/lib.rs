@@ -8,6 +8,7 @@
 //!
 //! 비밀값·자격증명은 다루지 않는다 — hub 가 OS keyring 으로 관리한다(CONTRACT §0, §5).
 
+mod assoc;
 mod files;
 mod hub;
 mod updater;
@@ -195,6 +196,20 @@ fn queue_opens(app: &AppHandle, paths: Vec<PathBuf>) {
 
 // ----------------------------------------------------------------- close guard
 
+// ----------------------------------------------------------------- 기본 앱
+
+/// .hwp/.hwpx 를 지금 어떤 앱이 여는지
+#[tauri::command]
+async fn default_app_status() -> CmdResult<assoc::DefaultAppStatus> {
+    blocking(assoc::status).await
+}
+
+/// 두글을 처리 앱으로 등록하고 OS 의 기본 앱 설정 화면을 연다
+#[tauri::command]
+async fn set_default_app() -> CmdResult<()> {
+    blocking(assoc::set_default_app).await
+}
+
 /// webview 가 `doogle://close-requested` 를 듣기 시작했다(또는 그만뒀다).
 #[tauri::command]
 fn set_close_guard(state: State<'_, Arc<Shell>>, enabled: bool) {
@@ -335,6 +350,8 @@ pub fn run() {
             open_hub_log,
             set_close_guard,
             confirm_close,
+            default_app_status,
+            set_default_app,
             updater::update_check,
             updater::update_install,
         ])

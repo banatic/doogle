@@ -80,6 +80,24 @@ export function writeFile(path: string, bytes: Uint8Array): Promise<void> {
   return invoke<void>('save_file', bytes, { headers: { 'x-doogle-path': encodeURIComponent(path) } });
 }
 
+/** .hwp/.hwpx 를 지금 여는 앱 (doogle-desk assoc.rs) */
+export interface DefaultAppStatus {
+  /** 이 OS 에서 기본 앱 설정 화면까지 데려다줄 수 있다 (Windows) */
+  supported: boolean;
+  exts: Array<{ ext: string; isDefault: boolean; current: string | null }>;
+  /** 지원하지 않는 OS 에서 보일 방법 */
+  hint: string | null;
+}
+
+export function defaultAppStatus(): Promise<DefaultAppStatus> {
+  return invoke<DefaultAppStatus>('default_app_status');
+}
+
+/** 두글을 처리 앱으로 등록하고 OS 의 기본 앱 설정 화면을 연다 (실제 선택은 사용자가 한다) */
+export function setDefaultApp(): Promise<void> {
+  return invoke<void>('set_default_app');
+}
+
 export function pickOpenFile(): Promise<string | null> {
   return invoke<string | null>('pick_open_file');
 }

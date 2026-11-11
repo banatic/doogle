@@ -128,6 +128,16 @@ export async function initDoogle(host: PluginHost): Promise<PluginSurface> {
         ...(documentName ? { documentName } : {}),
       };
     },
+    // 대화는 문서에 딸린다 — 경로를 알면 경로, 아니면 파일 이름. 저장 안 한 새 문서는 null
+    getDoc: () => {
+      const s = shell.getDocState();
+      if (!s.hasDocument || !s.name) return null;
+      if (!s.path && /^새 문서\.(hwp|hwpx)$/i.test(s.name)) return null;
+      const key = s.path
+        ? (/^[a-z]:[\\/]|^\\\\/i.test(s.path) ? s.path.replace(/\//g, '\\').toLowerCase() : s.path)
+        : '';
+      return { key, name: s.name };
+    },
     openExternal: (url) => desk.openExternal(url),
     onModeChange: (next) => { mode = next; },
   });
@@ -155,14 +165,18 @@ export async function initDoogle(host: PluginHost): Promise<PluginSurface> {
   // 상황별 제안 칩: 문서·선택·커서가 바뀌면 사이드바가 (빈 대화일 때만) 다시 고른다
   fieldsCache = null;
   const refreshContext = () => sidebar.refreshContext();
-  offs.push(host.onDocumentSwap(() => { fieldsCache = null; refreshContext(); }));
+  offs.push(host.onDocumentSwap(() => { fieldsCache = null; refreshContext(); sidebar.noteDocumentSwap(); }));
   for (const name of ['command-state-changed', 'cursor-format-changed', 'field-info-changed']) {
     offs.push(host.events.on(name, refreshContext));
   }
   offs.push(host.events.on('document-changed', () => { fieldsCache = null; refreshContext(); }));
   // 셸이 내는 문서 상태(dirty·형식·경로) — 문서가 바뀌었을 수 있다
-  window.addEventListener('doogle:doc-state', refreshContext);
-  offs.push(() => window.removeEventListener('doogle:doc-state', refreshContext));
+  // 문서가 바뀌면 사이드바 대화도 그 문서의 것으로 (대화는 문서에 딸린다)
+  // 셸이 문서 교체 때 상태를 먼저 낸다 — 한 틱 미뤄 교체 알림(noteDocumentSwap)이 먼저 닿게 한다
+  const onDocState = () => { refreshContext(); window.setTimeout(() => sidebar.syncDocument(), 0); };
+  window.addEventListener('doogle:doc-state', onDocState);
+  offs.push(() => window.removeEventListener('doogle:doc-state', onDocState));
+  sidebar.syncDocument();
   // 연결 상태를 셸 표면(상태 표시줄 점 등)에 알린다 — 상태는 한 곳(HubClient)에서 여러 표면으로
   offs.push(hub.onState((state, detail) => {
     window.dispatchEvent(new CustomEvent(HUB_STATE_EVENT, { detail: { state, detail } }));
@@ -170,6 +184,10 @@ export async function initDoogle(host: PluginHost): Promise<PluginSurface> {
   // 문서가 없을 때의 캔버스 빈 상태
   const { mountEmptyCanvas } = await import('./ui/empty-canvas.ts');
   offs.push(mountEmptyCanvas(host, { openDocument }));
+  // 에이전트가 문서를 고치면 커서 무리가 그 자리로 간다 (실행기의 doogle:agent-edit)
+  const { mountEditSwarm } = await import('./ui/edit-swarm.ts');
+  const swarm = mountEditSwarm();
+  offs.push(() => swarm.dispose(), host.onDocumentSwap(() => swarm.clear()));
 
   if (desk.isDesk()) {
     host.automation.registerCommand({

@@ -10,7 +10,31 @@
  */
 import { Engine } from './engine-adapter.ts';
 import { DoogleToolExecutor } from './executor.ts';
-import type { DoogleAgentDeps, DoogleAgentRuntime, ToolContext, ToolResult } from './types.ts';
+import type { DoogleAgentDeps, DoogleAgentRuntime, PendingChangeTarget, SelectionRect, ToolContext, ToolResult } from './types.ts';
+
+/**
+ * 변경 자리 → 지금 문서에서의 쪽 사각형(쪽 px, 배율 1). 문서 위 강조가 쓴다 — 기록 때가 아니라
+ * 지금 계산하므로 다시 조판·배율·직접 편집 뒤에도 맞는다. 표는 셀 상자, 글은 그 범위(0자면 문단 전체).
+ */
+function targetRects(engine: Engine, targets: PendingChangeTarget[]): SelectionRect[] {
+  const out: SelectionRect[] = [];
+  for (const t of targets.slice(0, 60)) {
+    if (t.wholeSection) continue;
+    const table = t.table ?? (t.cell ? { paraIdx: t.cell.paraIdx, controlIdx: t.cell.controlIdx } : null);
+    if (table) {
+      for (const b of engine.tableCellBoxes(t.sectionIdx, table.paraIdx, table.controlIdx)) {
+        if (!t.cell || b.cellIdx === t.cell.cellIdx) out.push({ pageIndex: b.pageIndex, x: b.x, y: b.y, width: b.w, height: b.h });
+      }
+      continue;
+    }
+    if (t.paraIdx < 0 || t.paraIdx >= engine.paragraphCount(t.sectionIdx)) continue;
+    const len = engine.length(t.sectionIdx, t.paraIdx);
+    const start = t.length > 0 ? Math.min(t.charOffset, len) : 0;
+    const end = t.length > 0 ? Math.min(t.charOffset + t.length, len) : len;
+    out.push(...engine.selectionRects(t.sectionIdx, t.paraIdx, start, t.paraIdx, Math.max(end, start)));
+  }
+  return out;
+}
 
 export function createDoogleAgentRuntime(deps: DoogleAgentDeps): DoogleAgentRuntime {
   const executor = new DoogleToolExecutor(deps);
@@ -42,6 +66,12 @@ export function createDoogleAgentRuntime(deps: DoogleAgentDeps): DoogleAgentRunt
         const doc = deps.getDocument();
         if (!doc) return 0;
         try { return new Engine(doc).pageCount(); } catch { return 0; }
+      },
+      rectsOf: (id) => {
+        const doc = deps.getDocument();
+        const change = executor.staging.list().find((c) => c.id === id);
+        if (!doc || !change) return [];
+        try { return targetRects(new Engine(doc), change.targets ?? []); } catch { return []; }
       },
     },
     revision: () => executor.revision,

@@ -14,7 +14,7 @@ import { guardedSave } from './close-guard';
 import { rememberedPath } from './doc-state';
 import { commandLabel, commandShortcut, hasCommand, isEnabled, run } from './studio';
 import { activateUpstreamItem, menuBody, refreshRecentDocs } from './upstream-menu';
-import { invoke, isDesk } from '../ui/desk-bridge';
+import { defaultAppStatus, invoke, isDesk, setDefaultApp, type DefaultAppStatus } from '../ui/desk-bridge';
 import { checkForUpdates, currentVersion, lastUpdateCheck, openUpdatePopover, type CheckResult } from './updater';
 
 const PINS_KEY = 'doogle.recent.pins';
@@ -243,8 +243,17 @@ export class Backstage {
     const wrap = document.createElement('div');
     wrap.className = 'dg-bs-update';
     wrap.append(this.sep(), this.heading('정보'));
-    const about = this.navButton('file:about', '제품 정보', 'info', aboutEl);
-    if (about) wrap.appendChild(about);
+    // 제품 정보는 upstream rhwp 대화상자 대신 두글 것을 연다 (about.ts)
+    void aboutEl;
+    const about = document.createElement('button');
+    about.type = 'button';
+    about.className = 'dg-bs-item';
+    about.innerHTML = `${iconSvg('info', 18, 1.7)}<span class="dg-bs-item-label">제품 정보</span>`;
+    about.addEventListener('click', () => {
+      this.close(false);
+      void import('./about').then((m) => m.openDoogleAbout());
+    });
+    wrap.appendChild(about);
     if (!isDesk()) return wrap;
 
     const b = document.createElement('button');
@@ -276,8 +285,86 @@ export class Backstage {
         openUpdatePopover();
       }
     });
-    wrap.append(b, version);
+    wrap.append(b, version, ...this.buildDefaultApp());
     return wrap;
+  }
+
+  /**
+   * .hwp/.hwpx 기본 앱을 두글로 — Windows 는 앱이 스스로 기본 앱이 될 수 없어서, 두글을 등록한 뒤
+   * 설정의 "기본 앱 › 두글" 화면을 연다. 설정에서 돌아오면(창 focus) 상태를 다시 읽는다.
+   */
+  private buildDefaultApp(): HTMLElement[] {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'dg-bs-item';
+    b.innerHTML = `${iconSvg('fileHwp', 18, 1.7)}<span class="dg-bs-item-label">HWP·HWPX 기본 앱으로 설정</span>`;
+    const line = document.createElement('div');
+    line.className = 'dg-bs-version';
+    line.setAttribute('aria-live', 'polite');
+    line.textContent = '확인하는 중…';
+    let status: DefaultAppStatus | null = null;
+    let waitingForSettings = false;
+
+    const describe = (s: DefaultAppStatus): string => {
+      if (!s.supported) return '';
+      const mine = s.exts.filter((e) => e.isDefault);
+      if (mine.length === s.exts.length) return 'HWP·HWPX를 두글로 엽니다';
+      const others = s.exts.filter((e) => !e.isDefault)
+        .map((e) => `${e.ext.slice(1).toUpperCase()}: ${e.current ?? '정해지지 않음'}`);
+      return `지금 ${others.join(' · ')}`;
+    };
+    const refresh = async () => {
+      try {
+        status = await defaultAppStatus();
+      } catch {
+        b.remove(); // 이 명령이 없는 예전 데스크탑 셸
+        line.remove();
+        return;
+      }
+      const all = status.supported && status.exts.every((e) => e.isDefault);
+      b.querySelector('.dg-bs-item-label')!.textContent = all ? 'HWP·HWPX 기본 앱: 두글' : 'HWP·HWPX 기본 앱으로 설정';
+      line.classList.remove('dg-bs-version--bad');
+      if (waitingForSettings && !all) {
+        line.textContent = `${describe(status)} — 설정에서 .hwp와 .hwpx를 두글로 골라 주세요`;
+      } else {
+        line.textContent = describe(status);
+        waitingForSettings = false;
+      }
+      line.hidden = !line.textContent;
+    };
+
+    b.addEventListener('click', async () => {
+      if (b.getAttribute('aria-disabled') === 'true') return;
+      if (status && !status.supported) {
+        line.hidden = false;
+        line.textContent = status.hint ?? '운영체제 설정에서 두글을 기본 앱으로 고르세요.';
+        return;
+      }
+      b.setAttribute('aria-disabled', 'true');
+      try {
+        await setDefaultApp();
+        waitingForSettings = true;
+        line.hidden = false;
+        line.textContent = 'Windows 설정을 열었습니다. .hwp와 .hwpx를 두글로 고르세요.';
+      } catch (error) {
+        line.hidden = false;
+        line.classList.add('dg-bs-version--bad');
+        line.textContent = error instanceof Error ? error.message : String(error);
+      } finally {
+        b.removeAttribute('aria-disabled');
+      }
+    });
+
+    const onFocus = () => {
+      if (!b.isConnected) {
+        window.removeEventListener('focus', onFocus);
+        return;
+      }
+      void refresh();
+    };
+    window.addEventListener('focus', onFocus);
+    void refresh();
+    return [b, line];
   }
 
   // ── 오른쪽: 새로 만들기 줄 ────────────────────────────

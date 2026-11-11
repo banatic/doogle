@@ -41,6 +41,14 @@ function kbd(text: string): HTMLElement {
   return k;
 }
 
+type PageToContent = (pageIndex: number, x: number, y: number) => { left: number; top: number; zoom: number } | null;
+
+/** 쪽 좌표 → #scroll-content 좌표 (main.ts rhwpStudio.view — 캐럿과 같은 계산). 없으면 null */
+function pageToContent(): PageToContent | null {
+  const view = (window as unknown as { rhwpStudio?: { view?: { pageToContent?: PageToContent } } }).rhwpStudio?.view;
+  return typeof view?.pageToContent === 'function' ? view.pageToContent : null;
+}
+
 function rangeOf(change: PendingChangeSet): PluginTextRange | null {
   const t = change.targets?.[0];
   if (!t || t.wholeSection) return null;
@@ -193,6 +201,51 @@ export function mountReviewOverlay(host: PluginHost, pending: PendingApi): Revie
   gutter.hidden = true;
 
   document.body.append(gutter, pop, pill);
+
+  // ─── 문서 위 강조 — 검토 대기 변경을 한꺼번에 ──────────
+  // #scroll-content 안에 얹어 문서와 함께 스크롤된다. 지금 보는 변경은 진하게, 나머지는 옅게.
+  let marks: HTMLDivElement | null = null;
+  let marksFrame = 0;
+  function scheduleMarks(): void {
+    if (!marksFrame) marksFrame = requestAnimationFrame(() => { marksFrame = 0; renderMarks(); });
+  }
+  function renderMarks(): void {
+    const rows = reviewStore.rows();
+    const content = document.getElementById('scroll-content');
+    const map = pageToContent();
+    if (rows.length === 0 || !content || !map || !pending.rectsOf) {
+      marks?.remove();
+      marks = null;
+      return;
+    }
+    if (!marks || marks.parentElement !== content) {
+      marks?.remove();
+      marks = el('div', 'dg-review-marks');
+      marks.setAttribute('aria-hidden', 'true');
+      content.appendChild(marks);
+    }
+    const current = reviewStore.currentId;
+    const currentIndex = rows.findIndex((r) => r.id === current);
+    const cascadeFrom = cascadeHint && currentIndex >= 0 && pending.rejectFrom ? currentIndex : cascadeHint ? 0 : -1;
+    const nodes: HTMLElement[] = [];
+    rows.forEach((row, i) => {
+      let rects: ReturnType<NonNullable<PendingApi['rectsOf']>> = [];
+      try { rects = pending.rectsOf!(row.id); } catch { rects = []; }
+      for (const r of rects) {
+        const at = map(r.pageIndex, r.x, r.y);
+        if (!at) continue;
+        const mark = el('div', 'dg-review-mark');
+        if (row.id === current) mark.classList.add('dg-review-mark--cur');
+        if (cascadeFrom >= 0 && i >= cascadeFrom) mark.classList.add('dg-review-mark--cascade');
+        mark.style.left = `${at.left}px`;
+        mark.style.top = `${at.top}px`;
+        mark.style.width = `${Math.max(3, r.width * at.zoom)}px`;
+        mark.style.height = `${Math.max(3, r.height * at.zoom)}px`;
+        nodes.push(mark);
+      }
+    });
+    marks.replaceChildren(...nodes);
+  }
 
   let revealedId: string | null = null;
   let frame = 0;
@@ -376,6 +429,9 @@ export function mountReviewOverlay(host: PluginHost, pending: PendingApi): Revie
     const view = describeChange(change);
     diff.replaceChildren();
     diff.classList.toggle('dg-pop-diff-open', expanded);
+    // 묶음 변경은 첫 줄 + "외 N가지". 나머지가 어디인지는 문서 위 강조(모든 대기 변경)가 보인다
+    const summary = view.summary;
+    let long = false;
     if (view.del || view.ins) {
       const del = expanded ? view.delFull : view.del;
       const ins = expanded ? view.insFull : view.ins;
@@ -386,19 +442,17 @@ export function mountReviewOverlay(host: PluginHost, pending: PendingApi): Revie
         diff.append(ar);
       }
       if (ins) diff.append(el('ins', 'dg-pop-ins', ins));
-      if (view.summary) diff.append(el('span', 'dg-pop-sum', view.summary));
-      const long = view.delFull.length > view.del.length || view.insFull.length > view.ins.length
+      if (summary) diff.append(el('span', 'dg-pop-sum', summary));
+      long = view.delFull.length > view.del.length || view.insFull.length > view.ins.length
         || /\s{2,}|\n/.test(view.delFull + view.insFull);
-      diff.disabled = !long && !expanded;
-      diff.title = long ? (expanded ? '접기' : '전체 보기') : '';
     } else if (view.chips.length > 0) {
-      diff.append(el('span', 'dg-pop-sum', view.summary));
+      if (summary) diff.append(el('span', 'dg-pop-sum', summary));
       for (const chip of view.chips) diff.append(chipNode(chip, 'dg-pop-chip dg-tnum'));
-      diff.disabled = true;
     } else {
-      diff.append(el('span', 'dg-pop-sum', view.summary));
-      diff.disabled = true;
+      diff.append(el('span', 'dg-pop-sum', summary || view.summary));
     }
+    diff.disabled = !long && !expanded;
+    diff.title = long ? (expanded ? '접기' : '전체 보기') : '';
     diff.setAttribute('aria-label', `${view.location} 변경: ${diff.textContent ?? ''}`);
 
     const impact = reviewStore.rejectImpact(change.id);
@@ -415,6 +469,8 @@ export function mountReviewOverlay(host: PluginHost, pending: PendingApi): Revie
   }
 
   function renderGutter(): void {
+    // 거터가 바뀌는 때(변경 목록·지금 변경·거절 미리보기)는 문서 위 강조도 같이 바뀐다
+    scheduleMarks();
     const rows = reviewStore.rows();
     const current = reviewStore.currentId;
     const positions = gutterPositions(rows, reviewStore.pageCount());
@@ -506,7 +562,13 @@ export function mountReviewOverlay(host: PluginHost, pending: PendingApi): Revie
   offs.push(() => window.removeEventListener('keydown', onKey, true));
 
   offs.push(reviewStore.onChange(render));
-  offs.push(host.events.on('zoom-changed', (zoom) => { renderZoom(typeof zoom === 'number' ? zoom : undefined); schedule(); }));
+  offs.push(host.events.on('zoom-changed', (zoom) => { renderZoom(typeof zoom === 'number' ? zoom : undefined); schedule(); scheduleMarks(); }));
+  // 배율 애니메이션·다시 조판이 끝난 뒤의 쪽 위치로 강조를 다시 맞춘다
+  offs.push(host.events.on('document-changed', () => scheduleMarks()));
+  const onResizeMarks = () => scheduleMarks();
+  window.addEventListener('resize', onResizeMarks);
+  offs.push(() => window.removeEventListener('resize', onResizeMarks));
+  offs.push(host.onDocumentSwap(() => { marks?.remove(); marks = null; }));
   // 사용자 직접 편집 — revision 이 움직였을 수 있다. 다음 프레임에 표면들을 다시 그린다.
   let refreshFrame = 0;
   offs.push(host.events.on('document-changed', () => {
@@ -544,6 +606,8 @@ export function mountReviewOverlay(host: PluginHost, pending: PendingApi): Revie
       reviewStore.attach(null);
       pop.remove();
       pill.remove();
+      if (marksFrame) cancelAnimationFrame(marksFrame);
+      marks?.remove();
       gutter.remove();
     },
   };

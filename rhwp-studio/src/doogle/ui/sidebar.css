@@ -186,6 +186,15 @@
   color: var(--dg-x-muted);
 }
 
+.dg-menu-note {
+  max-width: 260px;
+  padding: 8px 10px 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--dg-x-muted);
+  word-break: keep-all;
+}
+
 .dg-menu-tag {
   font-weight: 500;
   font-size: 11px;
@@ -633,11 +642,11 @@
 }
 
 /* 진행 카드 — 작업 중/완료가 한눈에. 단계 체크리스트 + 변경 건수. 변경 내용은 문서 위에서 본다 */
-.dg-steps {
+.dg-progress {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 10px 12px;
+  gap: 12px;
+  padding: 14px 16px;
   background: var(--dg-x-surface);
   border: 1px solid var(--dg-x-border);
   border-radius: var(--dg-x-r-md);
@@ -646,28 +655,56 @@
   transition: border-color var(--dg-x-dur) ease, box-shadow var(--dg-x-dur) ease;
 }
 
-.dg-steps[data-state='running'] {
+.dg-progress[data-state='running'] {
   border-color: var(--dg-x-accent);
   box-shadow: 0 0 0 3px var(--dg-x-soft);
+  /* 일하는 동안 테두리 빛이 숨 쉬듯 밝아졌다 어두워진다 — 멈춘 것이 아님을 보인다 */
+  animation: dg-progress-glow 1.6s ease-in-out infinite;
 }
 
-.dg-steps-head {
+@keyframes dg-progress-glow {
+  0%, 100% { box-shadow: 0 0 0 3px var(--dg-x-soft); }
+  50% { box-shadow: 0 0 0 5px var(--dg-x-soft-border); }
+}
+
+/* 지금 하는 일(진행 중 단계·"지금" 줄)의 글씨도 맥박처럼 밝기가 오르내린다 */
+.dg-progress[data-state='running'] .dg-pstep[data-state='running'] .dg-pstep-label,
+.dg-progress[data-state='running'] .dg-pstep[data-state='running'] .dg-pstep-note,
+.dg-progress[data-state='running'] .dg-progress-title {
+  animation: dg-progress-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes dg-progress-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+.dg-pstep--now[hidden] {
+  display: none;
+}
+
+.dg-pstep--now .dg-pstep-label {
+  color: var(--dg-x-text2);
+  font-weight: 500;
+}
+
+.dg-progress-head {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
 }
 
-.dg-steps-title {
+.dg-progress-title {
   font-size: 13px;
   font-weight: 600;
   color: var(--dg-x-text);
 }
 
-.dg-steps[data-state='done'] .dg-steps-title { color: var(--dg-x-ok); }
-.dg-steps[data-state='error'] .dg-steps-title { color: var(--dg-x-bad); }
-.dg-steps[data-state='stopped'] .dg-steps-title { color: var(--dg-x-muted); }
+.dg-progress[data-state='done'] .dg-progress-title { color: var(--dg-x-ok); }
+.dg-progress[data-state='error'] .dg-progress-title { color: var(--dg-x-bad); }
+.dg-progress[data-state='stopped'] .dg-progress-title { color: var(--dg-x-muted); }
 
-.dg-steps-time {
+.dg-progress-time {
   margin-left: auto;
   color: var(--dg-x-muted);
   font-size: 12px;
@@ -675,8 +712,8 @@
 }
 
 /* 상태 표시 — 머리와 단계 줄이 같은 모양을 쓴다: 돌림표 · 초록 체크 · 빨간 점 */
-.dg-steps-status,
-.dg-step-icon {
+.dg-progress-status,
+.dg-pstep-icon {
   position: relative;
   width: 14px;
   height: 14px;
@@ -684,20 +721,20 @@
   border-radius: 50%;
 }
 
-.dg-steps[data-state='running'] .dg-steps-status,
-.dg-step[data-state='running'] .dg-step-icon {
+.dg-progress[data-state='running'] .dg-progress-status,
+.dg-pstep[data-state='running'] .dg-pstep-icon {
   border: 2px solid var(--dg-x-soft-border);
   border-top-color: var(--dg-x-accent);
   animation: dg-spin 0.8s linear infinite;
 }
 
-.dg-steps[data-state='done'] .dg-steps-status,
-.dg-step[data-state='done'] .dg-step-icon {
+.dg-progress[data-state='done'] .dg-progress-status,
+.dg-pstep[data-state='done'] .dg-pstep-icon {
   background: var(--dg-x-ok);
 }
 
-.dg-steps[data-state='done'] .dg-steps-status::after,
-.dg-step[data-state='done'] .dg-step-icon::after {
+.dg-progress[data-state='done'] .dg-progress-status::after,
+.dg-pstep[data-state='done'] .dg-pstep-icon::after {
   content: '';
   position: absolute;
   left: 4px;
@@ -709,45 +746,47 @@
   transform: rotate(-45deg);
 }
 
-.dg-steps[data-state='error'] .dg-steps-status,
-.dg-step[data-state='error'] .dg-step-icon {
+.dg-progress[data-state='error'] .dg-progress-status,
+.dg-pstep[data-state='error'] .dg-pstep-icon {
   background: var(--dg-x-bad);
   transform: scale(0.7);
 }
 
-.dg-steps[data-state='stopped'] .dg-steps-status {
+.dg-progress[data-state='stopped'] .dg-progress-status {
   border: 2px solid var(--dg-x-muted);
 }
 
-.dg-steps-list {
+/* 단계 줄은 머리 아이콘 아래로 살짝 들여 위계를 보인다 */
+.dg-progress-list {
   list-style: none;
   margin: 0;
-  padding: 0;
+  padding: 0 0 0 2px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 
-.dg-step {
+.dg-pstep {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   min-width: 0;
   color: var(--dg-x-text2);
 }
 
-.dg-step[data-state='running'] {
+.dg-pstep[data-state='running'] {
   color: var(--dg-x-text);
   font-weight: 600;
 }
 
-.dg-step-label {
+.dg-pstep-label {
   flex-shrink: 0;
 }
 
-.dg-step-note {
+.dg-pstep-note {
   min-width: 0;
   margin-left: auto;
+  padding-left: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -756,30 +795,30 @@
   font-variant-numeric: tabular-nums;
 }
 
-.dg-step[data-state='error'] .dg-step-note {
+.dg-pstep[data-state='error'] .dg-pstep-note {
   color: var(--dg-x-bad);
 }
 
-.dg-steps-sum {
+.dg-progress-sum {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding-top: 8px;
+  gap: 12px;
+  padding-top: 12px;
   border-top: 1px solid var(--dg-x-divider);
 }
 
-.dg-steps-sum[hidden] {
+.dg-progress-sum[hidden] {
   display: none;
 }
 
-.dg-steps-sum-text {
+.dg-progress-sum-text {
   flex: 1;
   min-width: 0;
   font-weight: 600;
   color: var(--dg-x-text);
 }
 
-.dg-steps-go {
+.dg-progress-go {
   flex-shrink: 0;
   height: 28px;
   padding: 0 12px;
@@ -790,30 +829,37 @@
   font-weight: 600;
 }
 
-.dg-steps-go:hover {
+.dg-progress-go:hover {
   filter: brightness(1.08);
 }
 
 /* 카드 안 도구 기록 — 평소엔 접힌 한 줄. 무슨 도구를 썼는지 궁금할 때만 편다 */
-.dg-steps .dg-tools-chip {
-  min-height: 22px;
-  padding: 0;
+.dg-progress .dg-tools-chip {
+  min-height: 24px;
+  margin: -4px 0 -6px -6px;
+  padding: 0 6px;
   border: 0;
+  border-radius: var(--dg-x-r-sm);
   font-size: 11.5px !important;
 }
 
-.dg-steps .dg-tools-chip:hover {
-  background: transparent;
+.dg-progress .dg-tools-chip:hover {
+  background: var(--dg-x-hover);
   color: var(--dg-x-text2) !important;
 }
 
-.dg-steps .dg-tools-list {
-  margin: -4px 0 0;
+.dg-progress .dg-tools-list {
+  margin: 0 0 0 4px;
+  padding: 2px 0 2px 12px;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .dg-steps-status,
-  .dg-step-icon {
+  .dg-progress-status,
+  .dg-pstep-icon,
+  .dg-progress,
+  .dg-progress .dg-pstep-label,
+  .dg-progress .dg-pstep-note,
+  .dg-progress-title {
     animation: none !important;
   }
 }

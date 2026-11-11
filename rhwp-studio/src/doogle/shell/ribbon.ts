@@ -120,6 +120,12 @@ export class Ribbon {
   private keytips = false;
   private altArmed = false;
   private readonly fileTab: HTMLButtonElement;
+  private readonly ink: HTMLSpanElement;
+  private readonly inkObserver: ResizeObserver | null;
+  /** 밑줄의 지금 목표 (탭 왼쪽 위치·폭) */
+  private inkAt = { x: 0, w: 0 };
+  /** 밑줄이 움직이는 중이면 끝나는 시각 (performance.now 기준) */
+  private inkMovingUntil = 0;
   private readonly aiButton: HTMLButtonElement;
   private readonly collapseButton: HTMLButtonElement;
 
@@ -147,6 +153,17 @@ export class Ribbon {
     file.addEventListener('click', () => { this.closeFlyout(); this.options.onFileTab(file); });
     this.tablist.appendChild(file);
     this.fileTab = file;
+
+    // 선택 밑줄 — 탭을 옮기면 새 탭으로 미끄러져 간다 (placeInk)
+    this.ink = document.createElement('span');
+    this.ink.className = 'dg-tab-ink';
+    this.ink.setAttribute('aria-hidden', 'true');
+    this.tablist.appendChild(this.ink);
+    this.tablist.classList.add('dg-tabs--ink');
+    // 창 크기·글꼴로 탭 폭이 바뀌면 밑줄을 (움직임 없이) 다시 맞춘다 — 탭마다 지켜본다(renderTab)
+    this.inkObserver = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => this.placeInk(false)) : null;
+    this.inkObserver?.observe(this.tablist);
+    void document.fonts?.ready.then(() => this.placeInk(false));
 
     for (const tab of RIBBON_TABS) this.renderTab(tab);
 
@@ -353,6 +370,7 @@ export class Ribbon {
     });
     if (tab.contextual) button.hidden = true;
     this.tablist.appendChild(button);
+    this.inkObserver?.observe(button);
 
     const panel = document.createElement('div');
     panel.className = 'dg-rpanel';
@@ -425,6 +443,7 @@ export class Ribbon {
   select(id: string, focusTab: boolean): void {
     const r = this.rendered.find((x) => x.tab.id === id);
     if (!r || r.button.hidden) return;
+    const prev = this.active;
     for (const x of this.rendered) {
       const on = x === r;
       x.button.setAttribute('aria-selected', String(on));
@@ -432,10 +451,61 @@ export class Ribbon {
       x.panel.hidden = !on;
     }
     this.active = r;
+    // 다른 탭으로 옮기면 밑줄이 미끄러지고, 새 패널은 옮긴 쪽에서 살짝 밀려 들어온다
+    const moved = !!prev && prev !== r;
+    this.placeInk(moved);
+    if (moved) {
+      const dir = this.rendered.indexOf(r) > this.rendered.indexOf(prev!) ? 1 : -1;
+      const groups = r.panel.querySelector<HTMLElement>('.dg-groups');
+      if (groups) {
+        groups.classList.remove('dg-groups--enter');
+        groups.style.setProperty('--dg-enter-x', `${dir * 14}px`);
+        void groups.offsetWidth; // 다시 시작하도록 한 번 그린다
+        groups.classList.add('dg-groups--enter');
+      }
+    }
     if (!r.tab.contextual) this.lastNonContextual = id;
     if (focusTab && document.activeElement && this.tablist.contains(document.activeElement)) r.button.focus();
-    this.refresh();
-    this.queueFit();
+    if (moved) {
+      // 단추 상태 갱신·폭 맞추기는 밑줄이 출발한 다음 프레임에 — 출발 프레임이 길어지면 밑줄이 튀어 보인다
+      requestAnimationFrame(() => {
+        if (this.active !== r) return;
+        this.refresh();
+        this.queueFit();
+      });
+    } else {
+      this.refresh();
+      this.queueFit();
+    }
+  }
+
+  /** 선택 밑줄을 지금 탭 아래로. animate 면 미끄러지고, 아니면 바로 옮긴다 */
+  /**
+   * 밑줄은 폭 100px 짜리 막대 하나를 transform(이동 + 가로 늘이기) 한 번으로 옮긴다 — 폭과 위치를
+   * 따로 움직이면 양 끝이 엇박자로 움직여 들쭉날쭉해 보인다. 시간은 거리에 비례(짧으면 빠르게,
+   * 멀면 조금 길게)해 어느 탭으로 가든 같은 속도감이 나게 한다.
+   * 크기 감시(ResizeObserver)가 움직이는 도중에 부르면 끊지 않고 목표만 고친다.
+   */
+  private placeInk(animate: boolean): void {
+    const b = this.active?.button;
+    if (!b || b.hidden || !b.offsetWidth) {
+      this.ink.style.opacity = '0';
+      return;
+    }
+    const x = b.offsetLeft;
+    const w = b.offsetWidth;
+    if (x === this.inkAt.x && w === this.inkAt.w && this.ink.style.opacity === '') return;
+    const moving = performance.now() < this.inkMovingUntil;
+    if (animate || moving) {
+      // 어느 탭으로 가든 같은 시간(CSS 0.22s) — 거리마다 시간이 다르면 들쭉날쭉해 보인다
+      if (animate) this.inkMovingUntil = performance.now() + 240;
+      this.ink.classList.remove('dg-tab-ink--still');
+    } else {
+      this.ink.classList.add('dg-tab-ink--still');
+    }
+    this.inkAt = { x, w };
+    this.ink.style.opacity = '';
+    this.ink.style.transform = `translateX(${x}px) scaleX(${w / 100})`;
   }
 
   // ── 묶음·단추 ─────────────────────────────────────────

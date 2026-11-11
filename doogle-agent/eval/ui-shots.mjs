@@ -171,7 +171,7 @@ try {
   await click('.dg-send');
   await held;
   await sleep(500);
-  facts.runningStatus = await textOf('.dg-steps-head > *, .dg-step');
+  facts.runningStatus = await textOf('.dg-progress-head > *, .dg-pstep');
   await shot('11-turn-running');
   await shot('11b-turn-running-sidebar', side ?? undefined);
   gate.release();
@@ -179,7 +179,7 @@ try {
   await sleep(1500);
   facts.placeholderAfter = await page.evaluate(() => document.querySelector('.dg-input')?.placeholder);
   facts.turnOrder = await page.evaluate(() => [...(document.querySelector('.dg-turn')?.children ?? [])].map((n) => n.className.split(' ')[0]));
-  facts.doneSteps = await textOf('.dg-steps-head > *, .dg-step, .dg-steps-sum > *');
+  facts.doneSteps = await textOf('.dg-progress-head > *, .dg-pstep, .dg-progress-sum > *');
   facts.reviewPill = await textOf('.dg-review-pill .dg-pill-count, .dg-review-pill .dg-pop-btn:not([hidden])');
   facts.revertWhilePending = await page.evaluate(() => [...document.querySelectorAll('.dg-act-revert')].map((b) => !b.hidden));
   await shot('12-turn-done-review');
@@ -262,13 +262,12 @@ try {
   await ask('오류 상황을 보여줘');
   await session.review('reject');
   await page.evaluate(() => {
-    const chips = [...document.querySelectorAll('.dg-tools-chip')];
-    chips.at(-1)?.click();
     const scroller = document.querySelector('.dg-scroll');
     if (scroller) scroller.scrollTop = scroller.scrollHeight;
   });
   await sleep(300);
-  facts.toolFailure = await page.evaluate(() => [...document.querySelectorAll('.dg-tool')].filter((li) => li.querySelector('.dg-tool-reason')).map((li) => ({ state: li.dataset.state, reason: li.querySelector('.dg-tool-reason').textContent, rawFolded: !li.querySelector('.dg-tool-raw')?.open })));
+  // 도구 기록은 사이드바에 두지 않는다 — 실패는 진행 카드의 단계 줄로 보인다
+  facts.toolFailure = await textOf('.dg-pstep[data-state="error"]');
   facts.cards = await textOf('.dg-card:not(.dg-ask):not(.dg-start) .dg-card-title');
   await shot('20-tool-error-and-limit', side ?? undefined);
 

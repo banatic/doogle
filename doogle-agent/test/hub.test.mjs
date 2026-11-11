@@ -318,6 +318,32 @@ describe('doogle hub', () => {
     s2.close();
   });
 
+  test('대화는 문서에 딸린다 — threads_query 는 그 문서의 대화만, 문서 없음(null)은 빈 목록', async () => {
+    const s = new Client(studioUrl());
+    await s.open();
+    const a = { key: 'c:\\docs\\a.hwp', name: 'a.hwp' };
+    const b = { key: 'c:\\docs\\b.hwp', name: 'b.hwp' };
+    s.send({ type: 'chat_send', threadId: 't30', providerId: 'fake', text: 'A 문서 요청', mode: 'agent', doc: a });
+    await s.collectTurn('t30');
+    s.send({ type: 'chat_send', threadId: 't31', providerId: 'fake', text: 'B 문서 요청', mode: 'agent', doc: b });
+    await s.collectTurn('t31');
+    s.send({ type: 'threads_query', reqId: 'qa', doc: a });
+    const la = await s.next((m) => m.type === 'threads' && m.reqId === 'qa');
+    assert.deepEqual(la.list.map((t) => t.id), ['t30']);
+    // 경로를 모르는 쪽(브라우저)은 파일 이름으로 맞춘다
+    s.send({ type: 'threads_query', reqId: 'qn', doc: { key: '', name: 'B.HWP' } });
+    const ln = await s.next((m) => m.type === 'threads' && m.reqId === 'qn');
+    assert.deepEqual(ln.list.map((t) => t.id), ['t31']);
+    // 자동 저장에서 복구한 문서("b 복구본.hwp", 경로 없음)도 원래 문서의 대화를 본다
+    s.send({ type: 'threads_query', reqId: 'qr', doc: { key: '', name: 'b 복구본.hwp' } });
+    const lr = await s.next((m) => m.type === 'threads' && m.reqId === 'qr');
+    assert.deepEqual(lr.list.map((t) => t.id), ['t31']);
+    s.send({ type: 'threads_query', reqId: 'q0', doc: null });
+    const l0 = await s.next((m) => m.type === 'threads' && m.reqId === 'q0');
+    assert.deepEqual(l0.list, []);
+    s.close();
+  });
+
   test('끝맺지 못한 기록(허브가 죽음)은 불러올 때 interrupted 로 닫는다', async () => {
     await fs.mkdir(path.join(dataDir, 'threads'), { recursive: true });
     await fs.writeFile(path.join(dataDir, 'threads', 't21.json'), JSON.stringify({

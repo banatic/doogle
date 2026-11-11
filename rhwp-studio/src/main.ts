@@ -188,6 +188,18 @@ async function completeHostSave(fileName?: string): Promise<{ ok: true; wasDirty
   links: { setHandler: setLinkHostHandler },
   forms: { setActionsEnabled: setFormActionsEnabled },
   fonts: { setProvider: setHostFontProvider, getState: getHostFontState },
+  // [doogle] 쪽 좌표(px, 배율 1) → #scroll-content 안 좌표. 캐럿과 같은 계산(caret-renderer updatePosition).
+  // 읽기 전용 — 문서 위에 장식(에이전트 편집 표시)을 얹을 때 쓴다. 뷰가 없으면 null.
+  view: {
+    pageToContent: (pageIndex: number, x: number, y: number): { left: number; top: number; zoom: number } | null => {
+      if (!canvasView) return null;
+      const vs = canvasView.getVirtualScroll();
+      const zoom = canvasView.getViewportManager().getZoom();
+      const content = document.getElementById('scroll-content');
+      const pageLeft = vs.getPageLeftResolved(pageIndex, content?.clientWidth ?? 0);
+      return { left: pageLeft + x * zoom, top: vs.getPageOffset(pageIndex) + y * zoom, zoom };
+    },
+  },
 };
 
 // E2E 테스트용 전역 노출 (개발 모드 전용)

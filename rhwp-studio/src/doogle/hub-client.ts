@@ -71,6 +71,33 @@ export type AgentEvent =
   /** interrupted: 화면이 사라져(새로고침·창 닫힘) hub 가 멈췄거나, hub 가 죽어 끝맺지 못한 기록. at 은 기록에만 있다 */
   | { kind: 'turn_end'; reason: 'done' | 'cancelled' | 'error' | 'interrupted'; at?: string };
 
+/**
+ * 대화가 딸린 문서. key = 정규화한 전체 경로(데스크탑에서 알 때만, 아니면 ''), name = 파일 이름.
+ * 문서가 없거나 저장 안 한 새 문서면 null — 그때는 지난 대화를 보이지 않는다.
+ */
+export interface DocIdentity {
+  key: string;
+  name: string;
+}
+
+/** 같은 문서인가 — 둘 다 경로를 알면 경로로, 아니면 파일 이름으로 (hub threads.mjs docMatches 와 같은 규칙) */
+export function sameDoc(a: DocIdentity | null | undefined, b: DocIdentity | null | undefined): boolean {
+  if (!a || !b) return !a && !b;
+  if (a.key && b.key) return a.key === b.key;
+  const stem = docStem(a.name);
+  return !!stem && stem === docStem(b.name);
+}
+
+/**
+ * 이름으로 맞출 때의 문서 줄기 — 확장자와 끝의 " 복구본" 을 뗀다. 자동 저장에서 복구한 문서는
+ * "X 복구본.hwp"(경로 없음)로 열리므로 원래 "X.hwpx" 의 대화와 이어져야 한다 (hub threads.mjs 와 같은 규칙).
+ */
+export function docStem(name: string | null | undefined): string {
+  let s = String(name ?? '').trim().toLowerCase().replace(/\.(hwpx|hwp|hml)$/i, '');
+  while (/\s*복구본$/.test(s)) s = s.replace(/\s*복구본$/, '');
+  return s.trim();
+}
+
 /** 저장된 대화 (hub `threads_query` → `threads`) */
 export interface SavedThreadInfo {
   id: string;
@@ -79,6 +106,7 @@ export interface SavedThreadInfo {
   updatedAt: string;
   turns: number;
   running: boolean;
+  doc?: DocIdentity | null;
 }
 
 /** 화면 복원용 기록 한 줄 — 사용자 요청 또는 그때 화면에 보낸 agent_event */
@@ -315,14 +343,16 @@ export class HubClient {
     text: string;
     mode: AgentMode;
     context?: ChatContext;
+    /** 이 대화가 딸린 문서 — hub 가 대화에 적어 두고 목록을 문서별로 거른다 */
+    doc?: DocIdentity | null;
   }): boolean {
     return this.send({ type: 'chat_send', ...input });
   }
 
-  /** 저장된 대화 목록 (최근 것부터) */
-  async listThreads(limit = 50): Promise<SavedThreadInfo[]> {
+  /** 이 문서의 저장된 대화 목록 (최근 것부터). doc 이 null 이면 빈 목록 */
+  async listThreads(doc: DocIdentity | null, limit = 50): Promise<SavedThreadInfo[]> {
     const response = await this.request<{ type: 'threads'; list: SavedThreadInfo[] }>(
-      { type: 'threads_query', limit },
+      { type: 'threads_query', limit, doc },
       'threads',
       { timeoutMs: 15_000 },
     );

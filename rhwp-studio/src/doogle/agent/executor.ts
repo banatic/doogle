@@ -367,6 +367,7 @@ export class DoogleToolExecutor {
     }
     this.deps.refreshView?.();
     const engine = this.engine();
+    this.announceEdit(engine, tool, touches);
     const after = this.buildAfter(engine, baseline, touches);
     const out: Record<string, unknown> = { revision: revAfter, ...result, after };
     if (staged) {
@@ -518,6 +519,41 @@ export class DoogleToolExecutor {
     }
   }
 
+  /** 바뀐 곳의 쪽 사각형(쪽 px, 배율 1) — 표는 셀 상자, 글은 문단 범위 선택 사각형 */
+  private touchedRects(engine: Engine, touches: Touch[]): SelectionRect[] {
+    const rects: SelectionRect[] = [];
+    for (const t of touches) {
+      const first = t.tableCells?.[0];
+      const table = t.table ?? (t.cell ? { paraIdx: t.cell.paraIdx, controlIdx: t.cell.controlIdx } : first ? { paraIdx: first.paraIdx, controlIdx: first.controlIdx } : null);
+      if (table) {
+        const only = t.table ? null : t.tableCells ? new Set(t.tableCells.map((c) => c.cellIdx)) : t.cell ? new Set([t.cell.cellIdx]) : null;
+        for (const b of engine.tableCellBoxes(t.sectionIdx, table.paraIdx, table.controlIdx)) {
+          if (!only || only.has(b.cellIdx)) rects.push({ pageIndex: b.pageIndex, x: b.x, y: b.y, width: b.w, height: b.h });
+        }
+        continue;
+      }
+      if (t.wholeSection) continue;
+      const count = engine.paragraphCount(t.sectionIdx);
+      const end = Math.min(t.paraEnd, count - 1);
+      if (end < t.paraStart) continue;
+      rects.push(...engine.selectionRects(t.sectionIdx, t.paraStart, 0, end, engine.length(t.sectionIdx, end)));
+    }
+    return rects;
+  }
+
+  /**
+   * 화면에 "여기를 고쳤다" 를 알린다 — 문서 위 편집 표시(ui/edit-swarm.ts)가 window 이벤트
+   * `doogle:agent-edit {rects, tool}` 를 받아 커서 무리를 그 자리로 보낸다. 표시일 뿐이라 실패해도 조용히 넘어간다.
+   */
+  private announceEdit(engine: Engine, tool: string, touches: Touch[]): void {
+    const target = (globalThis as { window?: Window }).window;
+    if (!target || typeof CustomEvent === 'undefined') return;
+    try {
+      const rects = this.touchedRects(engine, touches).slice(0, 40);
+      if (rects.length > 0) target.dispatchEvent(new CustomEvent('doogle:agent-edit', { detail: { rects, tool } }));
+    } catch { /* 위치를 못 얻으면 표시를 건너뛴다 */ }
+  }
+
   private async renderTouched(engine: Engine, touches: Touch[], pages: number[], mode: 'crop' | 'page'): Promise<Record<string, unknown> | null> {
     let regions: CropRegion[];
     if (mode === 'page') {
@@ -526,23 +562,7 @@ export class DoogleToolExecutor {
         return f ? [{ pageIndex: p, x: 0, y: 0, width: f.width, height: f.height }] : [];
       });
     } else {
-      const rects: SelectionRect[] = [];
-      for (const t of touches) {
-        const first = t.tableCells?.[0];
-        const table = t.table ?? (t.cell ? { paraIdx: t.cell.paraIdx, controlIdx: t.cell.controlIdx } : first ? { paraIdx: first.paraIdx, controlIdx: first.controlIdx } : null);
-        if (table) {
-          const only = t.table ? null : t.tableCells ? new Set(t.tableCells.map((c) => c.cellIdx)) : t.cell ? new Set([t.cell.cellIdx]) : null;
-          for (const b of engine.tableCellBoxes(t.sectionIdx, table.paraIdx, table.controlIdx)) {
-            if (!only || only.has(b.cellIdx)) rects.push({ pageIndex: b.pageIndex, x: b.x, y: b.y, width: b.w, height: b.h });
-          }
-          continue;
-        }
-        if (t.wholeSection) continue;
-        const count = engine.paragraphCount(t.sectionIdx);
-        const end = Math.min(t.paraEnd, count - 1);
-        if (end < t.paraStart) continue;
-        rects.push(...engine.selectionRects(t.sectionIdx, t.paraStart, 0, end, engine.length(t.sectionIdx, end)));
-      }
+      const rects = this.touchedRects(engine, touches);
       if (rects.length === 0) {
         // 위치를 못 얻으면(빈 문단·구역 설정) 바뀐 쪽 전체
         return this.renderTouched(engine, touches, pages, 'page');
