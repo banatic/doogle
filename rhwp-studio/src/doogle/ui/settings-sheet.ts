@@ -37,10 +37,11 @@ export const SECRET_KEY_OF: Record<string, { key: string; placeholder: string; l
 };
 
 /** 터미널 로그인이 필요한 provider → 복사할 명령과 안내 */
-const TERMINAL_LOGIN: Record<string, { command: string; steps: string; okNote: string }> = {
+const TERMINAL_LOGIN: Record<string, { command: string; steps: string; okNote: string; open?: boolean }> = {
   'claude-sdk': {
     command: 'claude',
-    steps: '"터미널 명령 복사"로 복사한 명령을 PowerShell 에 붙여 넣어 Claude Code 를 실행한 뒤 /login 으로 로그인하세요. 로그인한 뒤 "다시 확인"을 누르세요.',
+    steps: '"터미널에서 열기"를 누르면 Claude Code 가 새 창으로 열립니다. 거기서 /login 으로 로그인한 뒤 "다시 확인"을 누르세요.',
+    open: true,
     okNote: '터미널의 claude 로그인을 그대로 씁니다. 두글은 Claude 로그인 정보를 읽지 않습니다.',
   },
   'codex-app-server': {
@@ -184,6 +185,15 @@ export class SettingsSheet {
         copy.dataset.key = `${provider.id}:copy`;
         copy.append(icon('terminal', 13, 2), el('span', '', '터미널 명령 복사'));
         copy.title = `"${command}" 복사`;
+        if (terminal.open) {
+          const open = btn('dg-btn dg-btn-primary', '', () => this.openTerminal(provider.id));
+          open.dataset.key = `${provider.id}:open`;
+          open.append(icon('terminal', 13, 2), el('span', '', '터미널에서 열기'));
+          open.title = 'Claude Code 를 새 터미널 창으로 엽니다';
+          copy.className = 'dg-btn dg-btn-quiet';
+          copy.lastElementChild!.textContent = '명령 복사';
+          acts.append(open);
+        }
         acts.append(copy, this.recheckButton(provider.id));
         card.append(acts);
       }
@@ -260,6 +270,13 @@ export class SettingsSheet {
     recheck.dataset.key = `${providerId}:recheck`;
     recheck.disabled = this.checking;
     return recheck;
+  }
+
+  private openTerminal(providerId: string): void {
+    this.host.hub.openTerminal(providerId).then(
+      () => this.host.announce('터미널에 Claude Code 를 열었습니다. /login 으로 로그인한 뒤 "다시 확인"을 누르세요'),
+      (error: unknown) => this.host.announce(`터미널을 열지 못했습니다: ${messageOf(error)}`),
+    );
   }
 
   private copyCommand(command: string): void {

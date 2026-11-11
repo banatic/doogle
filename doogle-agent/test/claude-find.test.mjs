@@ -30,3 +30,16 @@ test('desktop Claude: picks the newest claude.exe under Claude-Data and %APPDATA
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('open terminal: starts the found Claude Code in a new console window, never a login screen', async () => {
+  const { openClaudeTerminal } = await import('../src/providers/claude-sdk.mjs');
+  const calls = [];
+  const spawnFn = (cmd, args, opts) => { calls.push({ cmd, args, opts }); return { on() {}, unref() {} }; };
+  const exe = String.raw`C:\Users\u\AppData\Local\Claude-Data\claude_x\claude-code\2.1.321\b\claude.exe`;
+  assert.equal(openClaudeTerminal({ exe, cwd: String.raw`C:\w`, platform: 'win32', spawnFn }), exe);
+  assert.equal(calls[0].cmd, 'cmd.exe');
+  assert.equal(calls[0].args.at(-1), `"start "Claude Code" "${exe}""`);
+  assert.equal(calls[0].opts.windowsVerbatimArguments, true);
+  assert.deepEqual(openClaudeTerminal({ exe: '/usr/local/bin/claude', platform: 'darwin', spawnFn }) && calls[1].args, ['-a', 'Terminal', '/usr/local/bin/claude']);
+  assert.throws(() => openClaudeTerminal({ exe: null, spawnFn }), /찾을 수 없습니다/);
+});

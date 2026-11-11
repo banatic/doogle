@@ -8,6 +8,7 @@
 // - 두글은 claude.ai 로그인 UI를 제공하지 않는다. 미로그인이면 터미널에서 `claude` → /login 안내.
 import { promises as fs, readdirSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { spawn as spawnRaw } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import spawn from 'cross-spawn';
@@ -114,6 +115,28 @@ export function findClaude(env = process.env, platform = process.platform) {
     if (statSync(local).isFile()) return local;
   } catch { /* 없음 */ }
   return desktopClaudeBinary(env, platform);
+}
+
+/**
+ * 새 터미널 창에 Claude Code 를 띄운다 — 사용자가 거기서 직접 /login 한다. 두글은 로그인 화면을 만들지도,
+ * 로그인 과정에 끼어들지도 않고 공식 CLI 를 여는 것까지만 한다 (CONTRACT §0: 로그인은 사용자가 claude 로 직접).
+ * @returns {string} 띄운 실행 파일
+ */
+export function openClaudeTerminal({ exe = findClaude(), cwd = os.homedir(), platform = process.platform, spawnFn = spawnRaw } = {}) {
+  if (!exe) throw new ProviderError('CLAUDE_NOT_FOUND', 'Claude Code를 찾을 수 없습니다. Claude 데스크탑 앱이나 Claude Code를 설치하세요.');
+  const quiet = { cwd, detached: true, stdio: 'ignore' };
+  let child;
+  if (platform === 'win32') {
+    // start "제목" "실행 파일" — 새 콘솔 창. 따옴표를 그대로 넘기려고 verbatim
+    child = spawnFn('cmd.exe', ['/d', '/s', '/c', `"start "Claude Code" "${exe}""`], { ...quiet, windowsVerbatimArguments: true, windowsHide: false });
+  } else if (platform === 'darwin') {
+    child = spawnFn('open', ['-a', 'Terminal', exe], quiet);
+  } else {
+    child = spawnFn('x-terminal-emulator', ['-e', exe], quiet);
+  }
+  child.on?.('error', () => { /* 터미널을 못 띄우면 복사 안내가 남아 있다 */ });
+  child.unref?.();
+  return exe;
 }
 
 async function exists(p) {
@@ -324,6 +347,13 @@ export default {
       return { available: false, reason: 'Claude Code에 로그인되어 있지 않습니다.', models: fallbackModels(), authHint: AUTH_HINT, loginCommand };
     }
     return { available: true, models: fallbackModels(), authHint: AUTH_HINT };
+  },
+
+  /** 로그인하라고 터미널에 Claude Code 를 띄운다 (hub `open_terminal`) */
+  async openTerminal() {
+    const cwd = path.join(appDataDir(), 'claude-workspace');
+    await fs.mkdir(cwd, { recursive: true });
+    return { exe: openClaudeTerminal({ cwd }) };
   },
 
   /** 실시간 모델 목록 (hub의 model-catalog가 캐시·fallback을 맡는다) */

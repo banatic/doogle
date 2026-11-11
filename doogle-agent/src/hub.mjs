@@ -566,6 +566,22 @@ export async function createHub(opts = {}) {
     send(socket, { type: 'providers', list: await providersList() });
   }
 
+  /** 터미널 로그인이 필요한 provider — 공식 CLI 를 새 터미널 창에 띄운다 (S→H `open_terminal {providerId}`) */
+  async function onOpenTerminal(msg, socket) {
+    const providerId = msg.providerId;
+    const p = providers.get(providerId);
+    const reply = (body) => send(socket, { type: 'open_terminal_done', providerId, ...(typeof msg.reqId === 'string' ? { reqId: msg.reqId } : {}), ...body });
+    if (!p || typeof p.openTerminal !== 'function') {
+      return reply({ ok: false, error: { code: 'UNSUPPORTED', message: '이 provider는 터미널 열기를 지원하지 않습니다' } });
+    }
+    try {
+      await p.openTerminal();
+      reply({ ok: true });
+    } catch (err) {
+      reply({ ok: false, error: { code: typeof err?.code === 'string' ? err.code : 'OPEN_FAILED', message: String(err?.message ?? err) } });
+    }
+  }
+
   async function onAuthLogout(msg, socket) {
     const providerId = msg.providerId;
     const p = providers.get(providerId);
@@ -642,6 +658,8 @@ export async function createHub(opts = {}) {
           return;
         case 'auth_logout':
           return void onAuthLogout(msg, ws);
+        case 'open_terminal':
+          return void onOpenTerminal(msg, ws);
         default:
           return send(ws, { type: 'error', code: 'UNKNOWN_TYPE', message: `알 수 없는 메시지: ${msg.type}` });
       }

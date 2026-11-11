@@ -414,6 +414,25 @@ export class HubClient {
     return this.send({ type: 'auth_start', providerId });
   }
 
+  /**
+   * 터미널 로그인 provider 의 CLI 를 새 터미널 창에 띄운다 — 사용자가 거기서 직접 로그인한다.
+   * S→H `open_terminal {providerId}` → H→S `open_terminal_done {providerId, ok, error?}`.
+   */
+  async openTerminal(providerId: string): Promise<void> {
+    const response = await this.request<{ type: 'open_terminal_done'; providerId: string; ok: boolean; error?: ToolError | string }>(
+      { type: 'open_terminal', providerId },
+      'open_terminal_done',
+      { timeoutMs: 10_000, match: (r) => r.providerId === providerId },
+    );
+    if (!response.ok) {
+      const error = response.error;
+      throw new HubRequestError(
+        typeof error === 'object' && error ? error.code : 'OPEN_FAILED',
+        typeof error === 'object' && error ? error.message : String(error ?? '터미널을 열지 못했습니다'),
+      );
+    }
+  }
+
   /** 진행 중인 로그인 취소 (S→H `auth_cancel {providerId}`). */
   cancelLogin(providerId: string): boolean {
     return this.send({ type: 'auth_cancel', providerId });
