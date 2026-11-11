@@ -369,6 +369,8 @@ export class DoogleSidebar {
   private attachBtn!: HTMLButtonElement;
   /** 대화 목록에서 "지울까요?" 를 묻고 있는 대화 */
   private confirmDeleteId: string | null = null;
+  /** 응답 도중 "새 대화" 를 눌렀다 — 응답이 끝나면 새 대화로 옮긴다 */
+  private newThreadDeferred = false;
   /** 연결이 끊겨 응답을 잠시 붙들고 있는 동안의 타이머 — 같은 화면으로 다시 붙으면 이어 간다 */
   private suspendTimer: ReturnType<typeof setTimeout> | null = null;
   /** 지금 문서 — 대화 목록·새 대화가 이 문서를 따른다 */
@@ -941,7 +943,13 @@ export class DoogleSidebar {
   }
 
   private newThread(): void {
-    if (this.busy) this.cancel();
+    if (this.busy) {
+      // 응답을 멈추고, 끝났다는 신호(turn_end)가 온 뒤에 새 대화로 옮긴다. 먼저 옮기면 그 신호가
+      // "보고 있지 않은 대화의 것" 이라 버려져, 보내기 단추가 계속 "중지" 로 남는다(endTurn 이 옮긴다).
+      this.newThreadDeferred = true;
+      this.cancel();
+      return;
+    }
     if (this.thread.turns.length === 0) {
       this.input?.focus();
       return;
@@ -1761,6 +1769,10 @@ export class DoogleSidebar {
     if (follow) requestAnimationFrame(() => this.scrollToBottom());
     const count = reviewStore.count;
     this.announce(count > 0 ? `응답 완료. 검토할 변경 ${count}건` : '응답 완료');
+    if (this.newThreadDeferred) {
+      this.newThreadDeferred = false;
+      if (!this.replaying) this.newThread();
+    }
     if (turn && count > 0 && !this.replaying) {
       const first = reviewStore.rows().find((r) => turn.changeIds.has(r.id)) ?? reviewStore.rows()[0];
       if (first) reviewStore.focus(first.id, true);

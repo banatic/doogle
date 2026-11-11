@@ -25,10 +25,16 @@ async function withReviewOverlay(host: PluginHost, runtime: DoogleAgentRuntime):
   } catch (error) {
     console.error('[doogle] 문서 위 검토 막을 올리지 못했습니다', error);
   }
+  // 문서가 바뀌면 이전 문서의 검토 대기 목록을 바로 비운다 — 다음 tool 호출까지 남겨 두면
+  // 그사이의 "모두 적용/거절" 이 새 문서에 옛 문서의 스냅샷 번호로 들어간다
+  const offSwap = host.onDocumentSwap(() => {
+    try { runtime.noteDocumentSwap?.(); } catch (error) { console.error('[doogle] 문서 교체 뒤 검토 목록 정리 실패', error); }
+  });
   return {
     ...runtime,
     pending: runtime.pending,
     dispose: () => {
+      offSwap();
       overlay?.dispose();
       runtime.dispose();
     },

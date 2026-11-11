@@ -381,7 +381,16 @@ const plugins = new PluginHostRegistry({
   automation,
   eventBus,
   getInputHandler: () => inputHandler,
-  loadDocument: (bytes, fileName) => loadBytes(bytes, fileName ?? 'document.hwp', null),
+  // [doogle] 플러그인(데스크탑 셸의 열기)이 부른다. 실패하면 다른 열기 경로처럼 사유를 보이고
+  // 이전 문서 화면을 되살린 뒤 던진다 — 조용히 빈 쪽만 남지 않게.
+  loadDocument: async (bytes, fileName, options) => {
+    try {
+      await loadBytes(bytes, fileName ?? 'document.hwp', (options?.fileHandle ?? null) as typeof wasm.currentFileHandle);
+    } catch (error) {
+      showLoadErrorUnlessCancelled(error);
+      throw error;
+    }
+  },
   createBlankDocument: async (options) => {
     if (options?.confirmUnsaved && !await canReplaceCurrentDocument()) return false;
     await createNewDocument();

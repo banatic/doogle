@@ -203,7 +203,7 @@ export async function initDoogle(host: PluginHost): Promise<PluginSurface> {
       opensDialog: true,
       execute: async () => {
         const path = await desk.pickOpenFile();
-        if (path) await openPath(host, desk, path);
+        if (path) await openPath(host, desk, shell, path);
       },
     });
     host.automation.addMenuItem({ menuId: 'file', commandId: DOOGLE_OPEN_COMMAND, position: 'top' });
@@ -216,8 +216,9 @@ export async function initDoogle(host: PluginHost): Promise<PluginSurface> {
       const paths = await desk.takeOpenRequests().catch(() => [] as string[]);
       // 한 창에 문서 하나 — 여러 개가 오면 마지막 것을 연다.
       const last = paths[paths.length - 1];
-      if (last) await openPath(host, desk, last);
+      if (last) await openPath(host, desk, shell, last);
     };
+    shell.setBackstagePathOpener((path) => openPath(host, desk, shell, path));
     offs.push(await desk.onOpenRequest(() => void drainOpens()));
     void drainOpens();
   }
@@ -292,17 +293,26 @@ function currentDocumentName(): string {
   return title === 'rhwp-studio' ? '' : title;
 }
 
+/**
+ * 디스크의 문서를 연다(데스크탑: 열기 대화상자 · 탐색기에서 열기 · 최근 문서).
+ *  - 지금 문서에 저장 안 한 변경·검토 대기 변경이 있으면 먼저 묻는다. 취소하면 열지 않는다.
+ *  - 저장 손잡이를 함께 넘겨, 「저장」이 대화상자 없이 이 경로에 쓰게 한다.
+ *  - 읽지 못하면(파일 없음·잠김) 알린다. 파싱 실패는 host.loadDocument 가 알리고 이전 문서 화면을 되살린다.
+ */
 async function openPath(
   host: PluginHost,
   desk: typeof import('./ui/desk-bridge.ts'),
+  shell: typeof import('./shell/index.ts'),
   path: string,
-): Promise<void> {
-  try {
+): Promise<boolean> {
+  return shell.replaceDocument(async () => {
     const bytes = await desk.readFile(path);
-    await host.loadDocument(bytes, desk.baseName(path));
+    try {
+      await host.loadDocument(bytes, desk.baseName(path), { fileHandle: shell.deskFileHandle(path) });
+    } catch (error) {
+      throw Object.assign(error instanceof Error ? error : new Error(String(error)), { doogleShown: true });
+    }
     // shell 의 제목 표시줄·최근 문서 카드·「폴더에서 보기」가 경로를 알 수 있게 알린다.
     window.dispatchEvent(new CustomEvent('doogle:doc-path', { detail: { path } }));
-  } catch (error) {
-    console.error('[doogle] 문서를 열지 못했습니다', path, error);
-  }
+  });
 }

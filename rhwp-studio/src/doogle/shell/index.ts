@@ -24,6 +24,7 @@ import { Ribbon } from './ribbon';
 import { StatusAddons } from './status';
 import { installWindowControls, markDragRegion } from './window-controls';
 import { guardedSave, installCloseGuard } from './close-guard';
+import { installNativeSavePicker } from './native-file.ts';
 import { installUpdater } from './updater';
 import { getDocState, noteDocumentSwap, onDocState, refreshDocState, type DocState } from './doc-state';
 import { openPopupMenu, type PopupEntry } from './popup-menu';
@@ -37,7 +38,9 @@ export { getPendingCount, setPendingCount, setAgentState, getAgentState, announc
 export type { AgentConnState } from './status';
 export { getDocState, onDocState, noteDocumentPath, DOC_STATE_EVENT, DOC_PATH_EVENT } from './doc-state';
 export type { DocState } from './doc-state';
-export { confirmLeaveDocument, guardedSave } from './close-guard';
+export { confirmLeaveDocument, guardedSave, replaceDocument } from './close-guard';
+export { deskFileHandle, installNativeSavePicker } from './native-file.ts';
+export { setBackstagePathOpener } from './backstage';
 
 const AGENT_PANEL_ID = 'agent';
 /** "저장됨 ✓" 표시 시간 */
@@ -247,6 +250,8 @@ export function mountShell(): void {
   state = { ribbon, status, backstage, quick, host: null };
   // 창 닫기 → 저장 안 한 문서 확인(데스크탑 전용) + 저장 앞 검토 확인
   installCloseGuard();
+  // 「다른 이름으로 저장」의 대화상자를 OS 것으로 — 고른 경로에 직접 쓴다(데스크탑 전용)
+  installNativeSavePicker();
 
   // host 가 붙기 전에도 사용자의 조작 뒤에는 단추 상태를 다시 본다.
   document.addEventListener('pointerup', queueRefreshAll, true);
@@ -268,7 +273,11 @@ export function attachShellHost(host: PluginHost): void {
     host.events.on(name, queueRefreshAll);
   }
   host.onDocumentSwap(() => { noteDocumentSwap(); queueRefreshAll(); });
-  setBackstageLoader((bytes, fileName) => host.loadDocument(bytes, fileName));
+  // 서식으로 새 문서 열기도 지금 문서를 바꾼다 — 열기와 같은 확인을 거친다
+  setBackstageLoader((bytes, fileName) => host.loadDocument(bytes, fileName).catch((error: unknown) => {
+    // 파싱 실패는 host.loadDocument 가 이미 화면에 알렸다
+    throw Object.assign(error instanceof Error ? error : new Error(String(error)), { doogleShown: true });
+  }));
   state.status?.attach(host);
   installNarrowFit(host, { context, run });
   queueRefreshAll();

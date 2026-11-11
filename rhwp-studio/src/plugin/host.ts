@@ -21,6 +21,7 @@ import { readSelectionText } from './selection-text.ts';
 import {
   PLUGIN_API_VERSION,
   type DocumentLease,
+  type LoadDocumentOptions,
   type PluginError,
   type PluginErrorCode,
   type PluginHost,
@@ -46,7 +47,7 @@ export interface PluginHostDeps {
   eventBus: EventBus;
   getInputHandler: () => InputHandler | null;
   /** 문서 교체 위임 — 원자 교체·세대 증가·이전 문서 해제는 studio 가 한다. */
-  loadDocument: (bytes: Uint8Array, fileName?: string) => Promise<void>;
+  loadDocument: (bytes: Uint8Array, fileName?: string, options?: LoadDocumentOptions) => Promise<void>;
   createBlankDocument: (options?: { confirmUnsaved?: boolean }) => Promise<boolean>;
   /**
    * id 로 플러그인을 가져온다. **allowlist 는 이 훅이 쥔다** — 여기서 거절하면 호스트는
@@ -241,8 +242,8 @@ class PluginHostFacade implements PluginHost {
     };
   }
 
-  async loadDocument(bytes: Uint8Array, fileName?: string): Promise<void> {
-    await this.deps.loadDocument(bytes, fileName);
+  async loadDocument(bytes: Uint8Array, fileName?: string, options?: LoadDocumentOptions): Promise<void> {
+    await this.deps.loadDocument(bytes, fileName, options);
   }
 
   createBlankDocument(options?: { confirmUnsaved?: boolean }): Promise<boolean> {

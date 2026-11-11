@@ -139,6 +139,25 @@ export function confirmLeaveDocument(): Promise<boolean> {
   return pending;
 }
 
+/**
+ * 지금 문서를 다른 문서로 바꾼다(열기·서식·탐색기에서 열기). 저장 안 한 변경이나 검토 대기 변경이 있으면
+ * 먼저 묻고(취소하면 바꾸지 않는다), 실패는 조용히 넘기지 않는다. 바꿨으면 true.
+ * load 가 던진 오류 가운데 `shown` 표시가 있는 것은 이미 화면에 알린 것이다(파싱 실패 — host.loadDocument).
+ */
+export async function replaceDocument(load: () => Promise<void>, failed = '문서를 열지 못했습니다'): Promise<boolean> {
+  if (!(await confirmLeaveDocument())) return false;
+  try {
+    await load();
+    return true;
+  } catch (error) {
+    console.error(`[doogle] ${failed}`, error);
+    if (!(error as { doogleShown?: boolean } | null)?.doogleShown) {
+      notify(`${failed}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    return false;
+  }
+}
+
 function skipSaveAsk(): boolean {
   try { return localStorage.getItem(SKIP_SAVE_ASK_KEY) === '1'; } catch { return false; }
 }

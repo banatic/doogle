@@ -8,7 +8,8 @@
  */
 import './attach-tray.css';
 import {
-  ATTACH_ACCEPT, ATTACH_LIMITS, AttachError, classifyFile, formatBytes, payloadBytes, type AttachKind, type AttachmentPayload,
+  ATTACH_ACCEPT, ATTACH_LIMITS, AttachError, classifyFile, formatBytes, pasteIsAttachment, payloadBytes,
+  type AttachKind, type AttachmentPayload,
 } from '../attach/attach-core.ts';
 import { icon, type IconName } from './icons.ts';
 
@@ -210,7 +211,7 @@ export function createAttachTray(opts: {
       };
       const paste = (e: ClipboardEvent) => {
         const files = [...(e.clipboardData?.files ?? [])];
-        if (files.length === 0) return; // 글 붙여 넣기는 그대로 둔다
+        if (!pasteIsAttachment(files.length, e.clipboardData?.getData('text/plain') ?? '')) return;
         e.preventDefault();
         add(files);
       };

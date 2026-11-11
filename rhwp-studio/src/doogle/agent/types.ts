@@ -255,6 +255,8 @@ export interface DoogleAgentRuntime {
   executeTool(name: string, args: unknown, ctx: ToolContext): Promise<ToolResult>;
   pending: PendingApi;
   revision(): number;
+  /** 문서가 교체됐다(열기·새 문서) — 이전 문서의 검토 대기 변경을 그 자리에서 버린다 */
+  noteDocumentSwap?(): void;
   /** 구독 해제·스냅샷 반환 */
   dispose(): void;
 }

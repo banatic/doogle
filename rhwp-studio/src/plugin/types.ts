@@ -105,6 +105,20 @@ export interface Tx {
 }
 
 /**
+ * [doogle] `loadDocument` 선택 사항.
+ *  - `fileHandle`: 이 문서를 저장할 자리. 주면 「저장」이 저장 대화상자 없이 그 자리에 쓴다
+ *    (File System Access 의 파일 핸들과 같은 모양 — 데스크탑 셸은 디스크 경로로 쓰는 것을 준다).
+ */
+export interface LoadDocumentOptions {
+  fileHandle?: {
+    kind?: 'file';
+    name: string;
+    getFile(): Promise<File>;
+    createWritable(): Promise<{ write(data: Blob): Promise<void>; close(): Promise<void> }>;
+  } | null;
+}
+
+/**
  * 플러그인이 studio 에 요청할 수 있는 전부.
  *
  * 여기 없는 것은 **의도적으로 없다**. 특히 wasm 모듈 네임스페이스를 주지 않는다 — 주면
@@ -140,7 +154,7 @@ export interface PluginHost {
    * 문서 교체 위임. 원자 교체·세대 증가·이전 문서 해제는 studio 가 한다.
    * 비동기인 이유는 studio 의 열기 경로가 저장 안 된 변경 확인·복구 흐름을 포함하기 때문이다.
    */
-  loadDocument(bytes: Uint8Array, fileName?: string): Promise<void>;
+  loadDocument(bytes: Uint8Array, fileName?: string, options?: LoadDocumentOptions): Promise<void>;
   /**
    * 빈 문서로 교체한다. 끝날 때까지 기다릴 수 있다. `confirmUnsaved` 면 메뉴의 「새 문서」처럼
    * 저장 안 된 변경을 먼저 묻는다 — 사용자가 취소하면 `false` 이고 문서는 그대로다.

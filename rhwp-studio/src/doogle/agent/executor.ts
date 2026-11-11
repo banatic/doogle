@@ -183,16 +183,24 @@ export class DoogleToolExecutor {
     return ctx.threadId ?? (ctx.origin === 'mcp' ? 'mcp' : 'agent');
   }
 
-  private engine(): Engine {
-    const doc = this.deps.getDocument();
-    if (!doc) throw new DoogleToolError('NO_DOCUMENT', '두글에서 문서를 열어주세요 — no document is open in the studio.');
-    // 문서가 바뀌었으면 이전 문서의 스테이징은 의미가 없다
+  /**
+   * 문서가 바뀌었으면 이전 문서의 스테이징을 버린다 — 그 기준점·스냅샷 번호는 새 문서에서 뜻이 없다
+   * (번호는 문서마다 0 부터 다시 매겨지므로, 남겨 두면 "거절" 이 새 문서를 엉뚱한 되돌리기 지점으로 돌린다).
+   * 다음 tool 호출을 기다리지 않고 문서가 바뀐 그 자리에서 부른다(runtime.noteDocumentSwap).
+   */
+  syncDocumentInstance(): void {
     const instance = this.deps.documentInstance?.();
     if (instance !== this.lastInstance) {
       this.lastInstance = instance;
       this.staging.reset();
       this.journal.clear();
     }
+  }
+
+  private engine(): Engine {
+    const doc = this.deps.getDocument();
+    if (!doc) throw new DoogleToolError('NO_DOCUMENT', '두글에서 문서를 열어주세요 — no document is open in the studio.');
+    this.syncDocumentInstance();
     const engine = new Engine(doc);
     if (engine.sectionCount() === 0) throw new DoogleToolError('NO_DOCUMENT', 'No document is loaded in the studio; ask the user to open one.');
     return engine;

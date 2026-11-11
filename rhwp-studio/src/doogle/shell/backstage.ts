@@ -476,7 +476,10 @@ export class Backstage {
     open.title = path ?? doc.fileName;
     open.addEventListener('click', () => {
       this.close(false);
-      run('file:open-recent', { id: doc.id, anchorEl: open });
+      // 데스크탑에서 경로를 아는 문서는 그 경로로 바로 연다(저장도 그 자리에 된다).
+      // 경로를 모르면 upstream 의 최근 문서 열기(파일을 다시 고르게 한다)
+      if (path && pathOpener) void pathOpener(path);
+      else run('file:open-recent', { id: doc.id, anchorEl: open });
     });
 
     const pin = document.createElement('button');
@@ -516,13 +519,21 @@ export function setBackstageLoader(fn: DocLoader | null): void {
 }
 
 async function openTemplate(t: TemplateInfo): Promise<void> {
-  try {
+  const { replaceDocument } = await import('./close-guard');
+  // 지금 문서에 저장 안 한 변경이 있으면 먼저 묻는다
+  await replaceDocument(async () => {
     if (!loader) throw new Error('문서 로더가 아직 없습니다');
     const { readFile } = await import('../ui/desk-bridge');
     const bytes = await readFile(t.path);
     // 템플릿 원본을 덮어쓰지 않도록 이름만 붙여 새 문서처럼 연다(경로는 알리지 않는다).
     await loader(bytes, `${t.name}.hwpx`);
-  } catch (error) {
-    console.error('[doogle] 템플릿을 열지 못했습니다', t, error);
-  }
+  }, '서식을 열지 못했습니다');
+}
+
+type PathOpener = (path: string) => Promise<unknown>;
+let pathOpener: PathOpener | null = null;
+
+/** 경로로 문서를 여는 길(index.ts openPath) — 데스크탑의 최근 문서 카드가 쓴다 */
+export function setBackstagePathOpener(fn: PathOpener | null): void {
+  pathOpener = fn;
 }

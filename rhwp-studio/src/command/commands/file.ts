@@ -66,6 +66,7 @@ import { openDocumentViaPicker } from '../file-open-picker';
 import { PdfPrintDialog } from '@/ui/pdf-print-dialog';
 import { userSettings } from '@/core/user-settings';
 import { showToast } from '@/ui/toast';
+import { isDesk } from '@/doogle/ui/desk-bridge';
 import { addRecentDoc, clearRecentDocs, listRecentDocs, removeRecentDoc } from '@/recent/recent-store';
 import { openRecentEntry } from '@/recent/recent-open';
 
@@ -212,6 +213,9 @@ async function tryFileSystemSave(
     });
   } catch (error) {
     if (isUserCancelError(error)) return 'cancelled';
+    // [doogle] 데스크탑 앱은 디스크에 직접 쓴다. 쓰기가 실패했는데(다른 프로그램이 잠금·디스크 가득 등)
+    // 내려받기로 돌리고 "저장됨"으로 표시하면 원래 파일은 그대로인 채 문서가 깨끗해 보인다 — 실패를 알린다.
+    if (isDesk()) throw error;
     console.warn('[file:save] File System Access API 실패, 폴백:', error);
     return { method: 'fallback', handle: null, fileName: suggestedName };
   }

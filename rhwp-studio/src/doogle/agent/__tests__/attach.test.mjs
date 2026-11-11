@@ -384,3 +384,128 @@ test('attach: one message cannot carry more than the hub accepts — the size es
   const heavy = Array.from({ length: 8 }, () => ({ ...pic, images: [{ mimeType: 'image/png', base64: 'A'.repeat(7_000_000) }] }));
   assert.ok(payloadBytes(heavy) > ATTACH_LIMITS.messageBytes);
 });
+
+// ─── 점검에서 나온 결함 (조작된 파일 · 실제 Office 가 쓰는 꼴) ──────────
+
+/** 중앙 디렉터리의 크기를 마음대로 적는 zip — 항목마다 [이름, 내용, 적어 둘 크기] */
+function lyingZip(entries) {
+  const chunks = [];
+  const central = [];
+  let offset = 0;
+  const push = (buf) => { chunks.push(buf); offset += buf.length; };
+  /** 같은 압축 조각을 여러 항목이 함께 가리키게 한다 */
+  const blobs = new Map();
+  for (const [name, raw, declared] of entries) {
+    const nameBuf = Buffer.from(name, 'utf8');
+    let blob = blobs.get(raw);
+    if (!blob) {
+      const data = deflateRawSync(Buffer.from(raw));
+      const local = Buffer.alloc(30);
+      local.writeUInt32LE(0x04034b50, 0);
+      local.writeUInt16LE(8, 8);
+      local.writeUInt32LE(data.length, 18);
+      local.writeUInt32LE(declared ?? raw.length, 22);
+      local.writeUInt16LE(nameBuf.length, 26);
+      blob = { at: offset, packed: data.length };
+      push(local); push(nameBuf); push(data);
+      blobs.set(raw, blob);
+    }
+    const c = Buffer.alloc(46);
+    c.writeUInt32LE(0x02014b50, 0);
+    c.writeUInt16LE(8, 10);
+    c.writeUInt32LE(blob.packed, 20);
+    c.writeUInt32LE(declared ?? raw.length, 24);
+    c.writeUInt16LE(nameBuf.length, 28);
+    c.writeUInt32LE(blob.at, 42);
+    central.push(Buffer.concat([c, nameBuf]));
+  }
+  const dirStart = offset;
+  for (const c of central) push(c);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(entries.length, 8);
+  end.writeUInt16LE(entries.length, 10);
+  end.writeUInt32LE(offset - dirStart, 12);
+  end.writeUInt32LE(dirStart, 16);
+  push(end);
+  return new Uint8Array(Buffer.concat(chunks));
+}
+
+test('attach: a zip entry that inflates past its declared size is stopped while inflating, not after', async () => {
+  // 1KB 라고 적혀 있지만 120MB 로 풀린다 — 다 풀기 전에 멈춰야 한다
+  const bomb = lyingZip([['xl/worksheets/sheet1.xml', Buffer.alloc(120 * 1024 * 1024, 0x41), 1024]]);
+  const before = process.memoryUsage().rss;
+  const started = performance.now();
+  await assert.rejects(unzip(bomb, () => true), (e) => e instanceof AttachError && e.code === 'BAD_ZIP' && /크기가 맞지 않습니다/.test(e.message));
+  assert.ok(performance.now() - started < 1500, `took ${Math.round(performance.now() - started)}ms`);
+  assert.ok(process.memoryUsage().rss - before < 40 * 1024 * 1024, 'the inflated bytes must not have been buffered');
+  // 저장(무압축) 항목도 적어 둔 크기와 다르면 거절
+  const stored = zip([['a.txt', 'abcdef', { store: true }]]);
+  stored[stored.length - 22 - 46 - 5 + 24] ^= 0x01; // 중앙 디렉터리의 푼 크기를 한 비트 바꾼다
+  await assert.rejects(unzip(stored, () => true), (e) => e.code === 'BAD_ZIP');
+});
+
+test('attach: unzip has a total budget and an entry-count cap — many entries cannot share one blob to fill memory', async () => {
+  const sheet = Buffer.alloc(20 * 1024 * 1024, 0x20);
+  // 20MB 로 풀리는 조각 하나를 항목 12개가 가리킨다 (합 240MB > 한도 160MB)
+  const shared = lyingZip(Array.from({ length: 12 }, (_, i) => [`xl/worksheets/sheet${i + 1}.xml`, sheet]));
+  assert.ok(shared.length < 100 * 1024, `zip is only ${shared.length} bytes`);
+  await assert.rejects(unzip(shared, () => true), (e) => e.code === 'TOO_LARGE');
+  // 항목 수 한도
+  const tiny = Buffer.from('<a/>');
+  const many = lyingZip(Array.from({ length: ATTACH_LIMITS.unzipEntries + 1 }, (_, i) => [`ppt/slides/slide${i + 1}.xml`, tiny]));
+  await assert.rejects(unzip(many, () => true), (e) => e.code === 'TOO_LARGE');
+  // 한도 안이면 그대로 읽는다. 같은 이름이 또 나오면 처음 것만
+  const ok = await unzip(lyingZip([['a.xml', tiny], ['b.xml', tiny], ['a.xml', Buffer.from('<other/>')]]), () => true);
+  assert.deepEqual([...ok.keys()], ['a.xml', 'b.xml']);
+  assert.equal(new TextDecoder().decode(ok.get('a.xml')), '<a/>');
+});
+
+test('attach: hostile XML (opening tags that never close) is read in linear time', () => {
+  const timed = (fn) => { const t = performance.now(); fn(); return performance.now() - t; };
+  const wb = enc('<workbook><sheets><sheet name="s" sheetId="1" r:id="rId1"/></sheets></workbook>');
+  const n = 400_000;
+  const cases = {
+    'xlsx <row> never closed': () => xlsxText(new Map([['xl/workbook.xml', wb], ['xl/worksheets/sheet1.xml', enc(`<worksheet><sheetData>${'<row>'.repeat(n)}</sheetData></worksheet>`)]])),
+    'xlsx <c> never closed': () => xlsxText(new Map([['xl/workbook.xml', wb], ['xl/worksheets/sheet1.xml', enc(`<worksheet><sheetData><row>${'<c r="A1">'.repeat(n)}`)]])),
+    'xlsx <si> never closed': () => xlsxText(new Map([['xl/workbook.xml', wb], ['xl/sharedStrings.xml', enc(`<sst>${'<si><rPh>'.repeat(n)}`)], ['xl/worksheets/sheet1.xml', enc('<worksheet/>')]])),
+    'xlsx tag never ends': () => xlsxText(new Map([['xl/workbook.xml', wb], ['xl/worksheets/sheet1.xml', enc(`<worksheet><sheetData>${'<row r="1" '.repeat(n)}`)]])),
+    'docx <w:p> never closed': () => wordXmlText('<w:p><w:r><w:t>'.repeat(n)),
+    'docx footnotes never closed': () => docxText(new Map([['word/document.xml', enc('<w:p/>')], ['word/footnotes.xml', enc('<w:footnote>'.repeat(n))]])),
+    'pptx <a:p>/<a:tbl> never closed': () => pptxText(new Map([['ppt/slides/slide1.xml', enc('<a:tbl><a:tr><a:tc><a:p>'.repeat(n))]])),
+  };
+  for (const [label, run] of Object.entries(cases)) {
+    const ms = timed(run);
+    // 길이에 비례하면 수십 ms 다. 제곱이면 이 크기에서 분 단위가 된다
+    assert.ok(ms < 2500, `${label}: ${Math.round(ms)}ms`);
+  }
+});
+
+test('attach: docx text boxes are read once (mc:Fallback repeats mc:Choice), and field codes are not text', () => {
+  const box = '<w:txbxContent><w:p><w:r><w:t>상자 글</w:t></w:r></w:p></w:txbxContent>';
+  const xml = W(`<w:p><w:r><w:t>앞</w:t></w:r><w:r><mc:AlternateContent><mc:Choice Requires="wps"><w:drawing>${box}</w:drawing></mc:Choice>`
+    + `<mc:Fallback><w:pict>${box}</w:pict></mc:Fallback></mc:AlternateContent></w:r><w:r><w:t>뒤</w:t></w:r></w:p>`
+    + '<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r><w:r><w:t>3</w:t></w:r><!-- <w:t>주석 속 글</w:t> --></w:p>');
+  assert.equal(wordXmlText(xml), '앞\n상자 글\n뒤\n3');
+});
+
+test('attach: xlsx with namespace-prefixed tags (Open XML SDK / ClosedXML) and an empty shared string in the middle', () => {
+  const files = new Map(Object.entries({
+    'xl/workbook.xml': '<x:workbook xmlns:x="m" xmlns:r="r"><x:sheets><x:sheet name="내보내기" sheetId="1" r:id="R1"/></x:sheets></x:workbook>',
+    'xl/_rels/workbook.xml.rels': '<Relationships><Relationship Id="R1" Target="worksheets/data.xml"/></Relationships>',
+    // 가운데의 빈 항목(<x:si/>)도 번호 하나를 차지한다 — 뒤 항목이 밀리면 안 된다
+    'xl/sharedStrings.xml': '<x:sst xmlns:x="m"><x:si><x:t>이름</x:t></x:si><x:si/><x:si><x:t>부서</x:t></x:si><x:si><x:t>홍길동</x:t></x:si></x:sst>',
+    'xl/worksheets/data.xml': '<x:worksheet xmlns:x="m"><x:sheetData>'
+      + '<x:row r="1"><x:c r="A1" t="s"><x:v>0</x:v></x:c><x:c r="B1" t="s"><x:v>2</x:v></x:c><x:c r="C1" t="s"><x:v>1</x:v></x:c></x:row>'
+      + '<x:row r="2"><x:c r="A2" t="s"><x:v>3</x:v></x:c><x:c r="B2" t="inlineStr"><x:is><x:t>총무과</x:t></x:is></x:c><x:c r="C2"><x:v>42</x:v></x:c></x:row>'
+      + '</x:sheetData></x:worksheet>',
+  }).map(([k, v]) => [k, enc(v)]));
+  assert.deepEqual(xlsxText(files), { text: '## 시트: 내보내기\n\n| 이름 | 부서 |\n| 홍길동 | 총무과 | 42 |', sheets: 1, truncated: false });
+});
+
+test('attach: a date-styled cell that cannot be a date keeps its number', () => {
+  assert.equal(excelDate(1e12), '1000000000000');
+  assert.equal(excelDate(-3), '-3');
+  assert.equal(excelDate(Number.NaN), 'NaN');
+  assert.equal(excelDate(2958465), '9999-12-31');
+});

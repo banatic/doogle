@@ -197,9 +197,11 @@ export class Recorder {
 
 /**
  * 평가 세션 하나 = hub 하나 + 페이지 하나 + 문서 하나.
- * @param {{browser: any, studioUrl: string, provider: any, mode?: 'agent'|'full', model?: string, log?: (m:string)=>void}} opts
+ * @param {{browser: any, studioUrl: string, provider: any, mode?: 'agent'|'full', model?: string, log?: (m:string)=>void,
+ *   beforeLoad?: ((page: any, hub: any) => Promise<void>)|null}} opts
+ *   beforeLoad: 페이지를 띄우기 전에 한 번 — 초기화 스크립트를 심을 자리(예: 데스크탑 셸 흉내)
  */
-export async function openSession({ browser, studioUrl, provider, mode = 'agent', model = 'default', log = () => {} }) {
+export async function openSession({ browser, studioUrl, provider, mode = 'agent', model = 'default', log = () => {}, beforeLoad = null }) {
   const recorder = new Recorder();
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'doogle-eval-'));
   const origin = new URL(studioUrl).origin;
@@ -228,6 +230,7 @@ export async function openSession({ browser, studioUrl, provider, mode = 'agent'
       localStorage.setItem('doogle.panel', '1');
     } catch { /* ignore */ }
   }, provider.id, model, mode);
+  if (beforeLoad) await beforeLoad(page, hub);
   await page.goto(`${studioUrl}/doogle.html?hubPort=${hub.port}&hubToken=${encodeURIComponent(hub.token)}`, { waitUntil: 'domcontentloaded', timeout: 120_000 });
   await page.waitForFunction(() => !!window.rhwpStudio?.plugins?.isLoaded?.('doogle'), { timeout: 120_000 });
   await waitFor(() => hub.studioConnected, 30_000, 'studio 가 hub 에 연결되지 않았습니다');

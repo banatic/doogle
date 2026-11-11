@@ -77,6 +77,7 @@ export function createDoogleAgentRuntime(deps: DoogleAgentDeps): DoogleAgentRunt
       },
     },
     revision: () => executor.revision,
+    noteDocumentSwap: () => executor.syncDocumentInstance(),
     dispose: () => executor.dispose(),
   };
 }
