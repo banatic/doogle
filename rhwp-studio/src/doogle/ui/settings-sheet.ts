@@ -40,7 +40,7 @@ export const SECRET_KEY_OF: Record<string, { key: string; placeholder: string; l
 const TERMINAL_LOGIN: Record<string, { command: string; steps: string; okNote: string }> = {
   'claude-sdk': {
     command: 'claude',
-    steps: '터미널에서 claude 를 실행한 뒤 /login 으로 로그인하세요. 로그인한 뒤 "다시 확인"을 누르세요.',
+    steps: '"터미널 명령 복사"로 복사한 명령을 PowerShell 에 붙여 넣어 Claude Code 를 실행한 뒤 /login 으로 로그인하세요. 로그인한 뒤 "다시 확인"을 누르세요.',
     okNote: '터미널의 claude 로그인을 그대로 씁니다. 두글은 Claude 로그인 정보를 읽지 않습니다.',
   },
   'codex-app-server': {
@@ -179,10 +179,11 @@ export class SettingsSheet {
         if (provider.reason) card.append(el('p', 'dg-card-sub', provider.reason));
         card.append(el('p', 'dg-card-sub', terminal.steps));
         const acts = el('div', 'dg-card-acts');
-        const copy = btn('dg-btn', '', () => this.copyCommand(terminal.command));
+        const command = provider.loginCommand || terminal.command;
+        const copy = btn('dg-btn', '', () => this.copyCommand(command));
         copy.dataset.key = `${provider.id}:copy`;
         copy.append(icon('terminal', 13, 2), el('span', '', '터미널 명령 복사'));
-        copy.title = `"${terminal.command}" 복사`;
+        copy.title = `"${command}" 복사`;
         acts.append(copy, this.recheckButton(provider.id));
         card.append(acts);
       }

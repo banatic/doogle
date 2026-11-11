@@ -318,6 +318,7 @@ export async function createHub(opts = {}) {
         modelsUpdatedAt: modelsUpdatedAt ? new Date(modelsUpdatedAt).toISOString() : null,
         ...(modelsError ? { modelsError } : {}),
         ...(d?.authHint ? { authHint: String(d.authHint) } : {}),
+        ...(d?.loginCommand ? { loginCommand: String(d.loginCommand) } : {}),
       };
     }));
   }

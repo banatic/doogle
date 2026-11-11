@@ -48,6 +48,8 @@ export interface ProviderInfo {
   /** 마지막 실시간 조회 실패 사유 */
   modelsError?: string;
   authHint?: string;
+  /** 터미널에 붙여 넣을 로그인 명령 — claude 가 PATH 에 없을 때 전체 경로 (PowerShell) */
+  loginCommand?: string;
 }
 
 export interface ToolError {

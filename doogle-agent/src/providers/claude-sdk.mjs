@@ -6,8 +6,9 @@
 // - Claude 자격증명(~/.claude/.credentials.json, Keychain 등)을 읽기/복사/저장/중계하지 않는다.
 // - 격리 홈(CLAUDE_CONFIG_DIR)·자격증명 미러링을 쓰지 않는다. SDK는 사용자의 기본 환경 그대로 실행한다.
 // - 두글은 claude.ai 로그인 UI를 제공하지 않는다. 미로그인이면 터미널에서 `claude` → /login 안내.
-import { promises as fs } from 'node:fs';
+import { promises as fs, readdirSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import os from 'node:os';
 import path from 'node:path';
 import spawn from 'cross-spawn';
 
@@ -58,6 +59,61 @@ export function claudeOnPath(env = process.env, platform = process.platform) {
   } catch {
     return null;
   }
+}
+
+/**
+ * Claude 데스크탑 앱이 품고 있는 Claude Code (Windows) — 데스크탑 앱만 깔린 PC 에서도 쓰게.
+ * 수정하지 않은 공식 바이너리를 그대로 실행할 뿐이고, 자격증명은 건드리지 않는다.
+ * 앱이 버전을 갈아 끼우므로 매번 가장 최근 것을 고른다. 없으면 null.
+ *   - MSIX 설치: %LOCALAPPDATA%\Claude-Data\claude_<id>\claude-code\<버전>\<빌드>\claude.exe
+ *   - 일반 설치: %APPDATA%\Claude\claude-code\<버전>\...\claude.exe
+ */
+export function desktopClaudeBinary(env = process.env, platform = process.platform) {
+  if (platform !== 'win32') return null;
+  const roots = [];
+  if (env.LOCALAPPDATA) {
+    const data = path.join(env.LOCALAPPDATA, 'Claude-Data');
+    for (const name of safeList(data)) if (/^claude_/i.test(name)) roots.push(path.join(data, name, 'claude-code'));
+  }
+  if (env.APPDATA) roots.push(path.join(env.APPDATA, 'Claude', 'claude-code'));
+  let best = null;
+  const visit = (dir, depth) => {
+    for (const name of safeList(dir)) {
+      const full = path.join(dir, name);
+      if (/^claude\.exe$/i.test(name)) {
+        try {
+          const at = statSync(full).mtimeMs;
+          if (!best || at > best.at) best = { file: full, at };
+        } catch { /* 지워지는 중 */ }
+      } else if (depth < 3) {
+        visit(full, depth + 1);
+      }
+    }
+  };
+  for (const root of roots) visit(root, 0);
+  return best?.file ?? null;
+}
+
+function safeList(dir) {
+  try {
+    return readdirSync(dir);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 실행할 Claude Code — PATH 의 claude → 공식 설치 스크립트 위치(~/.local/bin) → Claude 데스크탑 앱 안.
+ * 설치본은 GUI 에서 떠서 PATH 가 터미널과 다를 수 있어 두 번째 후보를 직접 본다. 없으면 null.
+ */
+export function findClaude(env = process.env, platform = process.platform) {
+  const onPath = claudeOnPath(env, platform);
+  if (onPath) return onPath;
+  const local = path.join(os.homedir(), '.local', 'bin', platform === 'win32' ? 'claude.exe' : 'claude');
+  try {
+    if (statSync(local).isFile()) return local;
+  } catch { /* 없음 */ }
+  return desktopClaudeBinary(env, platform);
 }
 
 async function exists(p) {
@@ -190,7 +246,7 @@ export async function listClaudeModels({ sdk, timeoutMs = LIST_MODELS_TIMEOUT_MS
   }
   if (exe === undefined) {
     const bundled = bundledClaudeBinary();
-    exe = bundled && await exists(bundled) ? null : claudeOnPath();
+    exe = bundled && await exists(bundled) ? null : findClaude();
   }
   let release;
   const gate = new Promise((r) => { release = r; });
@@ -252,18 +308,20 @@ export default {
     }
     const bundled = bundledClaudeBinary();
     const bundledOk = bundled ? await exists(bundled) : false;
-    const onPath = claudeOnPath();
+    const onPath = findClaude();
     if (!bundledOk && !onPath) {
       return {
         available: false,
-        reason: 'Claude Code를 찾을 수 없습니다. Claude Code를 설치한 뒤 터미널에서 `claude`로 로그인하세요.',
+        reason: 'Claude Code를 찾을 수 없습니다. Claude 데스크탑 앱이나 Claude Code를 설치한 뒤 터미널에서 `claude`로 로그인하세요.',
         models: fallbackModels(),
         authHint: AUTH_HINT,
       };
     }
     const loggedIn = await cliLoggedIn(onPath ?? bundled);
     if (loggedIn === false) {
-      return { available: false, reason: 'Claude Code에 로그인되어 있지 않습니다.', models: fallbackModels(), authHint: AUTH_HINT };
+      // PATH 에 없는 claude(데스크탑 앱 안 등)면 터미널에 붙여 넣을 명령을 전체 경로로 준다
+      const loginCommand = onPath && !claudeOnPath() ? `& "${onPath}"` : 'claude';
+      return { available: false, reason: 'Claude Code에 로그인되어 있지 않습니다.', models: fallbackModels(), authHint: AUTH_HINT, loginCommand };
     }
     return { available: true, models: fallbackModels(), authHint: AUTH_HINT };
   },
@@ -291,7 +349,7 @@ export default {
     const cwd = path.join(appDataDir(), 'claude-workspace');
     await fs.mkdir(cwd, { recursive: true });
     const bundled = bundledClaudeBinary();
-    const exe = bundled && await exists(bundled) ? null : claudeOnPath();
+    const exe = bundled && await exists(bundled) ? null : findClaude();
 
     let sessionId = sessionIdOf(messages);
     const first = await runQuery({ sdk, server, model, text, systemPrompt, cwd, exe, resume: sessionId, emit, signal });
