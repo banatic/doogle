@@ -30,6 +30,7 @@ import {
 import { reviewStore, type DecisionReport } from '../review/state.ts';
 import { countdownText, describeConnection, userWords, type DeskHubStatus } from './connection.ts';
 import type { DeskHubEvent } from './desk-bridge.ts';
+import { brandIcon, brandOf } from './brand.ts';
 import { icon, type IconName } from './icons.ts';
 import { SettingsSheet } from './settings-sheet.ts';
 import {
@@ -118,11 +119,24 @@ function storeSet(key: string, value: string): void {
 }
 
 /** 버튼·메뉴에 보일 모델 이름. 'default' 행은 실제 모델 이름을 덧붙인다 (예: "기본 · Opus 5.5"). */
-function modelDisplayName(model: ProviderModel, models: readonly ProviderModel[]): string {
-  if (model.id === 'default' && model.resolvedModel) {
-    const target = models.find((m) => m !== model && (m.id === model.resolvedModel || m.resolvedModel === model.resolvedModel));
-    return `기본 · ${target?.label ?? model.resolvedModel}`;
+/**
+ * "기본값" 이 실제로 가리키는 모델 이름 — "Opus 5.5". 같은 resolvedModel 의 다른 행 이름, 없으면
+ * 설명 첫머리("Opus 5.5 · Best for …"). 알 수 없으면(앱 기본 목록) null.
+ */
+export function resolvedDefaultName(model: Pick<ProviderModel, 'id' | 'resolvedModel' | 'description'>, models: readonly ProviderModel[]): string | null {
+  if (model.id !== 'default') return null;
+  if (model.resolvedModel) {
+    const target = models.find((m) => m.id !== 'default' && (m.id === model.resolvedModel || m.resolvedModel === model.resolvedModel));
+    if (target?.label) return target.label.replace(/\s*\(.*\)\s*$/, '').trim();
   }
+  const lead = model.description?.split('·')[0]?.trim();
+  if (lead && /\d/.test(lead) && lead.length <= 24) return lead;
+  return model.resolvedModel ?? null;
+}
+
+function modelDisplayName(model: ProviderModel, models: readonly ProviderModel[]): string {
+  const resolved = resolvedDefaultName(model, models);
+  if (resolved) return `${resolved} (기본값)`;
   return model.label || model.id;
 }
 
@@ -135,9 +149,16 @@ function providerShortName(label: string): string {
  * 입력창 단추에 보일 짧은 이름 — "Claude · 기본값", "Claude · Sonnet 5.5".
  * 전체 이름("기본값 (Claude Code 권장)")은 메뉴와 툴팁에서 보인다.
  */
-export function modelButtonLabel(provider: Pick<ProviderInfo, 'label'>, model: Pick<ProviderModel, 'id' | 'label'>): string {
+export function modelButtonLabel(
+  provider: Pick<ProviderInfo, 'label'>,
+  model: Pick<ProviderModel, 'id' | 'label' | 'resolvedModel' | 'description'>,
+  models: readonly ProviderModel[] = [],
+): string {
   const who = providerShortName(provider.label);
-  let name = model.id === 'default' ? '기본값' : (model.label || model.id).replace(/\s*\(.*\)\s*$/, '').trim();
+  // 기본값이어도 실제 모델 이름을 보인다("Opus 5.5"). 무엇인지 모를 때만 "기본값"
+  let name = model.id === 'default'
+    ? resolvedDefaultName(model, models) ?? '기본값'
+    : (model.label || model.id).replace(/\s*\(.*\)\s*$/, '').trim();
   // 제공자 이름이 모델 이름 앞에 겹치면 뗀다: "Claude Sonnet 5.5" → "Sonnet 5.5"
   if (name.toLowerCase().startsWith(`${who.toLowerCase()} `)) name = name.slice(who.length + 1).trim();
   return `${who} · ${name || model.id}`;
@@ -350,6 +371,7 @@ export class DoogleSidebar {
   private modeBtn!: HTMLButtonElement;
   private modelBtn!: HTMLButtonElement;
   private modelText!: HTMLElement;
+  private modelBrand!: HTMLElement;
   private modelMenu!: HTMLElement;
   private sendBtn!: HTMLButtonElement;
 
@@ -1245,16 +1267,21 @@ export class DoogleSidebar {
     const model = provider?.models.find((m) => m.id === this.model);
     let label: string;
     let full = '';
+    const brand = brandOf(provider?.id);
     if (model && provider) {
-      label = modelButtonLabel(provider, model);
+      label = modelButtonLabel(provider, model, provider.models);
       full = modelDisplayName(model, provider.models);
       storeSet(STORE_MODEL_LABEL, label);
+      // 로고가 있으면 "Claude · " 를 떼고 모델 이름만 — 계정은 로고가 말한다
+      if (brand) label = label.replace(/^[^·]+·\s*/, '');
     } else if (provider) {
       label = provider.available ? '모델 고르기' : 'AI 계정 연결 필요';
     } else {
       label = storeGet(STORE_MODEL_LABEL) || (this.deps.hub.state === 'open' ? '모델 불러오는 중…' : '연결 대기 중');
     }
     this.modelText.textContent = label;
+    this.modelBrand.replaceChildren(...(brand && provider ? [brandIcon(brand, 14)] : []));
+    this.modelBrand.hidden = !(brand && provider);
     const title = provider ? (provider.available ? `${provider.label} · ${full || label}` : `${provider.label}: 연결되지 않음`) : label;
     this.modelBtn.title = title;
     this.modelBtn.setAttribute('aria-label', `모델: ${title}`);
@@ -1274,7 +1301,11 @@ export class DoogleSidebar {
       const group = el('div', 'dg-menu-group');
       group.setAttribute('role', 'group');
       group.setAttribute('aria-label', provider.label);
-      group.append(el('div', 'dg-menu-heading', provider.label));
+      const heading = el('div', 'dg-menu-heading');
+      const groupBrand = brandOf(provider.id);
+      if (groupBrand) heading.append(brandIcon(groupBrand, 13));
+      heading.append(el('span', '', provider.label));
+      group.append(heading);
       for (const model of provider.models) {
         const on = provider.id === this.providerId && model.id === this.model;
         const item = button('dg-menu-item dg-model-item', '', () => {
@@ -1287,7 +1318,10 @@ export class DoogleSidebar {
         const text = el('span', 'dg-model-item-text');
         const name = modelDisplayName(model, provider.models);
         text.append(el('span', 'dg-menu-label', name));
-        const desc = model.description || (model.id !== name && model.id !== 'default' ? model.id : '');
+        let desc = model.description || (model.id !== name && model.id !== 'default' ? model.id : '');
+        // 기본값 설명 첫머리("Opus 5.5 · …")는 이름과 겹친다 — 떼어 낸다
+        const resolved = resolvedDefaultName(model, provider.models);
+        if (resolved && desc.startsWith(resolved)) desc = desc.slice(resolved.length).replace(/^\s*·\s*/, '');
         if (desc) text.append(el('span', 'dg-menu-desc', desc));
         item.title = model.resolvedModel && model.resolvedModel !== model.id ? `${name} → ${model.resolvedModel}` : model.id;
         item.append(el('span', 'dg-menu-check', on ? '✓' : ''), text);
@@ -1388,7 +1422,10 @@ export class DoogleSidebar {
     this.modelBtn.setAttribute('aria-haspopup', 'menu');
     this.modelBtn.setAttribute('aria-expanded', 'false');
     this.modelText = el('span', 'dg-model-text', '연결 대기 중');
-    this.modelBtn.append(this.modelText, icon('chevronDown', 12, 2));
+    // 어느 AI 계정인지는 글자 대신 로고로 (renderModelButton)
+    this.modelBrand = el('span', 'dg-model-brand');
+    this.modelBrand.hidden = true;
+    this.modelBtn.append(this.modelBrand, this.modelText, icon('chevronDown', 12, 2));
 
     this.modelMenu = el('div', 'dg-menu dg-model-menu');
     this.modelMenu.dataset.dgFloating = '';

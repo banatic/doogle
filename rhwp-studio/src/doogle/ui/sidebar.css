@@ -1086,6 +1086,27 @@
   white-space: nowrap;
 }
 
+/* AI 계정 로고 (brand.ts) — 모델 단추·모델 메뉴 머리·계정 카드 */
+.dg-model-brand {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.dg-model-brand[hidden] {
+  display: none;
+}
+
+.dg-brand {
+  flex-shrink: 0;
+  display: block;
+}
+
+/* OpenAI 로고는 글자 색을 따른다 — 모델 단추의 흐린 글자 색보다 또렷하게 */
+.dg-model-btn .dg-brand-openai,
+.dg-card-title .dg-brand-openai {
+  color: var(--dg-x-text);
+}
+
 .dg-send {
   width: 32px;
   height: 32px;

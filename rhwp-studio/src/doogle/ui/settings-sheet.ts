@@ -8,6 +8,7 @@
  * 터미널에서 `claude` → `/login` 하라는 안내와 "터미널 명령 복사" 단추만 둔다.
  */
 import type { AgentMode, HubClient, ProviderInfo } from '../hub-client.ts';
+import { brandIcon, brandOf } from './brand.ts';
 import { icon } from './icons.ts';
 
 export interface SettingsHost {
@@ -165,7 +166,8 @@ export class SettingsSheet {
     const dot = el('span', `dg-dot ${provider.available ? 'dg-dot-ok' : 'dg-dot-warn'}`);
     dot.setAttribute('aria-hidden', 'true');
     const status = provider.available ? statusOk(provider.id) : '연결 필요';
-    title.append(dot, el('span', 'dg-card-name', provider.label), el('span', 'dg-card-status', `· ${status}`));
+    const brand = brandOf(provider.id);
+    title.append(dot, ...(brand ? [brandIcon(brand, 15)] : []), el('span', 'dg-card-name', provider.label), el('span', 'dg-card-status', `· ${status}`));
     card.append(title);
 
     const terminal = TERMINAL_LOGIN[provider.id];
