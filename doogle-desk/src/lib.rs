@@ -248,7 +248,9 @@ fn agent_dir(app: &AppHandle) -> PathBuf {
     if cfg!(debug_assertions) && development.join("bin").join("doogle-hub.mjs").is_file() {
         return development.canonicalize().map(strip_verbatim).unwrap_or(development);
     }
-    app.path().resource_dir().map(|dir| dir.join("doogle-agent")).unwrap_or(development)
+    // 설치본: resource_dir 은 Windows 에서 `\\?\C:\...` (verbatim) 경로를 준다. Node 는 이 경로의
+    // 시작 스크립트를 풀지 못하고 `lstat 'C:'` EISDIR 로 죽으므로 접두어를 뗀다.
+    app.path().resource_dir().map(|dir| strip_verbatim(dir.join("doogle-agent"))).unwrap_or(development)
 }
 
 /// Windows `canonicalize` 의 `\\?\` 접두어는 Node 가 싫어한다.
