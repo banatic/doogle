@@ -302,7 +302,8 @@ export async function openSession({ browser, studioUrl, provider, mode = 'agent'
 
   /** 검토 대기 변경을 화면 단추로 모두 적용/거절한다. 단추가 없으면 false. */
   async function review(decision) {
-    const selector = decision === 'accept' ? '.dg-rl-btn.dg-rl-primary' : '.dg-rl-btn.dg-rl-reject-all';
+    // 문서 위 이동 막대(알약)의 모두 적용/거절 — 대화 쪽 검토 목록은 없앴다
+    const selector = decision === 'accept' ? '.dg-review-pill .dg-pill-accept-all' : '.dg-review-pill .dg-pill-reject-all';
     const clicked = await page.evaluate((sel) => {
       const b = document.querySelector(sel);
       if (!b || b.disabled) return false;

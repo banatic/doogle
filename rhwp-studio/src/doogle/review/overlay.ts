@@ -167,12 +167,23 @@ export function mountReviewOverlay(host: PluginHost, pending: PendingApi): Revie
   const warn = el('span', 'dg-pill-warn');
   warn.textContent = '직접 편집 포함';
   warn.title = '검토 대기 중에 문서를 직접 고쳤습니다. 앞선 변경을 거절하면 그 편집도 함께 되돌아갈 수 있습니다.';
+  // 모두 처리 — 대화 쪽 검토 목록을 없앴으므로 한꺼번에 적용/거절은 여기서 한다.
+  // 에이전트가 아직 고치는 중이면 단추 대신 "고치는 중" 을 보인다(끝나야 결정할 수 있다).
+  const bulkSep = el('span', 'dg-glass-sep');
+  bulkSep.setAttribute('aria-hidden', 'true');
+  const working = el('span', 'dg-pill-working');
+  working.setAttribute('role', 'status');
+  working.append(el('span', 'dg-pill-spin'), el('span', '', '두글이 고치는 중'));
+  const rejectAll = btn('dg-pop-btn dg-pill-reject-all', '모두 거절', () => decideAll('reject'));
+  rejectAll.title = '검토 대기 중인 변경을 모두 되돌립니다';
+  const acceptAll = btn('dg-pop-btn dg-pop-primary dg-pill-accept-all', '모두 적용', () => decideAll('accept'));
+  acceptAll.title = '검토 대기 중인 변경을 모두 적용합니다';
   const pillSep = el('span', 'dg-glass-sep');
   pillSep.setAttribute('aria-hidden', 'true');
   const zoomOut = btn('dg-pill-btn dg-pill-zoom', '−', () => runCommand('view:zoom-out'), '축소');
   const zoomLabel = el('span', 'dg-pill-zoomval dg-tnum');
   const zoomIn = btn('dg-pill-btn dg-pill-zoom', '+', () => runCommand('view:zoom-in'), '확대');
-  pill.append(prev, counter, next, warnSep, warn, pillSep, zoomOut, zoomLabel, zoomIn);
+  pill.append(prev, counter, next, warnSep, warn, bulkSep, working, rejectAll, acceptAll, pillSep, zoomOut, zoomLabel, zoomIn);
 
   // ─── 거터 ────────────────────────────────────────────
   const gutter = el('div', 'dg-review-gutter');
@@ -224,6 +235,17 @@ export function mountReviewOverlay(host: PluginHost, pending: PendingApi): Revie
     hidePopover();
     const nextId = reviewStore.currentId;
     if (nextId) reviewStore.focus(nextId, true);
+  }
+
+  function decideAll(kind: 'accept' | 'reject'): void {
+    if (reviewStore.busy || reviewStore.count === 0) return;
+    try {
+      reviewStore.decide(kind);
+    } catch (error) {
+      console.error('[doogle] 검토 처리 실패', error);
+      return;
+    }
+    hidePopover();
   }
 
   function cancelConfirm(refocus: boolean): void {
@@ -423,6 +445,12 @@ export function mountReviewOverlay(host: PluginHost, pending: PendingApi): Revie
     const userEdits = count > 0 && reviewStore.hasUserEdits();
     warn.hidden = !userEdits;
     warnSep.hidden = !userEdits;
+    const busy = reviewStore.busy;
+    working.hidden = !busy;
+    rejectAll.hidden = busy;
+    acceptAll.hidden = busy;
+    acceptAll.textContent = count > 1 ? `모두 적용 (${count}건)` : '적용';
+    rejectAll.textContent = count > 1 ? '모두 거절' : '거절';
     if (confirming && revealedId !== reviewStore.currentId) confirming = false;
     renderPop();
     renderGutter();

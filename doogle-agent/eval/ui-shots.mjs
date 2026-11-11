@@ -171,8 +171,7 @@ try {
   await click('.dg-send');
   await held;
   await sleep(500);
-  facts.runningStatus = await textOf('.dg-thinking');
-  facts.doneLines = await textOf('.dg-done-item');
+  facts.runningStatus = await textOf('.dg-steps-head > *, .dg-step');
   await shot('11-turn-running');
   await shot('11b-turn-running-sidebar', side ?? undefined);
   gate.release();
@@ -180,24 +179,11 @@ try {
   await sleep(1500);
   facts.placeholderAfter = await page.evaluate(() => document.querySelector('.dg-input')?.placeholder);
   facts.turnOrder = await page.evaluate(() => [...(document.querySelector('.dg-turn')?.children ?? [])].map((n) => n.className.split(' ')[0]));
-  facts.reviewBar = await textOf('.dg-review-bar .dg-rl-head > *');
-  facts.reviewRows = await page.evaluate(() => [...document.querySelectorAll('.dg-rl-row')].map((row) => ({
-    lines: [...row.querySelectorAll('.dg-rl-line')].map((l) => l.textContent.replace(/\s+/g, ' ').trim()),
-    swatches: row.querySelectorAll('.dg-swatch').length,
-    buttons: [...row.querySelectorAll('.dg-rl-act')].map((b) => b.textContent.trim()),
-  })));
+  facts.doneSteps = await textOf('.dg-steps-head > *, .dg-step, .dg-steps-sum > *');
+  facts.reviewPill = await textOf('.dg-review-pill .dg-pill-count, .dg-review-pill .dg-pop-btn:not([hidden])');
   facts.revertWhilePending = await page.evaluate(() => [...document.querySelectorAll('.dg-act-revert')].map((b) => !b.hidden));
   await shot('12-turn-done-review');
   await shot('12b-turn-done-sidebar', side ?? undefined);
-  // 되돌리기 단추에 올리면 함께 되돌아갈 행이 강조된다
-  const chained = await rectOf('.dg-rl-act.dg-rl-chained');
-  if (chained) {
-    await page.mouse.move(chained.x + 10, chained.y + 8);
-    await sleep(250);
-    facts.revertHighlight = await page.evaluate(() => document.querySelectorAll('.dg-rl-row.dg-rl-revert').length);
-    await shot('14-reject-chain-hover', side ?? undefined);
-    await page.mouse.move(600, 500);
-  }
   // 문서 위 검토 표시 — 바뀐 곳으로 이동 (대상이 화면 3분의 1 지점, 풍선은 이동 막대와 겹치지 않게)
   for (const step of [1, 2]) {
     await click('[aria-label^="다음 변경"]');

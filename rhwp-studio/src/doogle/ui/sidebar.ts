@@ -21,17 +21,18 @@ import {
   type HubMessage,
   type ProviderInfo,
   type ProviderModel,
+  type SavedThreadInfo,
+  type TranscriptEntry,
   type ToolCallMessage,
 } from '../hub-client.ts';
-import { mountReviewList, type ReviewListHandle } from '../review/list.ts';
 import { reviewStore, type DecisionReport } from '../review/state.ts';
 import { countdownText, describeConnection, userWords, type DeskHubStatus } from './connection.ts';
 import type { DeskHubEvent } from './desk-bridge.ts';
 import { icon, type IconName } from './icons.ts';
 import { SettingsSheet } from './settings-sheet.ts';
 import {
-  describeToolCall, doneText, formatToolFailure, needsUserAction, parseBatchFailures, progressText,
-  type ToolCallView,
+  describeToolCall, formatToolFailure, needsUserAction, parseBatchFailures, progressText,
+  type ToolCallView, type ToolCategory,
 } from './tool-presentation.ts';
 import './sidebar.css';
 
@@ -64,6 +65,9 @@ const STORE_MODE = 'doogle.mode';
 
 /** 첫 실행 체크리스트를 끝냈다(첫 요청을 보냈다) — 다시 보이지 않는다 */
 const STORE_ONBOARDED = 'doogle.onboarded';
+
+/** 마지막으로 보던 대화 — 새로고침하면 hub 에 저장된 그 대화를 다시 연다 */
+const STORE_LAST_THREAD = 'doogle.lastThread';
 
 /** 문서·선택 상황 (상황별 제안 칩·첫 실행 체크리스트) */
 export interface DocContext {
@@ -230,11 +234,47 @@ interface TurnView {
   actions: HTMLElement | null;
   /** 이 턴이 만든 검토 변경 id */
   changeIds: Set<string>;
-  /** 끝난 편집을 한 줄씩 남기는 자리 (연달아 끝난 것은 한 덩이로) */
-  doneList: HTMLUListElement | null;
+  /** 진행 카드 — 단계(살펴보기·고치기·확인) 체크리스트. 도구를 처음 쓸 때 생긴다 */
+  steps: StepsView | null;
+  /** 턴 시작·끝 시각 (진행 카드의 걸린 시간) */
+  startedAt: number;
+  endedAt?: number;
+  /** 지금 하는 일 한 줄 ("6곳 글자 서식 바꾸는 중") */
+  activity: string;
   /** 이미 보인 "사용자가 손써야 하는 실패" 카드 (코드별 한 번) */
   actionCards: Set<string>;
   done: boolean;
+  /** hub 에 저장된 기록에서 다시 그린 턴 (검토 대기 변경은 새로고침과 함께 사라졌다) */
+  restored?: boolean;
+}
+
+/** 진행 카드 DOM */
+interface StepsView {
+  root: HTMLElement;
+  status: HTMLElement;
+  title: HTMLElement;
+  time: HTMLElement;
+  list: HTMLOListElement;
+  rows: Map<ToolCategory, HTMLLIElement>;
+  summary: HTMLElement;
+}
+
+/** 단계 이름 — 도구 종류를 사람이 하는 일로 */
+const STEP_LABEL: Record<ToolCategory, string> = {
+  read: '문서 살펴보기',
+  edit: '고치기',
+  check: '결과 확인',
+  other: '그 밖의 작업',
+};
+
+function elapsed(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
+/** 편집 도구 하나가 고친 곳 수 (묶음 편집은 항목 수) */
+function editSpots(view: ToolCallView): number {
+  return view.items && view.items.length > 0 ? view.items.length : 1;
 }
 
 interface ThreadView {
@@ -281,10 +321,15 @@ export class DoogleSidebar {
   private threadMenu!: HTMLElement;
   private conn!: HTMLElement;
   private scroller!: HTMLElement;
-  private review!: HTMLElement;
-  /** 입력창 바로 위에 붙는 검토 머리줄 (건수 · 모두 거절 · 모두 적용) */
-  private reviewBar!: HTMLElement;
-  private reviewList: ReviewListHandle | null = null;
+  /** 진행 카드의 걸린 시간을 1초마다 고친다 (진행 중인 턴이 있을 때만) */
+  private clock: ReturnType<typeof setInterval> | null = null;
+  /** hub 에 저장된 대화 목록 (아직 화면에 불러오지 않은 것 포함) */
+  private savedThreads: SavedThreadInfo[] = [];
+  /** 연결 뒤 마지막 대화 복원을 한 번 해 봤다 */
+  private restoreTried = false;
+  /** 저장된 기록을 다시 그리는 중 — 알림·검토 이동을 하지 않는다 */
+  private replaying = false;
+  private loadingThread = false;
   private readonly askCards: AskCard[] = [];
   /** "직접 입력" 을 눌러 답을 기다리는 중 — 입력창 안내문이 바뀐다 */
   private awaitingAnswer = false;
@@ -355,14 +400,13 @@ export class DoogleSidebar {
       this.offs.push(this.deps.pending.onChange((e) => this.onPendingChange(e)));
     }
     this.offs.push(
-      reviewStore.onChange(() => this.renderReview()),
+      reviewStore.onChange(() => this.renderTurnSummaries()),
       reviewStore.onDecision((report) => this.onDecision(report)),
       reviewStore.onExplain((id) => this.explain(id)),
     );
     this.renderConnection(hub.state, hub.detail);
     this.renderMode();
     this.renderModelButton();
-    this.renderReview();
     this.renderComposer();
   }
 
@@ -403,8 +447,7 @@ export class DoogleSidebar {
   dispose(): void {
     for (const off of this.offs) off();
     this.offs = [];
-    this.reviewList?.dispose();
-    this.reviewList = null;
+    this.stopClock();
     if (this.renderFrame) cancelAnimationFrame(this.renderFrame);
     this.root?.remove();
     this.root = null;
@@ -520,19 +563,29 @@ export class DoogleSidebar {
     fresh.setAttribute('role', 'menuitem');
     fresh.append(icon('compose', 14), el('span', '', '새 대화'));
     items.push(fresh);
-    const list = [...this.threads.values()].filter((t) => t.turns.length > 0 || t === this.thread)
-      .sort((a, b) => b.createdAt - a.createdAt).slice(0, 12);
+    // 화면에 있는 대화 + hub 에 저장된 대화(새로고침 전 것). 최근에 쓴 것부터
+    type Row = { id: string; title: string; at: number };
+    const rows = new Map<string, Row>();
+    for (const t of this.savedThreads) rows.set(t.id, { id: t.id, title: t.title, at: Date.parse(t.updatedAt) || 0 });
+    for (const t of this.threads.values()) {
+      if (t.turns.length === 0 && t !== this.thread) continue;
+      const lastTurn = t.turns[t.turns.length - 1];
+      const at = Math.max(rows.get(t.id)?.at ?? 0, lastTurn?.endedAt ?? lastTurn?.startedAt ?? t.createdAt);
+      rows.set(t.id, { id: t.id, title: t.title, at });
+    }
+    const list = [...rows.values()].sort((a, b) => b.at - a.at).slice(0, 20);
     if (list.length > 0) {
       items.push(el('div', 'dg-menu-heading', '최근 대화'));
       for (const t of list) {
+        const current = t.id === this.thread.id;
         const item = button('dg-menu-item', '', () => {
           this.closeMenu(true);
           this.switchThread(t.id);
         });
         item.setAttribute('role', 'menuitemradio');
-        item.setAttribute('aria-checked', String(t === this.thread));
-        item.disabled = this.busy && t !== this.thread;
-        item.append(el('span', 'dg-menu-check', t === this.thread ? '✓' : ''), el('span', 'dg-menu-label', t.title));
+        item.setAttribute('aria-checked', String(current));
+        item.disabled = this.busy && !current;
+        item.append(el('span', 'dg-menu-check', current ? '✓' : ''), el('span', 'dg-menu-label', t.title));
         items.push(item);
       }
     }
@@ -611,24 +664,17 @@ export class DoogleSidebar {
     this.scroller.setAttribute('role', 'log');
     this.scroller.setAttribute('aria-label', '대화');
 
-    this.review = el('section', 'dg-review');
-    this.review.setAttribute('aria-label', '검토할 변경');
-    this.review.hidden = true;
-
-    this.reviewBar = el('div', 'dg-review-bar');
-    this.reviewBar.hidden = true;
-
     this.live = el('div', 'dg-sr-only');
     this.live.setAttribute('aria-live', 'polite');
     this.live.setAttribute('aria-atomic', 'true');
 
-    body.append(this.conn, this.scroller, this.reviewBar, this.live);
+    body.append(this.conn, this.scroller, this.live);
     return body;
   }
 
-  private createThread(): ThreadView {
+  private createThread(id = newThreadId(), title = '새 대화', createdAt = Date.now()): ThreadView {
     const log = el('div', 'dg-log');
-    const view: ThreadView = { id: newThreadId(), title: '새 대화', log, turns: [], createdAt: Date.now() };
+    const view: ThreadView = { id, title, log, turns: [], createdAt };
     log.append(this.buildEmpty());
     this.threads.set(view.id, view);
     return view;
@@ -737,7 +783,6 @@ export class DoogleSidebar {
     if (this.titleBtn) this.titleBtn.setAttribute('aria-label', `대화: ${view.title}`);
     this.awaitingAnswer = false;
     this.renderPlaceholder();
-    this.renderReview();
   }
 
   private newThread(): void {
@@ -748,14 +793,108 @@ export class DoogleSidebar {
     }
     this.turn = null;
     this.showThread(this.createThread());
+    storeSet(STORE_LAST_THREAD, '');
     this.input?.focus();
   }
 
   private switchThread(id: string): void {
     const view = this.threads.get(id);
-    if (!view || view === this.thread || this.busy) return;
+    if (!view) {
+      // 저장만 되어 있고 아직 화면에 없는 대화 — hub 에서 불러와 다시 그린다
+      void this.openSavedThread(id);
+      return;
+    }
+    if (view === this.thread || this.busy) return;
     this.turn = null;
     this.showThread(view);
+    storeSet(STORE_LAST_THREAD, view.id);
+  }
+
+  // ─── 저장된 대화 (새로고침 뒤 복원) ─────────────────────
+
+  /**
+   * hub 에 연결되면 저장된 대화 목록을 받는다. 처음 한 번은 마지막으로 보던 대화를 다시 연다 —
+   * 새로고침·앱 재시작 뒤에도 대화가 그대로 보인다. hub 는 응답 도중에도 기록을 저장한다.
+   */
+  private async syncThreads(): Promise<void> {
+    try {
+      this.savedThreads = await this.deps.hub.listThreads();
+    } catch {
+      return; // 예전 hub(목록 요청을 모름) — 복원 없이 지금처럼 쓴다
+    }
+    if (this.restoreTried) return;
+    this.restoreTried = true;
+    const last = storeGet(STORE_LAST_THREAD);
+    if (!last || this.busy || this.thread.turns.length > 0) return;
+    if (!this.savedThreads.some((t) => t.id === last)) return;
+    await this.openSavedThread(last);
+  }
+
+  private async openSavedThread(id: string): Promise<void> {
+    if (this.busy || this.loadingThread) return;
+    const existing = this.threads.get(id);
+    if (existing) {
+      this.switchThread(id);
+      return;
+    }
+    this.loadingThread = true;
+    try {
+      const saved = await this.deps.hub.loadThread(id);
+      if (this.busy || this.threads.has(id)) return;
+      const before = this.thread;
+      const view = this.createThread(saved.threadId, saved.title || '대화', Date.parse(saved.createdAt) || Date.now());
+      this.replay(view, saved.transcript, saved.running);
+      // "다시 시도" 는 마지막 턴에서만
+      for (const t of view.turns.slice(0, -1)) t.actions?.querySelector('.dg-act-retry')?.setAttribute('hidden', '');
+      // 빈 새 대화 하나만 있던 자리면 그 빈 대화는 지운다
+      if (before.turns.length === 0 && before !== view) this.threads.delete(before.id);
+      this.turn = view.turns.find((t) => !t.done) ?? null;
+      this.showThread(view);
+      storeSet(STORE_LAST_THREAD, view.id);
+      requestAnimationFrame(() => this.scrollToBottom());
+    } catch (error) {
+      this.addNotice(`대화를 불러오지 못했습니다: ${error instanceof Error ? error.message : String(error)}`, 'error');
+    } finally {
+      this.loadingThread = false;
+    }
+  }
+
+  /**
+   * 저장된 기록을 지금 화면 그리기 길(handleAgentEvent)로 다시 흘려 같은 모양으로 그린다.
+   * 아직 hub 에서 도는 턴(running)은 열어 둔다 — 이어지는 agent_event 가 그 턴에 붙는다.
+   */
+  private replay(view: ThreadView, transcript: TranscriptEntry[], running: boolean): void {
+    const shown = this.thread;
+    this.replaying = true;
+    this.thread = view;
+    this.turn = null;
+    try {
+      for (const entry of transcript) {
+        if (!entry || typeof entry !== 'object') continue;
+        if (entry.kind === 'user') {
+          if (this.turn) this.handleAgentEvent({ type: 'agent_event', threadId: view.id, event: { kind: 'turn_end', reason: 'interrupted' } });
+          const bubble = el('div', 'dg-user', entry.text);
+          bubble.classList.add('dg-keep-all');
+          this.appendToLog(bubble);
+          this.startTurn(entry.text, entry.providerId ?? this.providerId);
+          const turn = this.turn as TurnView | null;
+          if (turn) {
+            turn.restored = true;
+            const at = entry.at ? Date.parse(entry.at) : NaN;
+            if (Number.isFinite(at)) turn.startedAt = at;
+          }
+          continue;
+        }
+        if (!this.turn) continue;
+        this.handleAgentEvent({ type: 'agent_event', threadId: view.id, event: entry });
+      }
+      if (this.turn && !running) {
+        this.handleAgentEvent({ type: 'agent_event', threadId: view.id, event: { kind: 'turn_end', reason: 'interrupted' } });
+      }
+    } finally {
+      this.replaying = false;
+      if (!this.turn) this.thread = shown;
+    }
   }
 
   private appendToLog(node: HTMLElement): void {
@@ -775,7 +914,7 @@ export class DoogleSidebar {
   }
 
   private announce(text: string): void {
-    if (!this.live) return;
+    if (!this.live || this.replaying) return;
     this.live.textContent = '';
     requestAnimationFrame(() => { this.live.textContent = text; });
   }
@@ -802,14 +941,9 @@ export class DoogleSidebar {
     }
   }
 
-  /** 이 턴 안에 검토 목록이 놓여 있으면 그 목록 — 목록은 늘 턴의 맨 끝(답변 아래)에 둔다 */
-  private reviewIn(turn: TurnView): HTMLElement | null {
-    return this.review && this.review.parentElement === turn.root ? this.review : null;
-  }
-
-  /** 턴에 새 내용을 넣을 자리: 진행 줄 앞, 없으면 검토 목록 앞, 그것도 없으면 맨 끝 */
+  /** 턴에 새 내용을 넣을 자리: 진행 줄 앞, 없으면 맨 끝 */
   private tail(turn: TurnView): HTMLElement | null {
-    return turn.thinking ?? this.reviewIn(turn);
+    return turn.thinking;
   }
 
   /**
@@ -905,7 +1039,10 @@ export class DoogleSidebar {
         }
       }
     }
-    if (state === 'open') void this.refreshProviders();
+    if (state === 'open') {
+      void this.refreshProviders();
+      void this.syncThreads();
+    }
     this.renderModelButton();
     if (state !== 'open' && this.busy) {
       this.addNotice('에이전트 서비스 연결이 끊겨 응답을 더 받지 못했습니다.', 'error');
@@ -1249,6 +1386,7 @@ export class DoogleSidebar {
       return;
     }
     storeSet(STORE_ONBOARDED, '1');
+    storeSet(STORE_LAST_THREAD, this.thread.id);
     // 어떤 답이든 보내면 열려 있던 질문 카드는 답한 것이 된다
     this.closeAskCards(this.thread.id, text);
     if (textOverride === undefined) {
@@ -1281,7 +1419,8 @@ export class DoogleSidebar {
     root.append(thinking);
     const turn: TurnView = {
       threadId: this.thread.id, root, userText, providerId, chip: null, chipText: null, toolList: null, tools: new Map(),
-      text: null, prose: [], thinking, actions: null, changeIds: new Set(), doneList: null, actionCards: new Set(), done: false,
+      text: null, prose: [], thinking, actions: null, changeIds: new Set(), steps: null, startedAt: Date.now(),
+      activity: '생각하는 중', actionCards: new Set(), done: false,
     };
     this.turn = turn;
     this.thread.turns.push(turn);
@@ -1291,7 +1430,7 @@ export class DoogleSidebar {
     reviewStore.setBusy(true);
     this.announce('응답을 작성하는 중');
     this.renderComposer();
-    this.renderReview();
+    this.startClock();
   }
 
   private endTurn(): void {
@@ -1302,6 +1441,7 @@ export class DoogleSidebar {
       turn.thinking?.remove();
       turn.thinking = null;
       turn.done = true;
+      turn.endedAt = Date.now();
       let unresolved = 0;
       for (const entry of turn.tools.values()) {
         if (entry.li.dataset.state === 'running') entry.li.dataset.state = 'done';
@@ -1317,19 +1457,20 @@ export class DoogleSidebar {
         turn.toolList.hidden = false;
       }
       turn.actions = this.buildActions(turn);
-      turn.root.insertBefore(turn.actions, this.reviewIn(turn));
+      turn.root.append(turn.actions);
+      this.renderSteps(turn);
     }
+    this.stopClock();
     this.turn = null;
     this.busy = false;
     reviewStore.setBusy(false);
     this.renderComposer();
-    this.renderReview();
     this.renderAskCards();
     // 턴 끝에 붙는 것(동작 줄·검토 목록·펼친 실패 사유)까지 보이게 한다
     if (follow) requestAnimationFrame(() => this.scrollToBottom());
     const count = reviewStore.count;
     this.announce(count > 0 ? `응답 완료. 검토할 변경 ${count}건` : '응답 완료');
-    if (turn && count > 0) {
+    if (turn && count > 0 && !this.replaying) {
       const first = reviewStore.rows().find((r) => turn.changeIds.has(r.id)) ?? reviewStore.rows()[0];
       if (first) reviewStore.focus(first.id, true);
     }
@@ -1372,14 +1513,16 @@ export class DoogleSidebar {
       case 'status': {
         const turn = this.ensureTurn();
         if (turn.thinking && event.text) turn.thinking.textContent = event.text;
+        if (event.text) this.setActivity(turn, event.text.replace(/…$/, ''));
         break;
       }
       case 'text_delta': {
         const turn = this.ensureTurn();
         if (!turn.text) {
           const node = el('div', 'dg-prose dg-keep-all dg-streaming');
-          turn.root.insertBefore(node, this.reviewIn(turn));
+          turn.root.append(node);
           turn.text = { node, raw: '' };
+          this.setActivity(turn, '답변 쓰는 중');
         }
         turn.text.raw += event.text;
         if (turn.thinking) {
@@ -1400,10 +1543,13 @@ export class DoogleSidebar {
         this.addTool(turn, event.callId, view);
         if (!turn.thinking) {
           turn.thinking = el('div', 'dg-thinking');
-          turn.root.insertBefore(turn.thinking, this.reviewIn(turn));
+          turn.root.append(turn.thinking);
         }
-        // 진행 줄에 지금 하는 일을 적는다 — "문서 구조 읽는 중…", "6곳 글자 서식 바꾸는 중…"
+        // 진행 줄에 지금 하는 일을 적는다 — "문서 구조 읽는 중…", "6곳 글자 서식 바꾸는 중…".
+        // 진행 카드가 같은 말을 보이므로 줄은 숨겨 둔다(새 내용이 들어갈 자리 표시로만 쓴다).
         turn.thinking.textContent = `${progressText(view)}…`;
+        turn.thinking.hidden = true;
+        this.setActivity(turn, progressText(view));
         this.announce(progressText(view));
         break;
       }
@@ -1418,13 +1564,13 @@ export class DoogleSidebar {
           if (status) status.setAttribute('aria-label', event.ok ? '완료' : '실패');
           if (event.ok) {
             this.markRecovered(turn, entry);
-            if (entry.view.category === 'edit') this.addDoneLine(turn, doneText(entry.view));
           } else {
             this.showToolFailure(turn, entry, event.summary);
           }
           this.updateChip(turn);
         }
         if (turn?.thinking) turn.thinking.textContent = '생각하는 중…';
+        if (turn) this.setActivity(turn, '생각하는 중');
         break;
       }
       case 'usage': {
@@ -1444,8 +1590,21 @@ export class DoogleSidebar {
         break;
       }
       case 'turn_end': {
-        if (event.reason === 'cancelled') this.addNotice('중지했습니다.', 'info');
+        const ending = this.turn;
+        if (event.reason === 'cancelled') {
+          if (ending) ending.root.dataset.cancelled = '1';
+          this.addNotice('중지했습니다.', 'info');
+        } else if (event.reason === 'interrupted') {
+          if (ending) ending.root.dataset.interrupted = '1';
+          this.addNotice('화면을 다시 불러오면서 이 응답은 중단됐습니다. 이어서 하려면 다시 요청하세요.', 'info');
+        }
         this.endTurn();
+        // 저장된 기록이면 실제로 끝난 시각으로 걸린 시간을 다시 쓴다
+        const at = event.at ? Date.parse(event.at) : NaN;
+        if (ending && Number.isFinite(at)) {
+          ending.endedAt = at;
+          this.renderSteps(ending);
+        }
         break;
       }
       default:
@@ -1570,7 +1729,7 @@ export class DoogleSidebar {
           return {
             title: '다른 대화의 변경이 검토를 기다리고 있습니다',
             body: '그 변경을 적용하거나 거절하면 이 대화에서 문서를 고칠 수 있습니다.',
-            actions: [{ label: '검토 목록 보기', primary: true, run: () => this.review?.scrollIntoView({ block: 'center', behavior: 'smooth' }) }],
+            actions: [{ label: '문서에서 검토', primary: true, run: () => this.revealFirst() }],
           };
         case 'STAGING_BASELINE_LOST':
           return {
@@ -1587,22 +1746,6 @@ export class DoogleSidebar {
       }
     })();
     this.placeInTurn(this.buildCard({ tone: 'warn', iconName: 'alert', ...spec }), turn);
-  }
-
-  /** 끝난 편집을 대화에 한 줄로 남긴다 — 도구 묶음을 펼치지 않아도 무엇을 했는지 보인다 */
-  private addDoneLine(turn: TurnView, text: string): void {
-    const follow = this.isNearBottom();
-    const tail = this.tail(turn);
-    const prev = tail ? tail.previousElementSibling : turn.root.lastElementChild;
-    if (follow) requestAnimationFrame(() => this.scrollToBottom());
-    if (!turn.doneList || prev !== turn.doneList) {
-      turn.doneList = el('ul', 'dg-done');
-      turn.root.insertBefore(turn.doneList, tail);
-      if (turn === this.turn) this.closeTextBlock();
-    }
-    const li = el('li', 'dg-done-item');
-    li.append(icon('check', 13, 2.2), el('span', '', text));
-    turn.doneList.append(li);
   }
 
   private addTool(turn: TurnView, callId: string, view: ToolCallView): void {
@@ -1625,8 +1768,11 @@ export class DoogleSidebar {
       turn.chip = chip;
       turn.chipText = text;
       turn.toolList = list;
-      // 칩은 턴 맨 위 — 산문보다 앞
-      turn.root.prepend(chip, list);
+      // 진행 카드는 턴 맨 위 — 산문보다 앞. 도구 기록(칩·목록)은 카드 안 맨 아래에 접어 둔다
+      const steps = this.buildSteps();
+      steps.root.append(chip, list);
+      turn.steps = steps;
+      turn.root.prepend(steps.root);
     }
     const li = el('li', 'dg-tool');
     li.dataset.state = 'running';
@@ -1664,6 +1810,140 @@ export class DoogleSidebar {
     turn.chipText.textContent = `도구 ${entries.length}개 사용 · ${shown}${failed ? ` · ${failed}개 끝내지 못함` : ''}`;
     turn.chip!.dataset.state = running ? 'running' : failed ? 'error' : 'done';
     turn.chip!.title = failed ? `${failed}개를 끝내지 못했습니다` : '';
+    this.renderSteps(turn);
+  }
+
+  // ─── 진행 카드 (단계 체크리스트) ─────────────────────────
+
+  private buildSteps(): StepsView {
+    const root = el('section', 'dg-steps');
+    root.setAttribute('aria-label', '진행 상황');
+    const head = el('div', 'dg-steps-head');
+    const status = el('span', 'dg-steps-status');
+    status.setAttribute('aria-hidden', 'true');
+    const title = el('span', 'dg-steps-title');
+    const time = el('span', 'dg-steps-time dg-tnum');
+    head.append(status, title, time);
+    const list = el('ol', 'dg-steps-list');
+    const summary = el('div', 'dg-steps-sum');
+    summary.hidden = true;
+    root.append(head, list, summary);
+    return { root, status, title, time, list, rows: new Map(), summary };
+  }
+
+  /** 지금 하는 일 — 진행 카드의 진행 중 단계 옆에 보인다 */
+  private setActivity(turn: TurnView, text: string): void {
+    turn.activity = text;
+    this.renderSteps(turn);
+  }
+
+  private startClock(): void {
+    this.stopClock();
+    this.clock = setInterval(() => {
+      const turn = this.turn;
+      if (turn?.steps && !turn.done) turn.steps.time.textContent = elapsed(Date.now() - turn.startedAt);
+    }, 1000);
+  }
+
+  private stopClock(): void {
+    if (this.clock) clearInterval(this.clock);
+    this.clock = null;
+  }
+
+  /**
+   * 진행 카드를 다시 그린다. 단계는 도구 종류(살펴보기·고치기·확인)가 처음 나온 순서대로 쌓이고,
+   * 지금 일하는 단계에만 돌림표와 "지금 하는 일" 이 붙는다. 끝나면 머리가 "완료" 로 바뀌고
+   * 맨 아래에 변경 건수와 "문서에서 검토" 가 남는다 — 무엇이 바뀌었는지는 문서 위에서 본다.
+   */
+  private renderSteps(turn: TurnView): void {
+    const steps = turn.steps;
+    if (!steps) return;
+    const entries = [...turn.tools.values()];
+    const order: ToolCategory[] = [];
+    for (const e of entries) if (!order.includes(e.view.category)) order.push(e.view.category);
+    const last = entries[entries.length - 1];
+    const anyRunning = entries.some((e) => e.li.dataset.state === 'running');
+    const failedAll = entries.filter((e) => e.li.dataset.state === 'error').length;
+    for (const cat of order) {
+      let row = steps.rows.get(cat);
+      if (!row) {
+        row = el('li', 'dg-step');
+        row.append(el('span', 'dg-step-icon'), el('span', 'dg-step-label', STEP_LABEL[cat]), el('span', 'dg-step-note'));
+        steps.rows.set(cat, row);
+        steps.list.append(row);
+      }
+      const mine = entries.filter((e) => e.view.category === cat);
+      const failed = mine.filter((e) => e.li.dataset.state === 'error').length;
+      // 도구 사이(생각하는 중)에도 마지막 단계를 진행 중으로 둔다 — 멈춘 것처럼 보이지 않게
+      const current = !turn.done && (anyRunning
+        ? mine.some((e) => e.li.dataset.state === 'running')
+        : last?.view.category === cat);
+      row.dataset.state = current ? 'running' : failed > 0 ? 'error' : 'done';
+      const note = row.querySelector('.dg-step-note')!;
+      if (current) {
+        note.textContent = turn.activity;
+      } else if (failed > 0) {
+        note.textContent = `${failed}개 끝내지 못함`;
+      } else if (cat === 'edit') {
+        const spots = mine.filter((e) => e.li.dataset.state === 'done').reduce((n, e) => n + editSpots(e.view), 0);
+        note.textContent = spots > 0 ? `${spots}곳` : '';
+      } else {
+        note.textContent = '';
+      }
+    }
+    const cancelled = turn.done && turn.root.dataset.cancelled === '1';
+    const interrupted = turn.done && turn.root.dataset.interrupted === '1';
+    steps.root.dataset.state = !turn.done ? 'running' : cancelled || interrupted ? 'stopped' : failedAll > 0 ? 'error' : 'done';
+    steps.title.textContent = !turn.done ? '작업 중' : interrupted ? '중단됨' : cancelled ? '중지함'
+      : failedAll > 0 ? `끝냄 · ${failedAll}개 못 함` : '완료';
+    steps.time.textContent = elapsed((turn.done && turn.endedAt ? turn.endedAt : Date.now()) - turn.startedAt);
+    this.renderTurnSummary(turn);
+  }
+
+  /** 끝난 턴의 변경 요약 줄 — 건수와 "문서에서 검토" 만. 전·후 내용은 문서 위 검토 막이 보인다 */
+  private renderTurnSummary(turn: TurnView): void {
+    const steps = turn.steps;
+    if (!steps) return;
+    const box = steps.summary;
+    if (!turn.done) {
+      box.hidden = true;
+      return;
+    }
+    const pendingIds = this.pendingIdsOf(turn);
+    let text = '';
+    if (pendingIds.length > 0) {
+      text = `변경 ${pendingIds.length}건 · 문서에 표시함`;
+    } else if (turn.changeIds.size > 0) {
+      text = `변경 ${turn.changeIds.size}건 · 검토 끝남`;
+    } else {
+      const spots = [...turn.tools.values()]
+        .filter((e) => e.view.category === 'edit' && e.li.dataset.state === 'done')
+        .reduce((n, e) => n + editSpots(e.view), 0);
+      if (spots > 0) text = turn.restored ? `${spots}곳 고침` : `${spots}곳 고침 · 문서에 바로 적용함`;
+    }
+    box.hidden = !text;
+    if (!text) return;
+    const label = el('span', 'dg-steps-sum-text', text);
+    if (pendingIds.length > 0) {
+      const go = button('dg-steps-go', '문서에서 검토', () => reviewStore.focus(pendingIds[0], true));
+      box.replaceChildren(label, go);
+    } else {
+      box.replaceChildren(label);
+    }
+  }
+
+  private renderTurnSummaries(): void {
+    for (const t of this.thread?.turns ?? []) {
+      if (!t.done) continue;
+      this.renderTurnSummary(t);
+      this.renderTurnActions(t);
+    }
+  }
+
+  /** 검토 대기 첫 변경을 문서에서 보인다 */
+  private revealFirst(): void {
+    const first = reviewStore.rows()[0];
+    if (first) reviewStore.focus(first.id, true);
   }
 
   // ─── 메시지 동작 ───────────────────────────────────────
@@ -1784,40 +2064,9 @@ export class DoogleSidebar {
         turn.changeIds.add(cs.id);
         this.changeTurn.set(cs.id, turn);
       }
-      // 검토 목록은 변경을 만든 턴의 맨 끝에 놓는다 — 도구 사용 → 답변 → 검토 목록 순서
-      if (turn && this.review.parentElement !== turn.root) turn.root.append(this.review);
     }
-    for (const t of this.thread.turns) if (t.done) this.renderTurnActions(t);
-  }
-
-  /**
-   * 검토 목록은 review/list.ts(mountReviewList)가 그린다 — reviewStore 를 스스로 구독하고 비면 숨는다.
-   * 여기서는 목록 상자를 변경을 만든 턴 안의 알맞은 자리에 놓기만 한다.
-   */
-  private renderReview(): void {
-    const review = this.review;
-    if (!review || !this.deps.pending) return;
-    const rows = reviewStore.rows();
-    if (rows.length > 0 && !this.thread.log.contains(review)) {
-      // 다른 대화의 변경이면 이 대화 끝에 붙인다
-      const owner = rows.map((r) => this.changeTurn.get(r.id)).find((t) => t && this.thread.turns.includes(t));
-      if (owner) owner.root.append(review);
-      else this.thread.log.append(review);
-    }
-    if (!this.reviewList) {
-      this.reviewList = mountReviewList(review, {
-        headHost: this.reviewBar,
-        onError: (message) => this.addNotice(message, 'error'),
-        title: (list) => list.some((r) => r.threadId !== this.thread.id && !this.changeTurn.has(r.id))
-          ? '검토 대기 (다른 대화)'
-          : '검토 대기',
-        onRender: () => {
-          for (const t of this.thread?.turns ?? []) if (t.done) this.renderTurnActions(t);
-        },
-      });
-    } else {
-      this.reviewList.render();
-    }
+    // 변경 내용은 대화에 그리지 않는다 — 문서 위 검토 막(overlay)이 보인다. 여기서는 건수 줄만 고친다
+    this.renderTurnSummaries();
   }
 
   private decideAll(kind: 'accept' | 'reject'): void {

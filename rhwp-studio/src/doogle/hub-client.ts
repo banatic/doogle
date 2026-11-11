@@ -68,7 +68,32 @@ export type AgentEvent =
   | { kind: 'usage'; inputTokens?: number; outputTokens?: number }
   | { kind: 'limit'; message: string; resetAt?: string | number }
   | { kind: 'error'; code: string; message: string }
-  | { kind: 'turn_end'; reason: 'done' | 'cancelled' | 'error' };
+  /** interrupted: 화면이 사라져(새로고침·창 닫힘) hub 가 멈췄거나, hub 가 죽어 끝맺지 못한 기록. at 은 기록에만 있다 */
+  | { kind: 'turn_end'; reason: 'done' | 'cancelled' | 'error' | 'interrupted'; at?: string };
+
+/** 저장된 대화 (hub `threads_query` → `threads`) */
+export interface SavedThreadInfo {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  turns: number;
+  running: boolean;
+}
+
+/** 화면 복원용 기록 한 줄 — 사용자 요청 또는 그때 화면에 보낸 agent_event */
+export type TranscriptEntry =
+  | { kind: 'user'; text: string; providerId?: string; at?: string }
+  | AgentEvent;
+
+export interface SavedThread {
+  threadId: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  running: boolean;
+  transcript: TranscriptEntry[];
+}
 
 export interface ToolCallMessage {
   type: 'tool_call';
@@ -292,6 +317,33 @@ export class HubClient {
     context?: ChatContext;
   }): boolean {
     return this.send({ type: 'chat_send', ...input });
+  }
+
+  /** 저장된 대화 목록 (최근 것부터) */
+  async listThreads(limit = 50): Promise<SavedThreadInfo[]> {
+    const response = await this.request<{ type: 'threads'; list: SavedThreadInfo[] }>(
+      { type: 'threads_query', limit },
+      'threads',
+      { timeoutMs: 15_000 },
+    );
+    return Array.isArray(response.list) ? response.list : [];
+  }
+
+  /** 저장된 대화 하나의 화면 기록 */
+  async loadThread(threadId: string): Promise<SavedThread> {
+    const response = await this.request<{ type: 'thread'; [key: string]: unknown } & SavedThread>(
+      { type: 'thread_load', threadId },
+      'thread',
+      { timeoutMs: 15_000 },
+    );
+    return {
+      threadId: response.threadId,
+      title: response.title,
+      createdAt: response.createdAt,
+      updatedAt: response.updatedAt,
+      running: !!response.running,
+      transcript: Array.isArray(response.transcript) ? response.transcript : [],
+    };
   }
 
   cancelChat(threadId: string): boolean {

@@ -11,7 +11,7 @@ import { defaultModelId, ModelCatalog, normalizeModels } from './model-catalog.m
 import { appDataDir } from './paths.mjs';
 import { loadProviders, sortProviders } from './provider-registry.mjs';
 import { buildSystemPrompt, buildTurnText } from './system-prompt.mjs';
-import { ThreadStore } from './threads.mjs';
+import { ThreadStore, closeDanglingTurn, recordTranscript } from './threads.mjs';
 import { loadTools } from './tools-loader.mjs';
 import * as secrets from './secrets.mjs';
 
@@ -132,8 +132,39 @@ export async function createHub(opts = {}) {
   /** @type {Map<string, {resolve:(r:any)=>void, socket: WebSocket}>} */
   const pending = new Map();
   /** threadId → 진행 중 턴 */
-  /** @type {Map<string, {abort: AbortController, done: Promise<void>}>} */
+  /** @type {Map<string, {abort: AbortController, done: Promise<void>, interrupted?: boolean}>} */
   const turns = new Map();
+  /** threadId → 미뤄 둔 저장 타이머 (응답 도중 저장) */
+  /** @type {Map<string, ReturnType<typeof setTimeout>>} */
+  const saveTimers = new Map();
+
+  /**
+   * 응답 도중 저장 — 글 조각은 잠깐 모아서(0.8초), 도구 결과·턴 끝·오류는 바로 쓴다.
+   * 새로고침·앱 종료·허브 재시작 뒤에도 그때까지의 대화가 남는다.
+   */
+  function saveSoon(thread, urgent = false) {
+    const prev = saveTimers.get(thread.id);
+    if (prev) clearTimeout(prev);
+    saveTimers.delete(thread.id);
+    if (urgent) {
+      void store.save(thread);
+      return;
+    }
+    const timer = setTimeout(() => {
+      saveTimers.delete(thread.id);
+      void store.save(thread);
+    }, 800);
+    timer.unref?.();
+    saveTimers.set(thread.id, timer);
+  }
+
+  /** 화면이 사라졌다(새로고침·창 닫힘) — 열려 있던 문서도 함께 사라지므로 진행 중 응답을 멈춘다 */
+  function interruptTurns() {
+    for (const t of turns.values()) {
+      t.interrupted = true;
+      t.abort.abort();
+    }
+  }
 
   // ── tool_call 중계 ─────────────────────────────────────────
   /**
@@ -338,15 +369,23 @@ export async function createHub(opts = {}) {
   async function startTurn(msg) {
     const { threadId, providerId } = msg;
     if (typeof threadId !== 'string' || !threadId) return;
-    const emitHub = (event) => emitTo(threadId, event);
+    /** 대화 기록(transcript)에 남길 스레드 — 메시지를 확인한 뒤 붙는다 */
+    let recordTo = null;
+    const emitHub = (event) => {
+      if (recordTo && recordTranscript(recordTo, event)) {
+        saveSoon(recordTo, ['tool_result', 'turn_end', 'error', 'limit'].includes(event?.kind));
+      }
+      emitTo(threadId, event);
+    };
     if (turns.has(threadId)) {
-      emitHub({ kind: 'error', code: 'TURN_IN_PROGRESS', message: '이 대화에서 이미 답변을 생성하고 있습니다' });
+      emitTo(threadId, { kind: 'error', code: 'TURN_IN_PROGRESS', message: '이 대화에서 이미 답변을 생성하고 있습니다' });
       return;
     }
     const abort = new AbortController();
     let resolveDone;
     const done = new Promise((r) => { resolveDone = r; });
-    turns.set(threadId, { abort, done });
+    const entry = { abort, done, interrupted: false };
+    turns.set(threadId, entry);
     let reason = 'done';
     try {
       const provider = providers.get(providerId);
@@ -362,6 +401,12 @@ export async function createHub(opts = {}) {
       }
       const mode = msg.mode === 'full' ? 'full' : 'agent';
       const thread = await store.get(threadId);
+      // 앞선 기록이 끝맺지 못했으면(허브가 죽었던 경우) 먼저 닫는다
+      closeDanglingTurn(thread);
+      if (!thread.title) thread.title = msg.text.replace(/\s+/g, ' ').trim().slice(0, 40);
+      (thread.transcript ??= []).push({ kind: 'user', text: msg.text, providerId, at: new Date().toISOString() });
+      recordTo = thread;
+      saveSoon(thread, true);
       const reviews = thread.pendingReviews.splice(0);
       const text = buildTurnText({ text: msg.text, mode, context: msg.context, reviews });
       const messages = Array.isArray(thread.histories[providerId]) ? thread.histories[providerId] : [];
@@ -386,11 +431,11 @@ export async function createHub(opts = {}) {
           signal: abort.signal,
         });
         if (Array.isArray(out?.messages)) thread.histories[providerId] = out.messages;
-        if (abort.signal.aborted) reason = 'cancelled';
+        if (abort.signal.aborted) reason = entry.interrupted ? 'interrupted' : 'cancelled';
       } catch (err) {
         if (Array.isArray(err?.messages)) thread.histories[providerId] = err.messages;
         if (abort.signal.aborted) {
-          reason = 'cancelled';
+          reason = entry.interrupted ? 'interrupted' : 'cancelled';
         } else {
           reason = 'error';
           if (!err?.emitted) {
@@ -412,6 +457,35 @@ export async function createHub(opts = {}) {
       emitHub({ kind: 'turn_end', reason });
       resolveDone();
     }
+  }
+
+  /** 화면 복원 — 대화 목록 */
+  async function onThreadsQuery(msg, socket) {
+    const list = await store.list(typeof msg.limit === 'number' ? Math.max(1, Math.min(200, msg.limit)) : 50);
+    send(socket, {
+      type: 'threads',
+      ...(typeof msg.reqId === 'string' ? { reqId: msg.reqId } : {}),
+      list: list.map((t) => ({ ...t, running: turns.has(t.id) })),
+    });
+  }
+
+  /** 화면 복원 — 대화 하나의 기록. 끝맺지 못한 기록(허브가 죽었던 경우)은 "중단됨" 으로 닫아 준다 */
+  async function onThreadLoad(msg, socket) {
+    const reply = (body) => send(socket, { type: 'thread', ...(typeof msg.reqId === 'string' ? { reqId: msg.reqId } : {}), ...body });
+    if (typeof msg.threadId !== 'string' || !msg.threadId) {
+      return send(socket, { type: 'error', reqId: msg.reqId, requestType: 'thread_load', code: 'INVALID_ARGS', message: 'threadId가 없습니다' });
+    }
+    const thread = await store.get(msg.threadId);
+    const running = turns.has(thread.id);
+    if (!running && closeDanglingTurn(thread)) await store.save(thread);
+    reply({
+      threadId: thread.id,
+      title: thread.title || '대화',
+      createdAt: thread.createdAt,
+      updatedAt: thread.updatedAt,
+      running,
+      transcript: Array.isArray(thread.transcript) ? thread.transcript : [],
+    });
   }
 
   async function onReviewDecision(msg) {
@@ -508,6 +582,8 @@ export async function createHub(opts = {}) {
   function onStudioConnection(ws) {
     if (studio && studio !== ws) {
       const old = studio;
+      // 새 화면이 붙었다(새로고침) — 옛 화면의 문서에 대고 하던 응답은 멈춘다
+      interruptTurns();
       failPendingFor(old);
       try { old.close(4000, 'replaced'); } catch { /* ignore */ }
     }
@@ -531,6 +607,13 @@ export async function createHub(opts = {}) {
           return onToolResult(msg, ws);
         case 'review_decision':
           return void onReviewDecision(msg).catch((e) => log(`review_decision: ${e?.message}`));
+        case 'threads_query':
+          return void onThreadsQuery(msg, ws).catch((e) => log(`threads_query: ${e?.message}`));
+        case 'thread_load':
+          return void onThreadLoad(msg, ws).catch((e) => {
+            log(`thread_load: ${e?.message}`);
+            send(ws, { type: 'error', reqId: msg.reqId, requestType: 'thread_load', code: 'HUB_ERROR', message: String(e?.message ?? e) });
+          });
         case 'secret_set':
         case 'secrets_set':
         case 'secret_delete':
@@ -548,6 +631,7 @@ export async function createHub(opts = {}) {
       }
     });
     ws.on('close', () => {
+      if (studio === ws) interruptTurns();
       failPendingFor(ws);
       if (studio === ws) studio = null;
     });
@@ -626,8 +710,15 @@ export async function createHub(opts = {}) {
     if (broadcastTimer) { clearTimeout(broadcastTimer); broadcastTimer = null; }
     await catalog.idle();
     for (const l of logins.values()) l?.cancel?.();
-    for (const t of turns.values()) t.abort.abort();
+    interruptTurns();
     await Promise.all([...turns.values()].map((t) => t.done));
+    // 미뤄 둔 저장은 지금 쓴다
+    for (const [id, timer] of saveTimers) {
+      clearTimeout(timer);
+      const t = store.threads.get(id);
+      if (t) void store.save(t);
+    }
+    saveTimers.clear();
     for (const ws of wss.clients) ws.terminate();
     await new Promise((r) => wss.close(() => r()));
     await new Promise((r) => server.close(() => r()));

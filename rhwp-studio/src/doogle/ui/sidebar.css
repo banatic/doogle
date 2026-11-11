@@ -632,50 +632,190 @@
   color: var(--dg-x-warn);
 }
 
-/* 검토할 변경 */
-.dg-review {
+/* 진행 카드 — 작업 중/완료가 한눈에. 단계 체크리스트 + 변경 건수. 변경 내용은 문서 위에서 본다 */
+.dg-steps {
   display: flex;
   flex-direction: column;
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-/* 검토 머리줄 — 대화가 길어도 입력창 바로 위에 붙어 "모두 적용"이 보인다 */
-.dg-review-bar {
-  flex-shrink: 0;
-  margin: 0 16px 8px;
-  padding: 8px 10px 8px 14px;
+  gap: 8px;
+  padding: 10px 12px;
   background: var(--dg-x-surface);
-  border: 1px solid var(--dg-x-soft-border);
+  border: 1px solid var(--dg-x-border);
   border-radius: var(--dg-x-r-md);
-  box-shadow: 0 -6px 12px -8px rgba(15, 23, 42, 0.18);
+  font-size: 12.5px;
+  line-height: 1.5;
+  transition: border-color var(--dg-x-dur) ease, box-shadow var(--dg-x-dur) ease;
 }
 
-/* 끝난 편집 한 줄 — 도구 묶음을 펼치지 않아도 무엇을 했는지 보인다 */
-.dg-done {
+.dg-steps[data-state='running'] {
+  border-color: var(--dg-x-accent);
+  box-shadow: 0 0 0 3px var(--dg-x-soft);
+}
+
+.dg-steps-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dg-steps-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dg-x-text);
+}
+
+.dg-steps[data-state='done'] .dg-steps-title { color: var(--dg-x-ok); }
+.dg-steps[data-state='error'] .dg-steps-title { color: var(--dg-x-bad); }
+.dg-steps[data-state='stopped'] .dg-steps-title { color: var(--dg-x-muted); }
+
+.dg-steps-time {
+  margin-left: auto;
+  color: var(--dg-x-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 상태 표시 — 머리와 단계 줄이 같은 모양을 쓴다: 돌림표 · 초록 체크 · 빨간 점 */
+.dg-steps-status,
+.dg-step-icon {
+  position: relative;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  border-radius: 50%;
+}
+
+.dg-steps[data-state='running'] .dg-steps-status,
+.dg-step[data-state='running'] .dg-step-icon {
+  border: 2px solid var(--dg-x-soft-border);
+  border-top-color: var(--dg-x-accent);
+  animation: dg-spin 0.8s linear infinite;
+}
+
+.dg-steps[data-state='done'] .dg-steps-status,
+.dg-step[data-state='done'] .dg-step-icon {
+  background: var(--dg-x-ok);
+}
+
+.dg-steps[data-state='done'] .dg-steps-status::after,
+.dg-step[data-state='done'] .dg-step-icon::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 4px;
+  width: 6px;
+  height: 3px;
+  border: solid var(--dg-x-surface);
+  border-width: 0 0 1.6px 1.6px;
+  transform: rotate(-45deg);
+}
+
+.dg-steps[data-state='error'] .dg-steps-status,
+.dg-step[data-state='error'] .dg-step-icon {
+  background: var(--dg-x-bad);
+  transform: scale(0.7);
+}
+
+.dg-steps[data-state='stopped'] .dg-steps-status {
+  border: 2px solid var(--dg-x-muted);
+}
+
+.dg-steps-list {
   list-style: none;
   margin: 0;
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  font-size: 12.5px;
-  line-height: 1.5;
+  gap: 6px;
+}
+
+.dg-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
   color: var(--dg-x-text2);
 }
 
-.dg-done-item {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  min-width: 0;
-  overflow-wrap: anywhere;
+.dg-step[data-state='running'] {
+  color: var(--dg-x-text);
+  font-weight: 600;
 }
 
-.dg-done-item > svg {
+.dg-step-label {
   flex-shrink: 0;
-  margin-top: 3px;
-  color: var(--dg-x-ok);
+}
+
+.dg-step-note {
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dg-x-muted);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+.dg-step[data-state='error'] .dg-step-note {
+  color: var(--dg-x-bad);
+}
+
+.dg-steps-sum {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--dg-x-divider);
+}
+
+.dg-steps-sum[hidden] {
+  display: none;
+}
+
+.dg-steps-sum-text {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  color: var(--dg-x-text);
+}
+
+.dg-steps-go {
+  flex-shrink: 0;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: var(--dg-x-r-sm);
+  background: var(--dg-x-accent);
+  color: var(--dg-x-on-accent) !important;
+  font-size: 12.5px !important;
+  font-weight: 600;
+}
+
+.dg-steps-go:hover {
+  filter: brightness(1.08);
+}
+
+/* 카드 안 도구 기록 — 평소엔 접힌 한 줄. 무슨 도구를 썼는지 궁금할 때만 편다 */
+.dg-steps .dg-tools-chip {
+  min-height: 22px;
+  padding: 0;
+  border: 0;
+  font-size: 11.5px !important;
+}
+
+.dg-steps .dg-tools-chip:hover {
+  background: transparent;
+  color: var(--dg-x-text2) !important;
+}
+
+.dg-steps .dg-tools-list {
+  margin: -4px 0 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dg-steps-status,
+  .dg-step-icon {
+    animation: none !important;
+  }
 }
 
 /* 질문 카드 — 에이전트의 되묻기를 선택 단추로 */

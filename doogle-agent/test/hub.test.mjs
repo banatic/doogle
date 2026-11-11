@@ -285,6 +285,55 @@ describe('doogle hub', () => {
     s.close();
   });
 
+  test('응답 도중 저장 → 새로고침(새 studio)이면 interrupted → 목록·불러오기로 복원', async () => {
+    const s = new Client(studioUrl());
+    await s.open();
+    s.send({ type: 'chat_send', threadId: 't20', providerId: 'fake', text: 'wait 저장 확인', mode: 'agent' });
+    await s.next((m) => m.type === 'agent_event' && m.threadId === 't20' && m.event.kind === 'text_delta');
+    // 글 조각은 0.8초 모아서 쓴다 — 턴이 끝나기 전에 파일에 있어야 한다
+    await new Promise((r) => setTimeout(r, 1100));
+    const mid = JSON.parse(await fs.readFile(path.join(dataDir, 'threads', 't20.json'), 'utf8'));
+    assert.deepEqual(mid.transcript.map((e) => e.kind), ['user', 'text_delta']);
+    assert.equal(mid.transcript[1].text, '안녕');
+    assert.equal(mid.title, 'wait 저장 확인');
+
+    // 새로고침: 새 화면이 붙으면 옛 화면 문서에 대던 응답은 멈춘다
+    const s2 = new Client(studioUrl());
+    await s2.open();
+    const end = await s2.next((m) => m.type === 'agent_event' && m.threadId === 't20' && m.event.kind === 'turn_end');
+    assert.equal(end.event.reason, 'interrupted');
+
+    s2.send({ type: 'threads_query', reqId: 'q1' });
+    const list = await s2.next((m) => m.type === 'threads' && m.reqId === 'q1');
+    const item = list.list.find((t) => t.id === 't20');
+    assert.ok(item, 't20 이 목록에 있다');
+    assert.equal(item.turns, 1);
+    assert.equal(item.running, false);
+
+    s2.send({ type: 'thread_load', reqId: 'l1', threadId: 't20' });
+    const loaded = await s2.next((m) => m.type === 'thread' && m.reqId === 'l1');
+    assert.deepEqual(loaded.transcript.map((e) => e.kind), ['user', 'text_delta', 'turn_end']);
+    assert.equal(loaded.transcript.at(-1).reason, 'interrupted');
+    s.close();
+    s2.close();
+  });
+
+  test('끝맺지 못한 기록(허브가 죽음)은 불러올 때 interrupted 로 닫는다', async () => {
+    await fs.mkdir(path.join(dataDir, 'threads'), { recursive: true });
+    await fs.writeFile(path.join(dataDir, 'threads', 't21.json'), JSON.stringify({
+      id: 't21', title: '죽은 턴', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+      histories: {}, pendingReviews: [],
+      transcript: [{ kind: 'user', text: '죽은 턴' }, { kind: 'tool_use', callId: 'c', name: 'get_structure', args: {} }],
+    }));
+    const s = new Client(studioUrl());
+    await s.open();
+    s.send({ type: 'thread_load', reqId: 'l2', threadId: 't21' });
+    const loaded = await s.next((m) => m.type === 'thread' && m.reqId === 'l2');
+    assert.deepEqual(loaded.transcript.map((e) => e.kind), ['user', 'tool_use', 'turn_end']);
+    assert.equal(loaded.running, false);
+    s.close();
+  });
+
   test('provider 예외 → error 이벤트 + turn_end error, 없는 provider', async () => {
     const s = new Client(studioUrl());
     await s.open();
