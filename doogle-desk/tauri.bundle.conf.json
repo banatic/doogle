@@ -1,11 +1,14 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
+  "build": {
+    "beforeBuildCommand": { "script": "node scripts/prepare-bundle.mjs", "cwd": "." }
+  },
   "bundle": {
     "resources": {
-      "../doogle-agent/bin/": "doogle-agent/bin/",
-      "../doogle-agent/src/": "doogle-agent/src/",
-      "../doogle-agent/node_modules/": "doogle-agent/node_modules/",
-      "../doogle-agent/package.json": "doogle-agent/package.json"
+      "target/agent-stage/bin/": "doogle-agent/bin/",
+      "target/agent-stage/src/": "doogle-agent/src/",
+      "target/agent-stage/node_modules/": "doogle-agent/node_modules/",
+      "target/agent-stage/package.json": "doogle-agent/package.json"
     }
   }
 }
