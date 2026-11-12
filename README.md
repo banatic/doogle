@@ -1,8 +1,10 @@
 # 두글 (doogle)
 
-두글은 HWP/HWPX 문서를 열고 AI 에이전트 수정기입니다.
+두글은 HWP/HWPX 문서 AI 에이전트 수정기입니다.
 
 ![빈 신청서에 "예시데이터로 문서 채워줘" 라고 부탁하자 에이전트가 칸을 채우는 모습](docs/doogle/media/demo-fill-form.webp)
+
+chatGPT, Claude를 지원합니다.
 
 ## 개발 실행
 
