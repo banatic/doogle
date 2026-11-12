@@ -716,7 +716,65 @@ async function runPdfPrint(services: CommandServices): Promise<void> {
   }
 }
 
+/**
+ * 두글 데스크탑(Tauri WebView2)은 새 창(window.open)을 열지 못해 미리보기 팝업이 막힌다.
+ * 숨은 iframe 에 인쇄용 문서를 만들어 OS 인쇄 대화상자를 바로 연다 — 그 대화상자에 미리보기가 있다.
+ */
+async function runDeskPrint(services: CommandServices): Promise<void> {
+  if (!beginPrintJob()) return;
+
+  const wasm = services.wasm;
+  const statusEl = document.getElementById('sb-message');
+  const originalStatus = statusEl?.textContent || '';
+  let surface: PrintSurface | null = null;
+  let restoreStatus = true;
+  let disposeLater = false;
+
+  try {
+    flushDeferredPaginationBeforeExplicitOutput(services, 'print');
+    const pageCount = wasm.pageCount;
+    if (pageCount === 0) return;
+
+    if (statusEl) statusEl.textContent = printProgressText('print', 0, pageCount);
+    await waitForHostPaint();
+    surface = await createPrintSurface();
+    const printPages = await preparePrintPages(services, 'print', (current, total) => {
+      if (statusEl) statusEl.textContent = printProgressText('print', current, total);
+    });
+    setupPrintDocument(surface.document, wasm.fileName, printPages);
+    await waitForPrintSurfaceReady(surface);
+    if (statusEl) statusEl.textContent = printReadyText('print');
+
+    // print() 가 대화상자를 닫을 때까지 막지 않는 엔진도 있다 — afterprint 에서 치운다(안 오면 10분 뒤).
+    const target = surface;
+    let cleaned = false;
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      window.clearTimeout(fallback);
+      target.dispose();
+    };
+    const fallback = window.setTimeout(cleanup, 10 * 60_000);
+    target.window.addEventListener('afterprint', cleanup, { once: true });
+    disposeLater = true;
+    console.info(`[file:print] 인쇄 대화상자 호출 (surface=iframe, pages=${pageCount}, profile=print)`);
+    target.window.focus();
+    target.window.print();
+  } catch (err) {
+    restoreStatus = false;
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error('[file:print]', msg);
+    if (statusEl) statusEl.textContent = t('command.file.statusEl.text.x2f5125', { p1: msg });
+    showToast({ message: t('command.file.runPrintPreview.message.xc4753b', { p1: msg }), durationMs: 5000 });
+  } finally {
+    if (!disposeLater) surface?.dispose();
+    printJobActive = false;
+    if (restoreStatus && statusEl) statusEl.textContent = originalStatus;
+  }
+}
+
 async function runPrintPreview(services: CommandServices): Promise<void> {
+  if (isDesk()) return runDeskPrint(services);
   if (!beginPrintJob()) return;
 
   const wasm = services.wasm;

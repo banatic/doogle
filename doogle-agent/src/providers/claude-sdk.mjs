@@ -6,7 +6,7 @@
 // - Claude 자격증명(~/.claude/.credentials.json, Keychain 등)을 읽기/복사/저장/중계하지 않는다.
 // - 격리 홈(CLAUDE_CONFIG_DIR)·자격증명 미러링을 쓰지 않는다. SDK는 사용자의 기본 환경 그대로 실행한다.
 // - 두글은 claude.ai 로그인 UI를 제공하지 않는다. 미로그인이면 터미널에서 `claude` → /login 안내.
-import { promises as fs, readdirSync, statSync } from 'node:fs';
+import { promises as fs, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { spawn as spawnRaw } from 'node:child_process';
 import os from 'node:os';
@@ -16,6 +16,7 @@ import spawn from 'cross-spawn';
 import { ProviderError } from '../errors.mjs';
 import { appDataDir } from '../paths.mjs';
 import { splitToolImage } from '../tools/index.mjs';
+import { msixPackageDirs, newestFile, safeList } from './find-exe.mjs';
 
 const require = createRequire(import.meta.url);
 
@@ -67,40 +68,24 @@ export function claudeOnPath(env = process.env, platform = process.platform) {
  * 수정하지 않은 공식 바이너리를 그대로 실행할 뿐이고, 자격증명은 건드리지 않는다.
  * 앱이 버전을 갈아 끼우므로 매번 가장 최근 것을 고른다. 없으면 null.
  *   - MSIX 설치: %LOCALAPPDATA%\Claude-Data\claude_<id>\claude-code\<버전>\<빌드>\claude.exe
+ *     (패키지 가상화로 %LOCALAPPDATA%\Packages\Claude_<id>\LocalCache\{Local,Roaming}\… 에 있을 수도 있다)
  *   - 일반 설치: %APPDATA%\Claude\claude-code\<버전>\...\claude.exe
+ * 데스크탑 앱은 Code 기능을 처음 쓸 때 Claude Code 를 내려받으므로, 그 전에는 없다.
  */
 export function desktopClaudeBinary(env = process.env, platform = process.platform) {
   if (platform !== 'win32') return null;
   const roots = [];
-  if (env.LOCALAPPDATA) {
-    const data = path.join(env.LOCALAPPDATA, 'Claude-Data');
+  const dataRoots = (local) => {
+    const data = path.join(local, 'Claude-Data');
     for (const name of safeList(data)) if (/^claude_/i.test(name)) roots.push(path.join(data, name, 'claude-code'));
-  }
-  if (env.APPDATA) roots.push(path.join(env.APPDATA, 'Claude', 'claude-code'));
-  let best = null;
-  const visit = (dir, depth) => {
-    for (const name of safeList(dir)) {
-      const full = path.join(dir, name);
-      if (/^claude\.exe$/i.test(name)) {
-        try {
-          const at = statSync(full).mtimeMs;
-          if (!best || at > best.at) best = { file: full, at };
-        } catch { /* 지워지는 중 */ }
-      } else if (depth < 3) {
-        visit(full, depth + 1);
-      }
-    }
   };
-  for (const root of roots) visit(root, 0);
-  return best?.file ?? null;
-}
-
-function safeList(dir) {
-  try {
-    return readdirSync(dir);
-  } catch {
-    return [];
+  if (env.LOCALAPPDATA) dataRoots(env.LOCALAPPDATA);
+  if (env.APPDATA) roots.push(path.join(env.APPDATA, 'Claude', 'claude-code'));
+  for (const pkg of msixPackageDirs(env, 'Claude_')) {
+    dataRoots(path.join(pkg, 'LocalCache', 'Local'));
+    roots.push(path.join(pkg, 'LocalCache', 'Roaming', 'Claude', 'claude-code'));
   }
+  return newestFile(roots, 'claude.exe', 3);
 }
 
 /**
@@ -335,7 +320,7 @@ export default {
     if (!bundledOk && !onPath) {
       return {
         available: false,
-        reason: 'Claude Code를 찾을 수 없습니다. Claude 데스크탑 앱이나 Claude Code를 설치한 뒤 터미널에서 `claude`로 로그인하세요.',
+        reason: 'Claude Code를 찾을 수 없습니다. Claude Code를 설치하거나, Claude 데스크탑 앱에서 Code 탭을 한 번 연 뒤(그때 Claude Code를 내려받습니다) 다시 확인하세요.',
         models: fallbackModels(),
         authHint: AUTH_HINT,
       };

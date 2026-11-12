@@ -26,9 +26,11 @@
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import os from 'node:os';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadProviderTools, providerError } from './openai-api.mjs';
 import { splitToolImage } from '../tools/index.mjs';
+import { msixPackageDirs, newestFile } from './find-exe.mjs';
 
 const CLIENT_INFO = { name: 'doogle', title: '두글', version: '0.1.0' };
 const DISABLED_FEATURES = [
@@ -47,6 +49,35 @@ const SIWC_PROVIDER_ARGS = [
 ];
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+
+/** PATH 에 codex 가 있는지 (where/which) */
+function codexOnPath(env, platform) {
+  try {
+    const r = spawnSync(platform === 'win32' ? 'where' : 'which', ['codex'], { env, encoding: 'utf8', timeout: 5000, windowsHide: true });
+    return r.status === 0 && String(r.stdout ?? '').trim() !== '';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Codex 데스크탑 앱이 품고 있는 codex.exe (Windows) — CLI 를 따로 깔지 않은 PC 에서도 쓰게.
+ * 앱은 %LOCALAPPDATA%\OpenAI\Codex\bin\<빌드>\codex.exe 에 둔다(빌드마다 폴더가 바뀌어 가장 최근 것을 고른다).
+ * MSIX 가상화로 %LOCALAPPDATA%\Packages\OpenAI.Codex_<id>\LocalCache\Local\OpenAI\Codex\bin 에 있을 수도 있다.
+ */
+export function desktopCodexBinary(env = process.env, platform = process.platform) {
+  if (platform !== 'win32' || !env.LOCALAPPDATA) return null;
+  const roots = [path.join(env.LOCALAPPDATA, 'OpenAI', 'Codex', 'bin')];
+  for (const pkg of msixPackageDirs(env, 'OpenAI.Codex_')) roots.push(path.join(pkg, 'LocalCache', 'Local', 'OpenAI', 'Codex', 'bin'));
+  return newestFile(roots, 'codex.exe', 1);
+}
+
+/** 실행할 codex — DOOGLE_CODEX_PATH → PATH 의 codex → Codex 데스크탑 앱 안. 다 없으면 'codex'(ENOENT 로 안내). */
+export function findCodex(env = process.env, platform = process.platform) {
+  if (env.DOOGLE_CODEX_PATH) return env.DOOGLE_CODEX_PATH;
+  if (codexOnPath(env, platform)) return 'codex';
+  return desktopCodexBinary(env, platform) || 'codex';
+}
 export const DOOGLE_MCP_BIN = path.resolve(here, '..', '..', 'bin', 'doogle-mcp.mjs');
 
 async function getSpawn() {
@@ -181,7 +212,7 @@ function summarize(v) {
 
 /**
  * @param {object} [opts]
- * @param {string} [opts.command] codex 실행 파일 (기본 env DOOGLE_CODEX_PATH 또는 'codex')
+ * @param {string} [opts.command] codex 실행 파일 (기본 findCodex(): env DOOGLE_CODEX_PATH → PATH → Codex 데스크탑 앱)
  * @param {string[]} [opts.prefixArgs] command 뒤, 'app-server' 앞에 붙는 인자 (테스트: node fake.mjs)
  * @param {boolean} [opts.useSiwcToken] SIWC access token을 ACCESS_TOKEN으로 주입 (env DOOGLE_CODEX_SIWC=1)
  * @param {'dynamic'|'mcp'} [opts.toolMode] dynamicTools(기본) 또는 doogle-mcp 폴백 (env DOOGLE_CODEX_TOOL_MODE)
@@ -190,7 +221,7 @@ function summarize(v) {
  * @param {string} [opts.effort] reasoning effort
  */
 export function createCodexAppServerProvider(opts = {}) {
-  const command = opts.command || process.env.DOOGLE_CODEX_PATH || 'codex';
+  const commandFor = () => opts.command || findCodex();
   const prefixArgs = opts.prefixArgs || [];
   const useSiwc = opts.useSiwcToken ?? process.env.DOOGLE_CODEX_SIWC === '1';
   const toolMode = opts.toolMode || (process.env.DOOGLE_CODEX_TOOL_MODE === 'mcp' ? 'mcp' : 'dynamic');
@@ -237,7 +268,7 @@ export function createCodexAppServerProvider(opts = {}) {
       env.ACCESS_TOKEN = token;
     }
     const spawn = await getSpawn();
-    const child = spawn(command, buildArgs(), { stdio: ['pipe', 'pipe', 'pipe'], env, windowsHide: true });
+    const child = spawn(commandFor(), buildArgs(), { stdio: ['pipe', 'pipe', 'pipe'], env, windowsHide: true });
     const c = new AppServerConnection(child);
     c.onClose = () => { if (conn === c) { conn = null; connP = null; threads.clear(); } for (const h of active.values()) h.fail(new Error('codex app-server가 예기치 않게 종료되었습니다.')); };
     c.onNotification = (method, params) => {
@@ -327,9 +358,9 @@ export function createCodexAppServerProvider(opts = {}) {
         const notFound = /ENOENT|not recognized|not found/i.test(String(e?.message));
         value = {
           available: false,
-          reason: notFound ? 'Codex CLI(codex)를 찾지 못했습니다.' : `Codex 확인 실패: ${e?.message || e}`,
+          reason: notFound ? 'Codex를 찾지 못했습니다.' : `Codex 확인 실패: ${e?.message || e}`,
           models: [],
-          authHint: notFound ? 'Codex CLI를 설치하세요: npm i -g @openai/codex' : undefined,
+          authHint: notFound ? 'Codex 데스크탑 앱을 설치하거나 Codex CLI를 설치하세요(npm i -g @openai/codex). ChatGPT 데스크탑 앱에는 Codex가 들어 있지 않으니, 그때는 "ChatGPT로 로그인"을 쓰세요.' : undefined,
         };
       }
       detectCache = { at: Date.now(), value };

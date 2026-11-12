@@ -686,21 +686,24 @@ export async function createHub(opts = {}) {
       return;
     }
     logins.get(providerId)?.cancel?.();
+    // 브라우저에서 로그인하는 사이 화면이 새 소켓으로 다시 붙을 수 있다 — 끝 알림은 그때의 화면으로 보낸다.
+    // (시작한 소켓으로만 보내면 알림이 사라져 화면이 로그인 전 상태로 남는다)
+    const toScreen = (m) => (studio || detached ? sendStudio(m) : send(socket, m));
     try {
       const login = await p.startLogin();
       logins.set(providerId, login);
       send(socket, { type: 'auth_url', providerId, url: login.authUrl ?? login.url });
       try {
         await login.waitForCompletion();
-        send(socket, { type: 'auth_done', providerId, ok: true });
+        toScreen({ type: 'auth_done', providerId, ok: true });
         await refreshModels(providerId);
       } finally {
         if (logins.get(providerId) === login) logins.delete(providerId);
       }
     } catch (err) {
-      send(socket, { type: 'auth_done', providerId, ok: false, error: { code: typeof err?.code === 'string' ? err.code : 'AUTH_FAILED', message: String(err?.message ?? err) } });
+      toScreen({ type: 'auth_done', providerId, ok: false, error: { code: typeof err?.code === 'string' ? err.code : 'AUTH_FAILED', message: String(err?.message ?? err) } });
     }
-    send(socket, { type: 'providers', list: await providersList() });
+    toScreen({ type: 'providers', list: await providersList() });
   }
 
   /** 터미널 로그인이 필요한 provider — 공식 CLI 를 새 터미널 창에 띄운다 (S→H `open_terminal {providerId}`) */

@@ -445,6 +445,10 @@ export class DoogleSidebar {
     };
     root.addEventListener('pointerenter', onFocusIn);
     root.addEventListener('focusin', onFocusIn);
+    // 브라우저 로그인 뒤 두글 창으로 돌아오면 다시 묻는다 — 끝 알림(auth_done)을 놓쳐도 로그인 상태가 보이게
+    const onWindowFocus = () => { if (this.loginPending) void this.recheckPendingLogin(); };
+    window.addEventListener('focus', onWindowFocus);
+    this.offs.push(() => window.removeEventListener('focus', onWindowFocus));
     this.offs.push(() => {
       if (this.connTimer) clearInterval(this.connTimer);
       this.connTimer = null;
@@ -1481,6 +1485,20 @@ export class DoogleSidebar {
     this.deps.openExternal(url).catch((error) => {
       this.addNotice(`브라우저를 열지 못했습니다: ${error instanceof Error ? error.message : String(error)}`, 'error');
     });
+  }
+
+  /** 로그인 대기 중 — 계정 목록을 다시 받아 이미 쓸 수 있게 됐으면 대기를 끝낸다 */
+  private async recheckPendingLogin(): Promise<void> {
+    const providerId = this.loginPending;
+    if (!providerId) return;
+    await this.refreshProviders();
+    if (this.loginPending !== providerId) return; // 그새 auth_done 이 왔다
+    if (this.providers.find((p) => p.id === providerId)?.available) {
+      this.loginPending = null;
+      if (this.sheet?.isOpen) this.announce('로그인했습니다.');
+      else this.addNotice('로그인했습니다.', 'info');
+      this.sheet?.render();
+    }
   }
 
   private handleAuthDone(message: HubMessage): void {
