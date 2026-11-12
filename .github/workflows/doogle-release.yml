@@ -229,3 +229,9 @@ jobs:
           prerelease: false
           releaseCommitish: ${{ github.sha }}
           includeUpdaterJson: true
+          # 설치본 이름은 productName("두글")에서 오는데, GitHub 가 업로드 파일 이름의 한글을 지운다
+          # (`_0.2.1_x64-setup.exe`). 그러면 tauri-action 이 서명 파일을 못 찾아 latest.json 을 올리지 않고,
+          # 앱의 업데이트 확인이 "Could not fetch a valid release JSON" 으로 실패한다 → 영문 이름으로 올린다.
+          assetNamePattern: doogle_[version]_[arch][setup][ext]
+          # 앱은 NSIS(passive) 로 업데이트한다 — MSI 가 함께 있어도 latest.json 은 NSIS 를 가리키게
+          updaterJsonPreferNsis: true
