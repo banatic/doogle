@@ -194,10 +194,33 @@ function installSaveShortcutGuard(): void {
   }, true);
 }
 
+/** 자동 저장 임시본을 지우는 데 기다리는 최대 시간 — 넘기면 그냥 닫는다(다음 실행에 복구 안내가 뜰 뿐) */
+const DISCARD_DRAFT_WAIT_MS = 3000;
+
+/**
+ * 정상 종료 — 사용자가 저장했거나 "저장 안 함"을 골랐으니 자동 저장 임시본은 필요 없다.
+ * 지우지 않으면(또는 지우는 도중 창이 사라지면) 다음 실행 때 복구 안내가 뜬다.
+ * 임시본은 비정상 종료(멈춤·강제 종료)를 위한 것이다.
+ */
+export async function discardRecoveryDraft(): Promise<void> {
+  const discard = (window as unknown as { rhwpStudio?: { recovery?: { discardDraft?: (reason?: string) => Promise<void> } } })
+    .rhwpStudio?.recovery?.discardDraft;
+  if (!discard) return;
+  try {
+    await Promise.race([
+      discard('window-closed'),
+      new Promise<void>((resolve) => window.setTimeout(resolve, DISCARD_DRAFT_WAIT_MS)),
+    ]);
+  } catch (error) {
+    console.warn('[doogle] 자동 저장 임시본을 지우지 못했습니다', error);
+  }
+}
+
 /** 창 닫기 — 확인 뒤 `confirm_close`. 확인 중 다시 불리면 같은 확인을 기다린다. */
 export async function requestClose(): Promise<void> {
   if (!isDesk()) return;
   if (!(await confirmLeaveDocument())) return;
+  await discardRecoveryDraft();
   try {
     await invoke<void>('confirm_close');
   } catch (error) {

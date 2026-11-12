@@ -188,6 +188,9 @@ async function completeHostSave(fileName?: string): Promise<{ ok: true; wasDirty
   links: { setHandler: setLinkHostHandler },
   forms: { setActionsEnabled: setFormActionsEnabled },
   fonts: { setProvider: setHostFontProvider, getState: getHostFontState },
+  // [doogle] 창을 닫기로 확정했을 때(저장했거나 "저장 안 함") 자동 저장 임시본을 지운다.
+  // 삭제 완료까지 await 하므로 resolve 뒤 창을 없애도 IndexedDB 삭제가 잘리지 않는다.
+  recovery: { discardDraft: (reason = 'host-close') => autosaveManager.discardCurrentDraft(reason) },
   // [doogle] 쪽 좌표(px, 배율 1) → #scroll-content 안 좌표. 캐럿과 같은 계산(caret-renderer updatePosition).
   // 읽기 전용 — 문서 위에 장식(에이전트 편집 표시)을 얹을 때 쓴다. 뷰가 없으면 null.
   view: {
