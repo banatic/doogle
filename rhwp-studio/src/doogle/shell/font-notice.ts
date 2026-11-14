@@ -1,14 +1,15 @@
 /**
- * 글꼴 알림 띠 — 문서의 글꼴이 이 컴퓨터에 없을 때 문서 위에 한 줄로 알린다.
+ * 글꼴 알림 — 문서의 글꼴이 이 컴퓨터에 없을 때 상태 표시줄에 작게 알린다.
  *
  * upstream 은 이때 화면 한가운데 「로컬 글꼴 감지」 창을 띄우고 답을 기다리는 동안 쪽을 그리지 않는다.
  * 두글에서는 비슷한 글꼴로 바로 그리고(main.ts promptLocalFontsIfNeeded 의 두글 분기),
- * 이 띠가 사실만 알린다: 「이 문서의 글꼴 8개가 이 컴퓨터에 없어 비슷한 글꼴로 보입니다. [글꼴 확인] [닫기]」.
+ * 상태 표시줄 오른쪽의 「● 글꼴 8개 대체」 표시가 사실만 알린다. 문서 영역의 자리는 쓰지 않는다
+ * (문서 위 띠였을 때 급하지 않은 알림이 매번 문서 자리를 차지했다).
  *
  *  - main.ts 가 문서를 열 때마다 window 이벤트 `doogle:fonts-missing` 을 쏜다
- *    ({detail: FontNoticeDetail}; 없는 글꼴이 없으면 fonts 가 빈 배열 → 띠를 내린다).
- *  - "글꼴 확인" 은 띠 아래에 글꼴 이름을 펼치고, 이 컴퓨터에서 찾아볼 수 있으면 찾기 단추를 준다.
- *  - "닫기" 는 이 문서에서만 닫는다(다음 문서를 열면 다시 판단한다).
+ *    ({detail: FontNoticeDetail}; 없는 글꼴이 없으면 fonts 가 빈 배열 → 표시를 내린다).
+ *  - 표시를 누르면 그 위로 작은 창이 떠서 글꼴 이름을 보여 주고, 이 컴퓨터에서 찾아볼 수 있으면 찾기 단추를 준다.
+ *  - 바깥을 누르거나 Esc 로 닫는다.
  */
 
 export const FONTS_MISSING_EVENT = 'doogle:fonts-missing';
@@ -59,35 +60,68 @@ function button(className: string, label: string, onClick: () => void): HTMLButt
   return b;
 }
 
-/** 띠를 `anchor` 바로 앞(문서 영역 위)에 세운다. 이벤트가 오기 전에는 숨어 있다. */
-export function mountFontNotice(anchor: HTMLElement): void {
-  const root = el('div', 'dg-banner');
-  root.setAttribute('role', 'status');
-  root.hidden = true;
-  anchor.before(root);
+/** 상태 표시줄 표시 문구 — 자리를 적게 쓰도록 짧게 */
+export function fontChipText(fonts: readonly FontNoticeItem[]): string {
+  return fonts.length === 0 ? '' : `글꼴 ${fonts.length}개 대체`;
+}
+
+/** 표시를 상태 표시줄(`statusBar`) 오른쪽에 세운다. 이벤트가 오기 전에는 숨어 있다. */
+export function mountFontNotice(statusBar: HTMLElement): void {
+  const chip = button('stb-item dg-sb-fonts', '', () => { open = !open; render(); });
+  chip.setAttribute('aria-haspopup', 'dialog');
+  chip.hidden = true;
+  statusBar.append(chip);
+
+  const pop = el('div', 'dg-fontpop');
+  pop.setAttribute('role', 'dialog');
+  pop.setAttribute('aria-label', '문서 글꼴');
+  pop.hidden = true;
+  document.body.append(pop);
 
   let detail: FontNoticeDetail | null = null;
   let open = false;
   let busy = false;
 
+  function close(): void {
+    if (!open) return;
+    open = false;
+    render();
+  }
+  document.addEventListener('pointerdown', (event) => {
+    const target = event.target as Node | null;
+    if (target && (pop.contains(target) || chip.contains(target))) return;
+    close();
+  }, true);
+  document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape' || !open) return;
+    close();
+    chip.focus();
+  });
+  window.addEventListener('resize', close);
+
   function render(): void {
     const fonts = detail?.fonts ?? [];
-    root.hidden = fonts.length === 0;
-    root.replaceChildren();
+    chip.hidden = fonts.length === 0;
+    chip.replaceChildren();
+    pop.replaceChildren();
+    if (!detail || fonts.length === 0) open = false;
+    pop.hidden = !open;
+    chip.setAttribute('aria-expanded', String(open));
     if (!detail || fonts.length === 0) return;
 
-    const row = el('div', 'dg-banner-row');
     const dot = el('span', 'dg-sb-dot dg-sb-dot--warn');
     dot.setAttribute('aria-hidden', 'true');
-    const toggle = button('dg-banner-link', open ? '접기' : '글꼴 확인', () => { open = !open; render(); toggle.focus(); });
-    toggle.setAttribute('aria-expanded', String(open));
-    const close = button('dg-banner-link dg-banner-close', '닫기', () => { detail = null; open = false; render(); });
-    close.setAttribute('aria-label', '글꼴 알림 닫기');
-    row.append(dot, el('span', 'dg-banner-text', fontNoticeText(fonts)), el('span', 'dg-banner-grow'), toggle, close);
-    root.append(row);
+    chip.append(dot, el('span', '', fontChipText(fonts)));
+    chip.title = fontNoticeText(fonts);
     if (!open) return;
 
+    // 표시 바로 위에 띄운다 (상태 표시줄은 창 맨 아래)
+    const rect = chip.getBoundingClientRect();
+    pop.style.bottom = `${Math.max(8, window.innerHeight - rect.top + 6)}px`;
+    pop.style.right = `${Math.max(8, window.innerWidth - rect.right)}px`;
+
     const panel = el('div', 'dg-banner-detail');
+    panel.append(el('div', 'dg-banner-text', fontNoticeText(fonts)));
     const list = el('ul', 'dg-banner-fonts');
     for (const font of fonts.slice(0, 40)) {
       const li = el('li', 'dg-banner-font');
@@ -115,7 +149,7 @@ export function mountFontNotice(anchor: HTMLElement): void {
       acts.append(el('span', 'dg-banner-hint', '글꼴을 설치한 뒤 문서를 다시 열면 원래 모양으로 보입니다.'));
     }
     panel.append(acts);
-    root.append(panel);
+    pop.append(panel);
   }
 
   window.addEventListener(FONTS_MISSING_EVENT, (event) => {

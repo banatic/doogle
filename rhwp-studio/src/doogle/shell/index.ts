@@ -243,9 +243,8 @@ export function mountShell(): void {
 
   // 한컴 수식 글꼴이 없는 컴퓨터에서 수식 글자가 깨지지 않게 대체 글꼴을 건다.
   installEquationFallbackFont();
-  // 글꼴 알림 띠 — 문서 영역 바로 위. main.ts 가 문서를 열 때 `doogle:fonts-missing` 으로 알린다.
-  const editorArea = document.getElementById('editor-area');
-  if (editorArea) mountFontNotice(editorArea);
+  // 글꼴 알림 — 상태 표시줄 오른쪽의 작은 표시. main.ts 가 문서를 열 때 `doogle:fonts-missing` 으로 알린다.
+  if (statusBar) mountFontNotice(statusBar);
 
   state = { ribbon, status, backstage, quick, host: null };
   // 창 닫기 → 저장 안 한 문서 확인(데스크탑 전용) + 저장 앞 검토 확인

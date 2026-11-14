@@ -1000,50 +1000,53 @@
 :root[data-doogle] #status-bar .stb-right { order: 60; display: flex; align-items: center; gap: 4px; }
 :root[data-doogle] #status-bar [hidden] { display: none !important; }
 
-/* ── 알림 띠 (font-notice.ts) — 문서 영역 위 한 줄 ───────────────────── */
-:root[data-doogle] .dg-banner {
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  background: var(--dg-warn-soft, #FFF7E6);
-  border-bottom: 1px solid var(--dg-warn-border, #FCD9A8);
+/* ── 글꼴 알림 (font-notice.ts) — 상태 표시줄의 작은 표시 + 그 위로 뜨는 창 ───── */
+:root[data-doogle] .dg-sb-fonts {
+  order: 48;
+  border: 0;
+  padding: 0 4px;
+  border-radius: var(--dg-r-sm);
+  background: transparent;
+  font: inherit;
+  color: var(--dg-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+:root[data-doogle] .dg-sb-fonts:hover,
+:root[data-doogle] .dg-sb-fonts[aria-expanded="true"] { background: var(--dg-hover); color: var(--dg-text); }
+:root[data-doogle] .dg-fontpop {
+  position: fixed;
+  z-index: 9500;
+  width: 360px;
+  max-width: calc(100vw - 16px);
+  background: var(--dg-surface, #fff);
+  border: 1px solid var(--dg-border);
+  border-radius: var(--dg-r-md);
+  box-shadow: var(--dg-shadow-pop);
   font-family: var(--dg-font-ui);
   font-size: var(--dg-fs-sm, 12px);
   color: var(--dg-text, #1f2937);
 }
-:root[data-doogle] .dg-banner[hidden] { display: none; }
-:root[data-doogle] .dg-banner-row { display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 0 12px; }
-:root[data-doogle] .dg-banner-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-:root[data-doogle] .dg-banner-grow { flex: 1 1 auto; }
-:root[data-doogle] .dg-banner button { font: inherit; cursor: pointer; }
-:root[data-doogle] .dg-banner button:focus-visible { outline: 2px solid var(--dg-focus, Highlight); outline-offset: 1px; }
-:root[data-doogle] .dg-banner-link {
-  flex-shrink: 0;
-  height: 24px;
-  padding: 0 8px;
-  border: 0;
-  border-radius: var(--dg-r-sm, 4px);
-  background: transparent;
-  color: var(--dg-warn, #92400E);
-  font-weight: 500;
-}
-:root[data-doogle] .dg-banner-link:hover { background: var(--dg-ink-06, rgba(15, 23, 42, 0.06)); }
-:root[data-doogle] .dg-banner-close { color: var(--dg-muted, #4b5563); font-weight: 400; }
+:root[data-doogle] .dg-fontpop[hidden] { display: none; }
+:root[data-doogle] .dg-fontpop button { font: inherit; cursor: pointer; }
+:root[data-doogle] .dg-fontpop button:focus-visible { outline: 2px solid var(--dg-focus, Highlight); outline-offset: 1px; }
+:root[data-doogle] .dg-banner-text { line-height: 1.5; }
 :root[data-doogle] .dg-banner-detail {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 4px 12px 10px 27px;
+  padding: 12px;
 }
 :root[data-doogle] .dg-banner-fonts {
   list-style: none;
   margin: 0;
   padding: 0;
-  max-height: 132px;
+  max-height: 176px;
   overflow-y: auto;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 2px 16px;
+  gap: 2px;
 }
 :root[data-doogle] .dg-banner-font { display: flex; gap: 8px; min-width: 0; }
 :root[data-doogle] .dg-banner-font-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
@@ -1052,7 +1055,7 @@
 :root[data-doogle] .dg-banner-btn {
   height: 26px;
   padding: 0 10px;
-  border: 1px solid var(--dg-warn-border, #FCD9A8);
+  border: 1px solid var(--dg-border);
   border-radius: var(--dg-r-sm, 4px);
   background: var(--dg-surface, #fff);
   color: var(--dg-text, #1f2937);
