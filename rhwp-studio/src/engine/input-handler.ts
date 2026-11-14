@@ -913,6 +913,73 @@ export class InputHandler {
     this.container.style.cursor = 'crosshair';
   }
 
+  /**
+   * 화면 좌표 자리로 캐럿을 옮긴다 (선택은 푼다). 두글 카드를 문서에 끌어 놓을 때 놓은 자리를 캐럿으로 알린다.
+   * 문단을 찾지 못하면 false.
+   */
+  moveCaretToClientPoint(clientX: number, clientY: number): boolean {
+    const hit = this.hitTestFromClientPoint(clientX, clientY);
+    if (!hit || hit.paragraphIndex >= 0xFFFFFF00) return false;
+    if (this.cursor.isInPictureObjectSelection()) {
+      this.cursor.exitPictureObjectSelection();
+      this.pictureObjectRenderer?.clear();
+      this.eventBus.emit('picture-object-selection-changed', false);
+    }
+    this.cursor.clearSelection();
+    this.cursor.moveToHit(hit);
+    this.cursor.resetPreferredX();
+    this.cursor.setAnchor();
+    this.active = true;
+    this.updateCaret();
+    return true;
+  }
+
+  /**
+   * 화면 좌표 아래에 무엇이 있는가 — 두글 카드를 끄는 동안 "놓으면 채워질 자리" 를 칠하는 데 쓴다.
+   * 표 안이면 그 표(이 쪽에 보이는 부분), 아니면 그 줄(본문 폭). 돌려주는 좌표는 화면(client) 기준이다.
+   */
+  dropTargetAtClientPoint(clientX: number, clientY: number): { kind: 'table' | 'line'; left: number; top: number; width: number; height: number } | null {
+    const pagePoint = this.pagePointFromClientPoint(clientX, clientY);
+    const scrollContent = this.container.querySelector('#scroll-content');
+    if (!pagePoint || !scrollContent) return null;
+    let hit: DocumentPosition | null = null;
+    try {
+      hit = this.wasm.hitTest(pagePoint.pageIdx, pagePoint.pageX, pagePoint.pageY);
+    } catch {
+      return null;
+    }
+    if (!hit || hit.paragraphIndex >= 0xFFFFFF00) return null;
+    const zoom = this.viewportManager.getZoom();
+    const contentRect = scrollContent.getBoundingClientRect();
+    const toClient = (kind: 'table' | 'line', pageIdx: number, x: number, y: number, width: number, height: number) => ({
+      kind,
+      left: contentRect.left + this.virtualScroll.getPageLeftResolved(pageIdx, scrollContent.clientWidth) + x * zoom,
+      top: contentRect.top + this.virtualScroll.getPageOffset(pageIdx) + y * zoom,
+      width: width * zoom,
+      height: height * zoom,
+    });
+    if (hit.parentParaIndex !== undefined && hit.controlIndex !== undefined && !hit.isTextBox) {
+      try {
+        const box = this.wasm.getTableBBoxAtPage(hit.sectionIndex, hit.parentParaIndex, hit.controlIndex, pagePoint.pageIdx);
+        if (box.width > 0 && box.height > 0) return toClient('table', box.pageIndex ?? pagePoint.pageIdx, box.x, box.y, box.width, box.height);
+      } catch {
+        // 표 범위를 모르면 아래에서 줄로 표시한다
+      }
+    }
+    let rect = hit.cursorRect;
+    if (!rect) {
+      try {
+        rect = this.wasm.getCursorRect(hit.sectionIndex, hit.paragraphIndex, hit.charOffset);
+      } catch {
+        return null;
+      }
+    }
+    if (!rect || !(rect.height > 0)) return null;
+    const info = this.getPageInfoForDrop(rect.pageIndex);
+    if (!info) return null;
+    return toClient('line', rect.pageIndex, info.marginLeft, rect.y, info.width - info.marginLeft - info.marginRight, rect.height);
+  }
+
   /** 외부 파일 드롭 그림 삽입: 한컴처럼 원본 크기, 글자처럼 취급으로 바로 넣는다. */
   insertDroppedImageAtClientPoint(
     data: Uint8Array,

@@ -1027,6 +1027,42 @@ const DEFINITIONS = [
       if (args.find !== undefined && args.image !== undefined) throw invalidArgs('pass find or image, not both');
     },
   },
+
+  // ─── 카드 (hub 가 처리 — 사용자가 대화에 붙인 카드) ───
+  {
+    name: 'read_card',
+    kind: 'hub',
+    label: '카드 읽기',
+    description: 'Read the values of a card the user attached (ids are in <doogle_cards>). Only when you must transform a value (date format, part of a value) — to put values into the document, write placeholders instead: {{card:<id>.<field>}} (item card) or {{card:<id>.rows[N].<field>}} (table card, N from 1); the hub swaps in the real values. Sensitive fields come back masked (e.g. 010-****-5678) — always use placeholders for them. Table cards return up to maxRows rows from fromRow (1-based); nextRow is set while more remain.',
+    shape: {
+      card: z.string().trim().min(1).max(80).describe('Card id from <doogle_cards>, e.g. "c-1a2b3c4d5e6f7a8b"'),
+      fields: z.array(z.string().trim().min(1).max(40)).max(40).optional().describe('Only these fields (default: all)'),
+      fromRow: z.number().int().min(1).optional().describe('Table cards: first row, 1-based (default 1)'),
+      maxRows: z.number().int().min(1).max(200).optional().describe('Table cards: rows to return (default 50)'),
+    },
+  },
+  {
+    name: 'propose_card',
+    kind: 'hub',
+    label: '카드 초안 보이기',
+    description: 'Card editor only: show the user a card draft. It does NOT save — the user reviews and saves. Send the whole card each time (name, kind, every field). kind "item" = one value per field (values); kind "table" = many rows with the same fields (a roster). Mark fields with personal contact or ID data (phone, address, birth date, resident number) sensitive. Give each field a short desc saying which form labels it fits (e.g. "본인 이름 — 성명·신청인 칸"). From a file preview: set source {dataStart: first data row index in the preview numbering, columns: source column index for each field in order, -1 if none} and leave rows out — the editor fills every row from the file. When editing an existing table card leave rows out too: rows are kept by field name.',
+    shape: {
+      name: z.string().trim().min(1).max(60),
+      icon: z.enum(['person', 'list', 'school', 'card']).optional().describe('person: one person’s info · list: a roster or any table card · school: an organization · card: other'),
+      kind: z.enum(['item', 'table']),
+      fields: z.array(z.object({
+        key: z.string().trim().min(1).max(40).describe('Field name; no . { } [ ]'),
+        desc: z.string().max(200).optional(),
+        sensitive: z.boolean().optional(),
+      })).min(1).max(40),
+      values: z.record(z.string(), z.string().max(2000)).optional().describe('Item cards: field → value'),
+      rows: z.array(z.array(z.string().max(500))).max(1000).optional().describe('Table cards typed in by the user only'),
+      source: z.object({
+        dataStart: z.number().int().min(0),
+        columns: z.array(z.number().int().min(-1)).min(1).max(40),
+      }).optional(),
+    },
+  },
 ];
 
 export const TOOLS = Object.freeze(DEFINITIONS.map((definition) => Object.freeze({

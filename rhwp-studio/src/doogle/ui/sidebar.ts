@@ -30,6 +30,10 @@ import {
 } from '../hub-client.ts';
 import { readAttachment } from '../attach/attach-read.ts';
 import { createAttachTray, sentFileChips, type AttachTray } from './attach-tray.ts';
+import type { Card, SentCard, ThreadCard } from '../hub-client.ts';
+import { CARD_DRAG_TYPE, CardShelf, currentDraggedCard, isCardDrag } from './card-shelf.ts';
+import { CardEditor } from './card-editor.ts';
+import { createCardAi } from './card-ai.ts';
 import { reviewStore, type DecisionReport } from '../review/state.ts';
 import { countdownText, describeConnection, userWords, type DeskHubStatus } from './connection.ts';
 import type { DeskHubEvent } from './desk-bridge.ts';
@@ -313,12 +317,43 @@ interface ThreadView {
   createdAt: number;
   /** 이 대화가 딸린 문서 (null = 문서 없음·저장 안 한 새 문서) */
   doc: DocIdentity | null;
+  /** 이 대화에 붙어 있는 카드 (hub thread.cards) — 떼기 전까지 매 턴 에이전트가 쓴다 */
+  cards: ThreadCard[];
 }
 
 type MenuKind = 'threads' | 'model';
 
 /** 글 없이 파일만 보냈을 때의 요청 글 (doogle-agent hub.mjs 의 기본 글과 같다) */
 const FILES_ONLY_TEXT = '첨부한 파일을 확인해 주세요.';
+/** 글 없이 카드만 붙여 보냈을 때의 요청 (hub 의 기본 글과 같다) */
+const CARDS_ONLY_TEXT = '붙인 카드를 확인해 주세요.';
+/** 다시 해도 같은 결과인 도구 실패 — "끝내지 못한 작업만 다시 시도" 를 띄우지 않는다 */
+const NO_RETRY_CODES = new Set(['NOT_AVAILABLE']);
+/** 한 번에 붙일 수 있는 카드 수 (hub CARD_REFS_PER_MESSAGE 와 같다) */
+const CARD_REFS_MAX = 5;
+
+/** 카드 칩 — 입력 상자와 보낸 메시지에서 같이 쓴다 */
+function cardChip(card: { name: string; icon?: Card['icon']; fields?: Card['fields'] }): HTMLElement {
+  const node = el('span', 'dg-card-chip');
+  node.dataset.tone = card.icon ?? 'card';
+  node.append(el('span', 'dg-file-name', card.name));
+  if (card.fields?.some((f) => f.sensitive)) node.append(el('span', 'dg-card-lock', '민감'));
+  node.title = `카드: ${card.name}`;
+  return node;
+}
+
+/** 보낸 메시지에 붙는 카드 칩 줄 */
+function sentCardChips(cards: ReadonlyArray<SentCard>): HTMLElement {
+  const row = el('div', 'dg-user-cards');
+  row.setAttribute('role', 'list');
+  row.setAttribute('aria-label', `붙인 카드 ${cards.length}개`);
+  for (const card of cards) {
+    const chip = cardChip(card);
+    chip.setAttribute('role', 'listitem');
+    row.append(chip);
+  }
+  return row;
+}
 
 /**
  * 응답 도중 연결이 끊겼을 때 화면이 기다리는 시간 — hub 가 기다리는 시간(hub.mjs DEFAULT_RECONNECT_GRACE_MS,
@@ -352,6 +387,15 @@ export class DoogleSidebar {
   private contextFrame = 0;
   private sheet!: SettingsSheet;
   private gearBtn!: HTMLButtonElement;
+  /** 카드 서랍 · 편집 화면 · 머리의 카드 단추 */
+  private shelf!: CardShelf;
+  private cardEditor!: CardEditor;
+  private cardsBtn!: HTMLButtonElement;
+  /** 입력 상자에 붙인 카드 (보내면 비운다) */
+  private cardRefs: Card[] = [];
+  private cardRow!: HTMLElement;
+  /** 이 대화에 붙어 있는 카드 줄 (떼기 단추) */
+  private threadCardRow!: HTMLElement;
 
   // 화면 부품
   private titleBtn!: HTMLButtonElement;
@@ -410,9 +454,18 @@ export class DoogleSidebar {
     const root = el('div', 'dg-panel');
     this.root = root;
     this.sheet = this.buildSheet();
-    root.append(this.buildHead(), this.buildBody(), this.buildComposer(), this.sheet.root);
+    this.buildCards();
+    root.append(this.buildHead(), this.shelf.root, this.buildBody(), this.buildComposer(), this.sheet.root, this.cardEditor.root);
     container.append(root);
     this.showThread(this.thread);
+    // 문서에 카드를 놓았다 (main.ts 가 캐럿을 놓은 자리로 옮긴 뒤 알린다)
+    const onCardDrop = (event: Event) => {
+      const { cardId, placed } = (event as CustomEvent<{ cardId?: string; placed?: boolean }>).detail ?? {};
+      const card = (cardId && (this.shelf.find(cardId) ?? (currentDraggedCard()?.id === cardId ? currentDraggedCard() : null))) || null;
+      if (card) this.fillWithCard(card, placed === true);
+    };
+    window.addEventListener('doogle:card-drop', onCardDrop);
+    this.offs.push(() => window.removeEventListener('doogle:card-drop', onCardDrop));
 
     root.addEventListener('keydown', (event) => this.onPanelKey(event));
     const onDocPointer = (event: PointerEvent) => {
@@ -426,6 +479,7 @@ export class DoogleSidebar {
 
     const hub = this.deps.hub;
     this.offs.push(
+      hub.onState((state) => { if (state === 'open' && this.shelf.isOpen) void this.shelf.refresh(); }),
       hub.onState((state, detail) => this.renderConnection(state, detail)),
       hub.on('providers', (message) => this.setProviders((message as { list?: ProviderInfo[] }).list ?? [])),
       hub.on('agent_event', (message) => this.handleAgentEvent(message)),
@@ -566,6 +620,135 @@ export class DoogleSidebar {
     });
   }
 
+  // ─── 카드 ──────────────────────────────────────────────
+
+  private buildCards(): void {
+    this.shelf = new CardShelf({
+      hub: this.deps.hub,
+      attach: (card) => this.attachCard(card),
+      insert: (card) => this.fillWithCard(card, false),
+      edit: (card) => {
+        this.closeMenu(false);
+        this.cardEditor.open(card);
+      },
+      onToggle: (open) => this.cardsBtn?.setAttribute('aria-pressed', String(open)),
+    });
+    this.cardEditor = new CardEditor({
+      hub: this.deps.hub,
+      ai: createCardAi({
+        hub: this.deps.hub,
+        provider: () => {
+          const provider = this.currentProvider();
+          return provider ? { id: provider.id, available: provider.available, label: provider.label, model: this.model } : null;
+        },
+      }),
+      saved: (card) => {
+        this.shelf.noteSaved(card);
+        // 붙여 둔 카드도 새 내용으로
+        this.cardRefs = this.cardRefs.map((c) => (c.id === card.id ? card : c));
+        this.renderCardRow();
+      },
+      deleted: (id) => {
+        this.shelf.noteDeleted(id);
+        this.cardRefs = this.cardRefs.filter((c) => c.id !== id);
+        // 지운 카드는 hub 가 대화에서도 빼고 본다
+        for (const view of this.threads.values()) view.cards = view.cards.filter((c) => c.id !== id);
+        this.renderCardRow();
+        this.renderThreadCards();
+      },
+      announce: (text) => this.announce(text),
+      onClosed: () => (this.shelf.isOpen ? this.root?.querySelector<HTMLElement>('.dg-shelf-new') : this.cardsBtn)?.focus(),
+    });
+  }
+
+  /** 이 대화에 붙어 있는 카드 — 떼면 다음 턴부터 에이전트가 쓰지 않는다 */
+  private renderThreadCards(): void {
+    const row = this.threadCardRow;
+    if (!row) return;
+    const cards = this.thread?.cards ?? [];
+    row.hidden = cards.length === 0;
+    const label = el('span', 'dg-thread-cards-label', '이 대화의 카드');
+    label.title = '이 대화에서 에이전트가 쓰는 카드입니다. 민감 항목이 있는 카드가 붙어 있으면 민감 값은 에이전트에게 가려지고 쪽 그림은 만들지 않습니다.';
+    row.replaceChildren(label, ...cards.map((card) => {
+      const chip = el('span', 'dg-thread-card');
+      chip.dataset.tone = card.icon ?? 'card';
+      chip.append(el('span', '', card.name));
+      if (card.sensitive) chip.append(el('span', 'dg-card-lock', '민감'));
+      const remove = el('button', 'dg-thread-card-remove');
+      remove.type = 'button';
+      remove.setAttribute('aria-label', `${card.name} 카드를 이 대화에서 떼기`);
+      remove.title = '이 대화에서 떼기';
+      remove.append(icon('close', 10, 2.4));
+      remove.disabled = this.busy;
+      remove.addEventListener('click', () => void this.detachThreadCard(card));
+      chip.append(remove);
+      return chip;
+    }));
+  }
+
+  private async detachThreadCard(card: ThreadCard): Promise<void> {
+    const view = this.thread;
+    if (this.busy) return;
+    try {
+      view.cards = await this.deps.hub.detachThreadCard(view.id, card.id);
+      if (this.thread === view) this.renderThreadCards();
+      this.announce(`${card.name} 카드를 이 대화에서 뗐습니다`);
+    } catch (error) {
+      this.addNotice(`카드를 떼지 못했습니다: ${error instanceof Error ? error.message : String(error)}`, 'error');
+    }
+  }
+
+  /** 입력 상자에 카드를 붙인다 (같은 카드는 한 번만) */
+  private attachCard(card: Card): void {
+    if (!this.cardRefs.some((c) => c.id === card.id)) {
+      if (this.cardRefs.length >= CARD_REFS_MAX) {
+        this.addNotice(`카드는 한 번에 ${CARD_REFS_MAX}개까지 붙일 수 있습니다.`, 'info');
+        return;
+      }
+      this.cardRefs.push(card);
+    }
+    this.renderCardRow();
+    this.renderComposer();
+    this.input?.focus();
+  }
+
+  private renderCardRow(): void {
+    if (!this.cardRow) return;
+    this.cardRow.hidden = this.cardRefs.length === 0;
+    this.cardRow.replaceChildren(...this.cardRefs.map((card) => {
+      const chip = cardChip(card);
+      chip.setAttribute('role', 'listitem');
+      const remove = el('button', 'dg-file-remove');
+      remove.type = 'button';
+      remove.setAttribute('aria-label', `${card.name} 카드 빼기`);
+      remove.title = '빼기';
+      remove.append(icon('close', 11, 2.2));
+      remove.addEventListener('click', () => {
+        this.cardRefs = this.cardRefs.filter((c) => c.id !== card.id);
+        this.renderCardRow();
+        this.renderComposer();
+      });
+      chip.append(remove);
+      return chip;
+    }));
+  }
+
+  /**
+   * 카드로 문서를 채운다 — 에이전트 턴 하나를 보낸다. placed: 사용자가 문서에 끌어 놓아 캐럿이 그 자리에 있다.
+   * 어느 칸에 무엇을 넣을지는 에이전트가 정하고, 값은 자리표시자로 넣어 hub 가 바꿔 끼운다.
+   */
+  private fillWithCard(card: Card, placed: boolean): void {
+    if (this.busy) {
+      this.addNotice('지금 답변을 만드는 중입니다. 끝난 뒤 다시 놓아 주세요.', 'info');
+      return;
+    }
+    if (this.deps.getDocContext && !this.deps.getDocContext().hasDocument) {
+      this.addNotice('카드를 채울 문서를 먼저 열어 주세요.', 'info');
+      return;
+    }
+    const where = placed ? '카드를 놓은 자리(지금 커서 위치)' : '지금 커서 위치';
+    this.submit(`「${card.name}」 카드로 문서의 ${where}를 채워 줘.`, [card]);
+  }
   private retryConnection(): void {
     this.desk.failure = '';
     this.desk.restartAt = 0;
@@ -593,9 +776,14 @@ export class DoogleSidebar {
     this.threadMenu.setAttribute('aria-label', '대화 목록');
     this.threadMenu.hidden = true;
 
+    this.cardsBtn = iconButton('dg-icon-btn', 'cards', '내 카드', () => this.shelf.toggle(), 17);
+    this.cardsBtn.setAttribute('aria-pressed', 'false');
+    this.cardsBtn.title = '내 카드 — 끌어서 문서나 입력 상자에 놓기';
+
     head.append(
       this.titleBtn,
       el('div', 'dg-grow'),
+      this.cardsBtn,
       this.historyBtn,
       iconButton('dg-icon-btn', 'compose', '새 대화', () => this.newThread(), 17),
       iconButton('dg-icon-btn', 'close', '패널 닫기', () => this.closePanel(), 15),
@@ -831,7 +1019,7 @@ export class DoogleSidebar {
 
   private createThread(id = newThreadId(), title = '새 대화', createdAt = Date.now()): ThreadView {
     const log = el('div', 'dg-log');
-    const view: ThreadView = { id, title, log, turns: [], createdAt, doc: this.doc };
+    const view: ThreadView = { id, title, log, turns: [], createdAt, doc: this.doc, cards: [] };
     log.append(this.buildEmpty());
     this.threads.set(view.id, view);
     return view;
@@ -940,6 +1128,7 @@ export class DoogleSidebar {
     if (this.titleBtn) this.titleBtn.setAttribute('aria-label', `대화: ${view.title}`);
     this.awaitingAnswer = false;
     this.renderPlaceholder();
+    this.renderThreadCards();
     // 다른 대화를 열면 그 끝에서 시작해 따라간다
     this.stick = true;
     this.onShowThread?.();
@@ -1062,6 +1251,7 @@ export class DoogleSidebar {
       if (this.busy || this.threads.has(id)) return;
       const before = this.thread;
       const view = this.createThread(saved.threadId, saved.title || '대화', Date.parse(saved.createdAt) || Date.now());
+      view.cards = saved.cards;
       this.replay(view, saved.transcript, saved.running);
       // "다시 시도" 는 마지막 턴에서만
       for (const t of view.turns.slice(0, -1)) t.actions?.querySelector('.dg-act-retry')?.setAttribute('hidden', '');
@@ -1091,7 +1281,7 @@ export class DoogleSidebar {
         if (!entry || typeof entry !== 'object') continue;
         if (entry.kind === 'user') {
           if (this.turn) this.handleAgentEvent({ type: 'agent_event', threadId: view.id, event: { kind: 'turn_end', reason: 'interrupted' } });
-          this.appendUserMessage(entry.text, Array.isArray(entry.attachments) ? entry.attachments : []);
+          this.appendUserMessage(entry.text, Array.isArray(entry.attachments) ? entry.attachments : [], Array.isArray(entry.cards) ? entry.cards : []);
           this.startTurn(entry.text, entry.providerId ?? this.providerId);
           const turn = this.turn as TurnView | null;
           if (turn) {
@@ -1582,8 +1772,43 @@ export class DoogleSidebar {
     this.sendBtn = button('dg-send', '', () => (this.busy ? this.cancel() : this.submit()));
 
     row.append(attach, this.modeBtn, el('div', 'dg-grow'), this.modelBtn, this.gearBtn, this.sendBtn);
-    box.append(label, this.tray.root, this.input, row);
+    // 붙인 카드 줄 — 파일 칩 줄 위
+    this.cardRow = el('div', 'dg-attach-row dg-card-row');
+    this.cardRow.setAttribute('role', 'list');
+    this.cardRow.setAttribute('aria-label', '붙인 카드');
+    this.cardRow.hidden = true;
+    this.threadCardRow = el('div', 'dg-thread-cards');
+    this.threadCardRow.hidden = true;
+    box.append(label, this.threadCardRow, this.cardRow, this.tray.root, this.input, row);
     wrap.append(this.modelMenu, box);
+
+    // 서랍에서 카드를 끌어 입력 상자에 놓으면 대화에 붙는다
+    let depth = 0;
+    wrap.addEventListener('dragenter', (event) => {
+      if (!isCardDrag(event)) return;
+      depth++;
+      box.classList.add('dg-card-over');
+    });
+    wrap.addEventListener('dragleave', (event) => {
+      if (!isCardDrag(event)) return;
+      depth = Math.max(0, depth - 1);
+      if (depth === 0) box.classList.remove('dg-card-over');
+    });
+    wrap.addEventListener('dragover', (event) => {
+      if (!isCardDrag(event)) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+    });
+    wrap.addEventListener('drop', (event) => {
+      if (!isCardDrag(event)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      depth = 0;
+      box.classList.remove('dg-card-over');
+      const id = event.dataTransfer?.getData(CARD_DRAG_TYPE) ?? '';
+      const card = this.shelf.find(id) ?? (currentDraggedCard()?.id === id ? currentDraggedCard() : null);
+      if (card) this.attachCard(card);
+    });
     return wrap;
   }
 
@@ -1622,6 +1847,8 @@ export class DoogleSidebar {
   }
 
   private renderComposer(): void {
+    // 응답 중에는 카드를 뗄 수 없다 — 떼기 단추 상태도 함께
+    this.renderThreadCards();
     if (!this.sendBtn) return;
     const provider = this.currentProvider();
     const ready = this.deps.hub.state === 'open' && !!provider?.available;
@@ -1636,7 +1863,7 @@ export class DoogleSidebar {
       this.sendBtn.setAttribute('aria-label', '보내기');
       this.sendBtn.title = ready ? '보내기 (Enter)' : this.deps.hub.state !== 'open' ? '에이전트 서비스에 연결되어 있지 않습니다' : provider ? `${provider.label}: AI 계정을 연결하세요` : '모델을 고르세요';
       // 파일만 붙여 보내도 된다. 파일을 아직 읽는 중이면 기다린다
-      const nothing = this.input.value.trim() === '' && this.tray.count === 0;
+      const nothing = this.input.value.trim() === '' && this.tray.count === 0 && this.cardRefs.length === 0;
       this.sendBtn.disabled = !ready || nothing || this.tray.busy;
       if (ready && this.tray.busy) this.sendBtn.title = '붙인 파일을 읽는 중입니다';
       this.sendBtn.classList.remove('dg-send-stop');
@@ -1646,18 +1873,23 @@ export class DoogleSidebar {
 
   // ─── 보내기 / 턴 ───────────────────────────────────────
 
-  private submit(textOverride?: string): void {
-    // 다시 시도(textOverride)는 글만 다시 보낸다 — 붙였던 파일은 이미 그 대화에 있다
+  /**
+   * textOverride: 다시 시도·카드 채우기처럼 입력 상자를 거치지 않고 보내는 글.
+   * withCards: 그 글과 함께 붙일 카드 (입력 상자로 보낼 때는 붙여 둔 카드를 쓴다)
+   */
+  private submit(textOverride?: string, withCards?: Card[]): void {
+    // 다시 시도(textOverride)는 글만 다시 보낸다 — 붙였던 파일·카드는 이미 그 대화에 있다
     const files = textOverride === undefined ? this.tray.payloads() : [];
+    const cards = textOverride === undefined ? [...this.cardRefs] : (withCards ?? []);
     const typed = (textOverride ?? this.input.value).trim();
-    if ((!typed && files.length === 0) || this.busy) return;
+    if ((!typed && files.length === 0 && cards.length === 0) || this.busy) return;
     if (textOverride === undefined && this.tray.busy) return;
     if (files.length > 0 && this.tray.tooLarge) {
       this.addNotice('붙인 파일이 한 번에 보내기에는 너무 큽니다. 몇 개를 빼고 나눠서 보내 주세요.', 'error');
       return;
     }
     // 글 없이 파일만 보냈으면 이 한 줄이 요청이 된다 (hub 의 기본 글과 같다)
-    const text = typed || FILES_ONLY_TEXT;
+    const text = typed || (files.length > 0 ? FILES_ONLY_TEXT : CARDS_ONLY_TEXT);
     const provider = this.currentProvider();
     if (!provider?.available) {
       if (this.providers.some((p) => p.available)) {
@@ -1677,6 +1909,7 @@ export class DoogleSidebar {
       context: this.deps.getContext(),
       doc: this.doc,
       ...(files.length > 0 ? { attachments: files as unknown as Array<Record<string, unknown>> } : {}),
+      ...(cards.length > 0 ? { cards: cards.map((c) => c.id) } : {}),
     });
     if (!sent) {
       this.addNotice('에이전트 서비스에 연결되어 있지 않습니다.', 'error');
@@ -1684,6 +1917,10 @@ export class DoogleSidebar {
     }
     storeSet(STORE_ONBOARDED, '1');
     this.thread.doc = this.doc;
+    for (const c of cards) {
+      if (!this.thread.cards.some((t) => t.id === c.id)) this.thread.cards.push({ id: c.id, name: c.name, icon: c.icon, sensitive: c.fields.some((f) => f.sensitive) });
+    }
+    this.renderThreadCards();
     this.stick = true; // 새 요청을 보내면 다시 끝을 따라간다
     // 어떤 답이든 보내면 열려 있던 질문 카드는 답한 것이 된다
     this.closeAskCards(this.thread.id, text);
@@ -1691,6 +1928,8 @@ export class DoogleSidebar {
       this.input.value = '';
       this.autosize();
       this.tray.clear();
+      this.cardRefs = [];
+      this.renderCardRow();
     }
     if (this.thread.turns.length === 0) {
       this.thread.title = clipTitle(text);
@@ -1699,13 +1938,14 @@ export class DoogleSidebar {
     }
     // 이전 턴의 "다시 시도" 는 마지막 턴에서만
     for (const t of this.thread.turns) t.actions?.querySelector('.dg-act-retry')?.setAttribute('hidden', '');
-    this.appendUserMessage(text, files);
+    this.appendUserMessage(text, files, cards.map((c) => ({ id: c.id, name: c.name, icon: c.icon })));
     this.scrollToBottom();
     this.startTurn(text, provider.id);
   }
 
   /** 사용자 말풍선 — 붙인 파일이 있으면 그 위에 파일 칩 줄 */
-  private appendUserMessage(text: string, files: ReadonlyArray<SentAttachment>): void {
+  private appendUserMessage(text: string, files: ReadonlyArray<SentAttachment>, cards: ReadonlyArray<SentCard> = []): void {
+    if (cards.length > 0) this.appendToLog(sentCardChips(cards));
     if (files.length > 0) this.appendToLog(sentFileChips(files));
     const bubble = el('div', 'dg-user', text);
     bubble.classList.add('dg-keep-all');
@@ -1887,6 +2127,8 @@ export class DoogleSidebar {
           // 실패는 일단 "넘어간 실패"로 둔다 — 에이전트가 스스로 다시 해내는 일이 많다.
           // 턴이 끝날 때까지 같은 종류의 일을 해내지 못한 것만 오류로 올린다(endTurn).
           entry.li.dataset.state = event.ok ? 'done' : 'failed';
+          // hub 요약은 "CODE: 사유" — 다시 해도 같은 결과인 실패(NOT_AVAILABLE)는 다시 시도를 권하지 않는다
+          if (!event.ok) entry.li.dataset.code = /^([A-Z_]+):/.exec(event.summary ?? '')?.[1] ?? '';
           const status = entry.li.querySelector('.dg-tool-status');
           if (status) status.setAttribute('aria-label', event.ok ? '완료' : '실패');
           if (event.ok) {
@@ -2299,7 +2541,9 @@ export class DoogleSidebar {
     revert.hidden = true;
     row.append(copy, retry, revert);
     // 실패한 도구가 있으면 그것만 다시 해 달라고 요청한다(도구 재생은 프로토콜에 없어 같은 대화의 새 요청으로)
-    const failed = [...new Set([...turn.tools.values()].filter((e) => e.li.dataset.state === 'error').map((e) => e.label))];
+    const failed = [...new Set([...turn.tools.values()]
+      .filter((e) => e.li.dataset.state === 'error' && !NO_RETRY_CODES.has(e.li.dataset.code ?? ''))
+      .map((e) => e.label))];
     if (failed.length > 0 && turn.userText) {
       const again = button('dg-act dg-act-text dg-act-failed', '', () => {
         if (this.busy) return;

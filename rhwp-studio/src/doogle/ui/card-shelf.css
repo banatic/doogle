@@ -1,0 +1,1118 @@
+/* 카드 서랍 (.dg-shelf · .dg-kc) · 카드 칩 (.dg-card-chip) · 카드 편집 화면 (.dg-ce-*).
+   색 토큰은 sidebar.css 의 --dg-x-* 를 쓴다(.dg-panel 안에서만 쓰인다).
+
+   서랍의 카드는 서류 카드처럼 그린다 — 가로로 넘기는 묶음, 종류마다 색 하나(아이콘·종류 글자에만),
+   명단(표형)은 종이가 겹친 모양에 머리 칸과 줄 선. 값은 서랍에 보이지 않는다. */
+
+.dg-panel {
+  --kc-person: #1f5fbf;
+  --kc-person-soft: #e8f0fc;
+  --kc-list: #0f7b6c;
+  --kc-list-soft: #e3f3ef;
+  --kc-school: #9a5b13;
+  --kc-school-soft: #faf0e2;
+  --kc-card: #4b5563;
+  --kc-card-soft: #eef1f5;
+  --kc-paper: var(--dg-x-surface);
+  --kc-edge: var(--dg-x-border);
+  --kc-rule: var(--dg-x-divider);
+}
+
+:root[data-doogle][data-theme-effective='dark'] .dg-panel {
+  --kc-person: #86aef0;
+  --kc-person-soft: rgba(134, 174, 240, 0.14);
+  --kc-list: #5cc6b3;
+  --kc-list-soft: rgba(92, 198, 179, 0.14);
+  --kc-school: #e3a95c;
+  --kc-school-soft: rgba(227, 169, 92, 0.14);
+  --kc-card: #a9b4c2;
+  --kc-card-soft: rgba(169, 180, 194, 0.14);
+  --kc-paper: #232a35;
+  --kc-edge: #343d4b;
+  --kc-rule: #333b47;
+}
+
+.dg-shelf {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 2px 0 12px;
+  border-bottom: 1px solid var(--dg-x-divider);
+}
+
+.dg-shelf[hidden] {
+  display: none;
+}
+
+.dg-shelf-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px 0 18px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dg-x-muted);
+}
+
+/* 머리의 "새 카드" — 카드가 많아도 늘 같은 자리에 있다 */
+.dg-shelf-new {
+  height: 26px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--dg-x-r-sm);
+  background: transparent;
+  color: var(--dg-x-accent) !important;
+  font-size: 12.5px !important;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.dg-shelf-new:hover {
+  background: var(--dg-x-hover);
+}
+
+.dg-shelf-new:focus-visible {
+  outline: 2px solid var(--dg-x-focus);
+  outline-offset: -2px;
+}
+
+/* 가로로 넘기는 카드 묶음 */
+.dg-shelf-list {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 148px;
+  gap: 14px;
+  padding: 6px 18px 12px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity;
+  scroll-padding-inline: 18px;
+  scrollbar-width: none;
+}
+
+.dg-shelf-list::-webkit-scrollbar {
+  display: none;
+}
+
+.dg-kc {
+  --tone: var(--kc-card);
+  --tone-soft: var(--kc-card-soft);
+  position: relative;
+  height: 112px;
+  scroll-snap-align: start;
+  cursor: grab;
+}
+
+.dg-kc[data-tone='person'] { --tone: var(--kc-person); --tone-soft: var(--kc-person-soft); }
+.dg-kc[data-tone='list'] { --tone: var(--kc-list); --tone-soft: var(--kc-list-soft); }
+.dg-kc[data-tone='school'] { --tone: var(--kc-school); --tone-soft: var(--kc-school-soft); }
+
+/* 명단: 뒤에 종이 두 장이 겹쳐 있다 */
+.dg-kc[data-kind='table']::before,
+.dg-kc[data-kind='table']::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 1px solid var(--kc-edge);
+  border-radius: 10px;
+  background: var(--kc-paper);
+  pointer-events: none;
+}
+
+.dg-kc[data-kind='table']::before {
+  transform: translate(6px, 5px) rotate(1.2deg);
+}
+
+.dg-kc[data-kind='table']::after {
+  transform: translate(3px, 2.5px) rotate(0.6deg);
+}
+
+.dg-kc-face {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 11px;
+  border: 1px solid var(--kc-edge);
+  border-radius: 10px;
+  background: var(--kc-paper);
+  color: var(--dg-x-text);
+  text-align: left;
+  cursor: inherit;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+  transition: transform var(--dg-x-dur) ease, box-shadow var(--dg-x-dur) ease, border-color var(--dg-x-dur) ease;
+}
+
+.dg-kc:hover .dg-kc-face,
+.dg-kc-face:focus-visible {
+  transform: translateY(-2px);
+  border-color: var(--tone);
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.12);
+}
+
+.dg-kc-face:focus-visible {
+  outline: 2px solid var(--dg-x-focus);
+  outline-offset: 2px;
+}
+
+.dg-kc-dragging {
+  opacity: 0.45;
+}
+
+.dg-kc-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.dg-kc-type {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--tone);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 민감 표시 — 작은 글자 딱지 */
+.dg-kc-lock,
+.dg-card-lock {
+  flex-shrink: 0;
+  padding: 1px 5px;
+  border: 1px solid var(--kc-edge);
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--dg-x-hint);
+}
+
+.dg-kc-lock {
+  margin-left: auto;
+}
+
+.dg-kc-name {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: 13.5px;
+  font-weight: 700;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  word-break: keep-all;
+}
+
+.dg-kc-preview {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.dg-kc-keys {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--dg-x-hint);
+}
+
+/* 명단 미리보기: 머리 칸 + 줄 선 두 개 */
+.dg-kc-sheet-head {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  padding-bottom: 3px;
+  border-bottom: 1px solid var(--tone);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--dg-x-muted);
+}
+
+.dg-kc-sheet-head > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dg-kc-rule {
+  height: 0;
+  border-bottom: 1px solid var(--kc-rule);
+}
+
+/* 문서 · 대화 단추 — 올려 두거나 고르면 미리보기 자리에 띠로 올라온다 (터치 화면은 늘) */
+.dg-kc-acts {
+  position: absolute;
+  z-index: 2;
+  left: 1px;
+  right: 1px;
+  bottom: 1px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border-top: 1px solid var(--kc-edge);
+  border-radius: 0 0 9px 9px;
+  background: var(--kc-paper);
+  overflow: hidden;
+  opacity: 0;
+  transform: translateY(4px);
+  pointer-events: none;
+  transition: opacity var(--dg-x-dur) ease, transform var(--dg-x-dur) ease;
+}
+
+.dg-kc:hover .dg-kc-acts,
+.dg-kc:focus-within .dg-kc-acts {
+  opacity: 1;
+  transform: translateY(-2px);
+  pointer-events: auto;
+}
+
+@media (hover: none) {
+  .dg-kc-acts {
+    opacity: 1;
+    transform: none;
+    pointer-events: auto;
+  }
+}
+
+.dg-kc-act {
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: 0;
+  background: transparent;
+  color: var(--dg-x-muted) !important;
+  font-size: 11.5px !important;
+  font-weight: 600;
+}
+
+.dg-kc-act + .dg-kc-act {
+  border-left: 1px solid var(--kc-edge);
+}
+
+.dg-kc-act:hover,
+.dg-kc-act:focus-visible {
+  background: var(--tone-soft);
+  color: var(--tone) !important;
+}
+
+.dg-kc-act:focus-visible {
+  outline: 2px solid var(--dg-x-focus);
+  outline-offset: -2px;
+}
+
+/* 카드가 없을 때 빈 자리에 두는 "첫 카드 만들기" 장 */
+.dg-kc-new {
+  height: 112px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px dashed var(--dg-x-field);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--dg-x-muted) !important;
+  font-size: 12.5px !important;
+  font-weight: 600;
+  cursor: pointer;
+  scroll-snap-align: start;
+}
+
+.dg-kc-new:hover,
+.dg-kc-new:focus-visible {
+  border-color: var(--dg-x-accent);
+  color: var(--dg-x-accent) !important;
+  background: var(--dg-x-soft);
+}
+
+.dg-shelf-note {
+  margin: 0 18px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--dg-x-hint);
+  word-break: keep-all;
+}
+
+.dg-shelf-note:empty {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dg-kc-face,
+  .dg-kc-acts {
+    transition: none;
+  }
+  .dg-kc:hover .dg-kc-face {
+    transform: none;
+  }
+}
+
+/* 머리의 카드 단추 — 서랍이 열려 있으면 눌린 모양 */
+.dg-icon-btn[aria-pressed='true'] {
+  background: var(--dg-x-active);
+  color: var(--dg-x-soft-text) !important;
+}
+
+/* ─── 카드 칩 (입력 상자 · 보낸 메시지) ─── */
+
+.dg-card-chip,
+.dg-thread-card {
+  --tone: var(--kc-card);
+  --tone-soft: var(--kc-card-soft);
+}
+
+.dg-card-chip[data-tone='person'],
+.dg-thread-card[data-tone='person'] { --tone: var(--kc-person); --tone-soft: var(--kc-person-soft); }
+.dg-card-chip[data-tone='list'],
+.dg-thread-card[data-tone='list'] { --tone: var(--kc-list); --tone-soft: var(--kc-list-soft); }
+.dg-card-chip[data-tone='school'],
+.dg-thread-card[data-tone='school'] { --tone: var(--kc-school); --tone-soft: var(--kc-school-soft); }
+
+/* 작은 카드 한 장처럼: 종이 바탕, 왼쪽에 종류 색 아이콘 */
+.dg-card-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 100%;
+  min-width: 0;
+  height: 30px;
+  padding: 0 4px 0 10px;
+  border: 1px solid var(--kc-edge);
+  border-radius: 8px;
+  background: var(--kc-paper);
+  color: var(--dg-x-text);
+  font-size: 12px;
+  line-height: 1;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+}
+
+.dg-card-chip .dg-file-name,
+.dg-thread-card > span:first-child {
+  color: var(--tone);
+  font-weight: 600;
+  padding-right: 2px;
+}
+
+.dg-user-cards {
+  align-self: flex-end;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  max-width: 92%;
+}
+
+/* 입력 상자에 카드를 끌어 올 때 */
+.dg-composer.dg-card-over {
+  border-color: var(--dg-x-accent);
+  box-shadow: 0 0 0 3px var(--dg-x-soft-border);
+}
+
+/* 문서 위로 카드를 끌어 올 때 — 놓으면 채워질 자리(표 또는 줄)를 칠한다 (shell/card-drop-hint.ts).
+   body 바로 아래에 붙으므로 사이드바 토큰(--dg-x-*)이 아니라 전역 토큰을 쓴다. */
+.dg-drop-hint {
+  position: fixed;
+  z-index: 40;
+  pointer-events: none;
+  box-sizing: border-box;
+  border: 2px solid var(--dg-accent, #1f5fbf);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--dg-accent, #1f5fbf) 14%, transparent);
+  transition: left 0.08s ease-out, top 0.08s ease-out, width 0.08s ease-out, height 0.08s ease-out;
+}
+
+/* 표 밖: 그 줄을 띠로 칠하고 왼쪽에 굵은 선 */
+.dg-drop-hint[data-kind='line'] {
+  border-width: 0 0 0 3px;
+  border-radius: 2px;
+}
+
+.dg-drop-hint[hidden],
+.dg-drop-tag[hidden] {
+  display: none;
+}
+
+.dg-drop-tag {
+  position: fixed;
+  z-index: 41;
+  pointer-events: none;
+  height: 26px;
+  padding: 0 9px;
+  border-radius: 6px;
+  background: var(--dg-accent, #1f5fbf);
+  color: var(--dg-on-accent, #fff);
+  font-family: var(--dg-font-ui, sans-serif);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 26px;
+  white-space: nowrap;
+  box-shadow: var(--dg-shadow-pop, 0 4px 12px rgba(15, 23, 42, 0.2));
+}
+
+/* 놓았다 — 한 번 진해졌다가 사라진다 */
+.dg-drop-hint--flash {
+  animation: dg-drop-flash 0.65s ease-out forwards;
+}
+
+@keyframes dg-drop-flash {
+  0% {
+    background: color-mix(in srgb, var(--dg-accent, #1f5fbf) 14%, transparent);
+    opacity: 1;
+  }
+  25% {
+    background: color-mix(in srgb, var(--dg-accent, #1f5fbf) 38%, transparent);
+    opacity: 1;
+  }
+  100% {
+    background: color-mix(in srgb, var(--dg-accent, #1f5fbf) 10%, transparent);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dg-drop-hint {
+    transition: none;
+  }
+}
+
+/* ─── 카드 편집 화면 (.dg-sheet 안) ─── */
+
+.dg-ce-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.dg-ce-input,
+.dg-ce-select,
+.dg-ce-textarea {
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--dg-x-field);
+  border-radius: var(--dg-x-r-sm);
+  background: var(--dg-x-surface);
+  color: var(--dg-x-text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.dg-ce-input:focus-visible,
+.dg-ce-select:focus-visible,
+.dg-ce-textarea:focus-visible {
+  outline: 2px solid var(--dg-x-focus);
+  outline-offset: -1px;
+}
+
+.dg-ce-textarea {
+  width: 100%;
+  resize: vertical;
+  line-height: 1.55;
+}
+
+/* 새 카드의 첫 화면 — 만드는 방법 고르기 */
+.dg-ce-choice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 12px;
+  border: 1px solid var(--dg-x-border);
+  border-radius: var(--dg-x-r-md);
+  background: var(--dg-x-surface);
+  color: var(--dg-x-text) !important;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dg-ce-choice > svg {
+  flex-shrink: 0;
+  color: var(--dg-x-muted);
+}
+
+.dg-ce-choice:hover:not(:disabled) {
+  border-color: var(--dg-x-accent);
+  background: var(--dg-x-hover);
+}
+
+.dg-ce-choice:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.dg-ce-choice-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.dg-ce-choice-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.dg-ce-choice-sub,
+.dg-ce-kind-sub {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--dg-x-muted);
+  word-break: keep-all;
+}
+
+/* 어떤 카드인가 — 정보 한 벌 / 명단 */
+.dg-ce-kinds {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.dg-ce-kind {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--dg-x-field);
+  border-radius: var(--dg-x-r-md);
+  background: var(--dg-x-surface);
+  color: var(--dg-x-text) !important;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dg-ce-kind-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.dg-ce-kind[aria-pressed='true'] {
+  border-color: var(--dg-x-accent);
+  background: var(--dg-x-active);
+}
+
+.dg-ce-kind[aria-pressed='true'] .dg-ce-kind-title {
+  color: var(--dg-x-soft-text);
+}
+
+/* 양식 위에 접어 둔 "AI 로 고치기" */
+.dg-ce-fold {
+  align-self: flex-start;
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--dg-x-r-sm);
+  background: transparent;
+  color: var(--dg-x-muted) !important;
+  font-size: 12.5px !important;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.dg-ce-fold:hover,
+.dg-ce-fold[aria-expanded='true'] {
+  background: var(--dg-x-hover);
+  color: var(--dg-x-text) !important;
+}
+
+.dg-ce-field[data-new] .dg-ce-input {
+  border-color: var(--dg-x-soft-border);
+  background: var(--dg-x-soft);
+}
+
+.dg-ce-key {
+  font-weight: 600;
+}
+
+/* 붙여 넣은 첫 줄을 항목 이름으로 쓸지 묻는 줄 */
+.dg-ce-offer {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--dg-x-soft-border);
+  border-radius: var(--dg-x-r-md);
+  background: var(--dg-x-soft);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.dg-ce-offer > span {
+  flex: 1 1 100%;
+}
+
+.dg-ce-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--dg-x-muted);
+  white-space: nowrap;
+}
+
+.dg-ce-check input {
+  margin: 0;
+}
+
+.dg-ce-icon-btn {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: var(--dg-x-r-sm);
+  background: transparent;
+  color: var(--dg-x-muted) !important;
+  display: grid;
+  place-items: center;
+}
+
+.dg-ce-icon-btn:hover {
+  background: var(--dg-x-hover);
+  color: var(--dg-x-bad) !important;
+}
+
+.dg-ce-link {
+  align-self: flex-start;
+  height: 28px;
+  padding: 0 6px;
+  border: 0;
+  background: transparent;
+  color: var(--dg-x-accent) !important;
+  font-size: 12.5px !important;
+  font-weight: 600;
+}
+
+.dg-ce-grid-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--dg-x-border);
+  border-radius: var(--dg-x-r-md);
+  background: var(--dg-x-surface);
+}
+
+.dg-ce-grid {
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.dg-ce-grid th,
+.dg-ce-grid td {
+  border-bottom: 1px solid var(--dg-x-divider);
+  padding: 0;
+  text-align: left;
+}
+
+.dg-ce-grid th {
+  padding: 6px 8px;
+  font-weight: 600;
+  color: var(--dg-x-muted);
+  white-space: nowrap;
+  background: var(--dg-x-panel);
+}
+
+/* 머리 칸 = 항목 이름 (여기서 바로 고친다) */
+.dg-ce-grid th[data-new] {
+  background: var(--dg-x-soft);
+}
+
+.dg-ce-grid td input {
+  padding: 5px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--dg-x-text);
+  font: inherit;
+}
+
+.dg-ce-grid td input:focus-visible {
+  outline: 2px solid var(--dg-x-focus);
+  outline-offset: -2px;
+}
+
+.dg-ce-grid td.dg-ce-rownum {
+  padding: 0 6px;
+  color: var(--dg-x-hint);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.dg-ce-ai {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--dg-x-soft-border);
+  border-radius: var(--dg-x-r-md);
+  background: var(--dg-x-soft);
+}
+
+.dg-ce-ai-log {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.dg-ce-ai-log:empty {
+  display: none;
+}
+
+.dg-ce-ai-user {
+  align-self: flex-end;
+  max-width: 92%;
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: var(--dg-x-bubble);
+  white-space: pre-wrap;
+}
+
+.dg-ce-ai-agent {
+  color: var(--dg-x-text);
+  white-space: pre-wrap;
+}
+
+.dg-ce-ai-agent[data-tone='error'] {
+  color: var(--dg-x-bad);
+}
+
+.dg-ce-ai-agent[data-tone='quiet'] {
+  color: var(--dg-x-hint);
+}
+
+.dg-ce-error {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--dg-x-r-sm);
+  background: var(--dg-x-bad-soft);
+  color: var(--dg-x-bad);
+  font-size: 12.5px;
+}
+
+.dg-ce-error:empty {
+  display: none;
+}
+
+.dg-btn-danger {
+  border-color: transparent;
+  background: var(--dg-x-bad);
+  color: var(--dg-x-on-accent) !important;
+  font-weight: 600;
+}
+
+/* ─── 카드 편집 화면의 짜임 ───
+   간격 3단: 이름표↔칸 6px · 한 구역 안의 묶음 14px · 구역 사이 22px.
+   글자 3단: 화면 제목 17px · 이름표 12.5px 굵게 · 도움말·열 머리글 12px 흐리게.
+   칸 높이는 30px 하나 (바닥 줄 단추만 32px).
+   `.dg-panel button { font: inherit }` 를 이기도록 단추 규칙은 `.dg-card-editor` 아래에 둔다. */
+
+/* 스크롤 막대 자리를 늘 비워 둔다 — 막대가 생길 때 내용 폭이 흔들리지 않고,
+   같은 자리를 비운 바닥 줄(.dg-ce-bar)과 오른쪽 끝이 맞는다 */
+.dg-card-editor .dg-sheet-body {
+  gap: 22px;
+  padding-top: 2px;
+  scrollbar-gutter: stable;
+}
+
+.dg-card-editor .dg-sheet-note {
+  margin: 0;
+}
+
+.dg-ced-title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--dg-x-text);
+}
+
+.dg-ce-section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.dg-ce-start {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.dg-ce-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dg-ce-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--dg-x-text2);
+}
+
+.dg-ced-hint {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--dg-x-muted);
+}
+
+.dg-ce-labelrow {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+}
+
+.dg-card-editor input.dg-ce-input,
+.dg-card-editor .dg-ce-select {
+  height: 30px;
+  padding-block: 0;
+}
+
+.dg-ce-name {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* 서랍 표시 — 덜 중요한 설정이라 한 줄로 작게 */
+.dg-ce-tone {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dg-card-editor .dg-ce-fold,
+.dg-card-editor .dg-ce-link,
+.dg-card-editor .dg-btn-primary,
+.dg-card-editor .dg-btn-danger {
+  font-weight: 600;
+}
+
+/* 글자가 왼쪽 선(입력 칸의 왼쪽)에 맞도록 단추의 안쪽 여백만큼 당긴다 */
+.dg-ce-fold {
+  margin-left: -8px;
+}
+
+.dg-ce-link {
+  margin-left: -6px;
+}
+
+/* 정보 한 벌 — 항목마다 "이름 : 값" 한 줄 */
+.dg-ce-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dg-ce-cols,
+.dg-ce-field {
+  display: grid;
+  grid-template-columns: minmax(84px, 34%) minmax(0, 1fr) 30px;
+  gap: 6px;
+  align-items: center;
+}
+
+.dg-ce-valuecell {
+  position: relative;
+  min-width: 0;
+  display: flex;
+}
+
+.dg-ce-valuecell .dg-ce-input {
+  width: 100%;
+}
+
+.dg-ce-valuecell[data-sensitive] .dg-ce-input {
+  padding-right: 26px;
+}
+
+/* 민감 표시 — 누르는 것이 아니라 표시 */
+.dg-ce-lock {
+  flex-shrink: 0;
+  color: var(--dg-x-hint);
+  pointer-events: none;
+}
+
+.dg-ce-valuecell .dg-ce-lock {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+/* 줄 끝 설정 단추 — 아이콘은 늘 톱니, 펼친 상태는 배경으로 */
+.dg-ce-more {
+  width: 30px;
+  height: 30px;
+}
+
+.dg-ce-more:hover {
+  color: var(--dg-x-text) !important;
+}
+
+.dg-ce-more[aria-expanded='true'] {
+  background: var(--dg-x-active);
+  color: var(--dg-x-soft-text) !important;
+}
+
+/* 펼친 설정 — 왼쪽 선으로 그 줄에 딸린 것임을 보이고, 다음 줄과는 더 띄운다 */
+.dg-ce-detail {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 2px 0 10px;
+  padding: 2px 0 2px 12px;
+  border-left: 2px solid var(--dg-x-soft-border);
+}
+
+.dg-ce-detail .dg-ce-check {
+  gap: 6px;
+}
+
+/* 명단 표 — 열이 적으면 폭을 나눠 쓰고, 많으면 좁혀서 옆으로 민다 */
+.dg-ce-grid {
+  width: 100%;
+}
+
+.dg-ce-grid th {
+  padding: 0;
+}
+
+.dg-ce-th {
+  display: flex;
+  align-items: center;
+  padding-right: 2px;
+}
+
+.dg-card-editor .dg-ce-th .dg-ce-key {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 4.2em;
+  height: 29px;
+  padding: 0 8px;
+  border-color: transparent;
+  border-radius: 0;
+  background: transparent;
+  font-size: 12.5px;
+}
+
+.dg-ce-th .dg-ce-key:hover {
+  background: var(--dg-x-hover);
+}
+
+.dg-ce-th .dg-ce-more {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+}
+
+.dg-ce-th .dg-ce-lock {
+  margin-right: 2px;
+}
+
+.dg-ce-grid td input {
+  width: 100%;
+  min-width: 5.2em;
+}
+
+/* 바닥 줄 — 스크롤 밖에 있어 저장이 늘 보인다 */
+.dg-ce-bar {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 16px 12px;
+  border-top: 1px solid var(--dg-x-divider);
+  background: var(--dg-x-panel);
+  /* 본문과 같은 폭의 스크롤 막대 자리를 비운다 (막대는 생기지 않는다) */
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.dg-ce-foot {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.dg-ce-foot .dg-grow {
+  flex: 1;
+}
+
+.dg-ce-bar .dg-btn {
+  height: 32px;
+  padding: 0 14px;
+  font-size: 13px !important;
+}
+
+.dg-ce-bar .dg-btn-primary {
+  min-width: 76px;
+  justify-content: center;
+}
+
+/* 이 대화에 붙어 있는 카드 (입력 상자 맨 위) — 떼기 단추 */
+.dg-thread-cards {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  font-size: 11.5px;
+  color: var(--dg-x-hint);
+}
+
+.dg-thread-cards[hidden] {
+  display: none;
+}
+
+.dg-thread-cards-label {
+  margin-right: 2px;
+}
+
+.dg-thread-card {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 2px 0 9px;
+  border: 1px solid var(--dg-x-border);
+  border-radius: 999px;
+  background: var(--dg-x-panel);
+  color: var(--dg-x-text);
+}
+
+.dg-thread-card .dg-card-lock {
+  color: var(--dg-x-warn);
+}
+
+.dg-thread-card-remove {
+  width: 18px;
+  height: 18px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--dg-x-muted) !important;
+  display: grid;
+  place-items: center;
+}
+
+.dg-thread-card-remove:hover:not(:disabled) {
+  background: var(--dg-x-hover);
+  color: var(--dg-x-text) !important;
+}
+
+.dg-thread-card-remove:disabled {
+  opacity: 0.4;
+}

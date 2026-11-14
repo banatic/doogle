@@ -32,6 +32,7 @@ import { getChromeVisibility, setChromeVisibility } from '@/automation/chrome';
 import type { ChromeVisibility } from '@/automation/types';
 import { PluginHostRegistry } from '@/plugin/host';
 import { isDoogleMode, dooglePlugin } from '@/doogle/index.ts';
+import { flashCardDropHint, hideCardDropHint, updateCardDropHint } from '@/doogle/shell/card-drop-hint.ts';
 import type { StudioPlugin } from '@/plugin/types';
 import { CommandDispatcher } from '@/command/dispatcher';
 import type { EditorContext, CommandServices, EditorEditMode } from '@/command/types';
@@ -1112,14 +1113,34 @@ function setupFileInput(): void {
   const container = document.getElementById('scroll-container')!;
   container.addEventListener('dragover', (e) => {
     e.preventDefault();
+    // [doogle] 카드 끌기: 파일 놓기 표시 대신, 놓으면 채워질 자리(표·줄)를 칠한다
+    if (e.dataTransfer?.types.includes('application/x-doogle-card')) {
+      e.dataTransfer.dropEffect = 'copy';
+      const target = inputHandler && wasm.pageCount > 0 ? inputHandler.dropTargetAtClientPoint(e.clientX, e.clientY) : null;
+      updateCardDropHint(target, container.getBoundingClientRect());
+      return;
+    }
     container.classList.add('drag-over');
   });
   container.addEventListener('dragleave', () => {
     container.classList.remove('drag-over');
+    hideCardDropHint();
   });
   container.addEventListener('drop', async (e) => {
     e.preventDefault();
     container.classList.remove('drag-over');
+    // 두글 카드: 놓은 자리로 캐럿을 옮기고 사이드바에 알린다 (채우기는 에이전트가 한다)
+    const cardId = e.dataTransfer?.getData('application/x-doogle-card');
+    if (cardId) {
+      if (!inputHandler || wasm.pageCount === 0) {
+        hideCardDropHint();
+        return;
+      }
+      flashCardDropHint();
+      const placed = inputHandler.moveCaretToClientPoint(e.clientX, e.clientY);
+      window.dispatchEvent(new CustomEvent('doogle:card-drop', { detail: { cardId, placed } }));
+      return;
+    }
     const file = e.dataTransfer?.files[0];
     if (!file) return;
     const dropName = file.name.toLowerCase();

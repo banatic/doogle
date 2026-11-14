@@ -9,9 +9,10 @@ import { WebSocketServer, WebSocket } from 'ws';
 
 import { defaultModelId, ModelCatalog, normalizeModels } from './model-catalog.mjs';
 import { AttachmentStore, attachmentsBlock, normalizeAttachments } from './attachments.mjs';
+import { CARD_REFS_PER_MESSAGE, CardStore, cardsBlock, fillPlaceholders, maskSensitive, normalizeProposal, readCardView, sensitiveValuesOf } from './cards.mjs';
 import { appDataDir } from './paths.mjs';
 import { loadProviders, sortProviders } from './provider-registry.mjs';
-import { buildSystemPrompt, buildTurnText } from './system-prompt.mjs';
+import { CARD_DRAFT_BLOCK, buildSystemPrompt, buildTurnText } from './system-prompt.mjs';
 import { ThreadStore, closeDanglingTurn, normalizeDoc, recordTranscript } from './threads.mjs';
 import { backfillFromClaudeSession } from './transcript-import.mjs';
 import { loadTools } from './tools-loader.mjs';
@@ -151,6 +152,8 @@ export async function createHub(opts = {}) {
   });
   /** 대화에 붙인 참고 파일 — 내용은 대화 폴더 옆(`<대화>.files/`)에 둔다 */
   const attachments = new AttachmentStore({ dir: store.dir });
+  /** 사용자가 만든 카드 — 이 컴퓨터의 `<dataDir>/cards/` 에만 둔다 */
+  const cards = new CardStore({ dir: opts.persistThreads === false ? null : path.join(dataDir, 'cards') });
   const reconnectGraceMs = opts.reconnectGraceMs ?? DEFAULT_RECONNECT_GRACE_MS;
 
   /** 현재 studio 소켓 (하나만 유지) */
@@ -283,6 +286,40 @@ export async function createHub(opts = {}) {
       }
     }
     if (signal?.aborted) return { ok: false, error: { code: 'CANCELLED', message: '취소되었습니다' } };
+    // 카드: 카드 편집 대화는 propose_card 만, 문서로 가는 인자의 자리표시자 {{card:…}} 는 실제 값으로.
+    // 카드를 붙인 대화에서는 그 카드들의 민감 값을 모든 도구 결과(바뀐 문단 글, 뒤 턴의 문서 읽기)에서 가려
+    // 모델에 돌려준다 — 문서에 들어간 민감 값도 모델에는 가린 모양으로만 보인다.
+    let sensitiveValues = [];
+    let renderDropped = false;
+    if (origin === 'agent' && threadId) {
+      const thread = await store.get(threadId);
+      const drafting = thread.purpose === 'card-draft';
+      if (drafting && name !== 'propose_card') {
+        return { ok: false, error: { code: 'NOT_AVAILABLE', message: 'This is the card editor conversation: only propose_card is available here. Do not read or edit the document.' } };
+      }
+      if (!drafting && name === 'propose_card') {
+        return { ok: false, error: { code: 'NOT_AVAILABLE', message: 'propose_card works only in the card editor. To use a card in the document, write placeholders {{card:<id>.<field>}}.' } };
+      }
+      const attachedCards = def?.kind !== 'hub' && Array.isArray(thread.cards) && thread.cards.length > 0 ? await cardsOf(thread) : [];
+      if (def?.kind !== 'hub' && JSON.stringify(args ?? null).includes('{{')) {
+        // 카드가 없어도 돌린다 — 모르는 자리표시자를 문서에 그대로 쓰지 않게 CARD_PLACEHOLDER 로 막는다
+        const filled = fillPlaceholders(args, (id) => attachedCards.find((c) => c.id === id) ?? null);
+        if (!filled.ok) return { ok: false, error: filled.error };
+        args = filled.args;
+      }
+      sensitiveValues = sensitiveValuesOf(attachedCards);
+      // 민감 항목이 있는 카드를 붙인 대화에서는 문서 그림을 만들지 않는다 — 그림 속 글자는 가릴 수 없다
+      if (sensitiveValues.length > 0) {
+        if (name === 'render_page') {
+          return { ok: false, error: { code: 'NOT_AVAILABLE', message: 'render_page is off in this conversation: a card with sensitive fields is attached, and a page picture would show those values. Check layout with get_structure / get_table_layout instead, or ask the user to look at the document.' } };
+        }
+        if (args && typeof args === 'object' && 'render' in args) {
+          const { render: _dropped, ...rest } = args;
+          args = rest;
+          renderDropped = true;
+        }
+      }
+    }
     // hub 가 직접 처리하는 tool(참고 파일) — 화면으로 보내지 않는다. 문서가 열려 있지 않아도 된다.
     if (def?.kind === 'hub') return runHubTool(name, args, threadId);
     // 화면이 잠깐 끊긴 사이면(유예 중, 또는 소켓이 죽고 close 처리가 아직인 틈) 그 화면 앞으로 걸어 둔다 —
@@ -293,7 +330,7 @@ export async function createHub(opts = {}) {
     // 사용자 응답·검토를 기다릴 수 있는 tool(질문/권한 요청, 쓰기)은 긴 대기 시간
     const waitsForHuman = humanWaitTools.has(name) || def?.kind === 'write';
     const timeoutMs = waitsForHuman ? timeouts.write : timeouts.read;
-    return new Promise((resolve) => {
+    const outcome = await new Promise((resolve) => {
       let settled = false;
       /** socket 은 같은 화면이 다시 붙으면 새 소켓으로 바뀐다 (rebindPending) */
       const entry = { resolve: (r) => finish(r), socket };
@@ -315,6 +352,11 @@ export async function createHub(opts = {}) {
       pending.set(callId, entry);
       sendStudio({ type: 'tool_call', callId, name, args, origin, ...(threadId ? { threadId } : {}) });
     });
+    const masked = sensitiveValues.length > 0 ? maskSensitive(outcome, sensitiveValues) : outcome;
+    if (renderDropped && masked?.ok && masked.result && typeof masked.result === 'object' && !Array.isArray(masked.result)) {
+      return { ...masked, result: { ...masked.result, renderSkipped: 'No picture: a card with sensitive fields is attached to this conversation, and a picture would show those values.' } };
+    }
+    return masked;
   }
 
   /** hub 가 직접 처리하는 tool (kind 'hub') */
@@ -323,6 +365,26 @@ export async function createHub(opts = {}) {
       const thread = await store.get(threadId);
       if (name === 'list_attachments') return attachments.list(thread);
       if (name === 'read_attachment') return await attachments.read(thread, args);
+      if (name === 'read_card') {
+        const attachedCards = await cardsOf(thread);
+        const card = attachedCards.find((c) => c.id === args.card);
+        if (!card) {
+          return { ok: false, error: { code: 'CARD_NOT_FOUND', message: attachedCards.length
+            ? `No card ${JSON.stringify(args.card)} in this conversation. Attached cards: ${attachedCards.map((c) => `${c.id} (${c.name})`).join(', ')}`
+            : 'The user has not attached any card to this conversation.' } };
+        }
+        return { ok: true, result: readCardView(card, args) };
+      }
+      if (name === 'propose_card') {
+        let proposal;
+        try {
+          proposal = normalizeProposal(args);
+        } catch (err) {
+          return { ok: false, error: { code: 'INVALID_ARGS', message: String(err?.message ?? err) } };
+        }
+        sendStudio({ type: 'card_proposal', threadId, ...proposal });
+        return { ok: true, result: { shown: true, note: 'The draft is on screen. The user reviews and saves it; reply in one or two short sentences.' } };
+      }
       return { ok: false, error: { code: 'UNKNOWN_TOOL', message: `알 수 없는 tool: ${name}` } };
     } catch (err) {
       return { ok: false, error: { code: 'HUB_TOOL_FAILED', message: String(err?.message ?? err) } };
@@ -490,13 +552,26 @@ export async function createHub(opts = {}) {
         return;
       }
       const typed = typeof msg.text === 'string' ? msg.text : '';
-      if (!typed.trim() && incoming.list.length === 0) {
+      // 카드 — 이 컴퓨터에 있는 카드만, 한 번에 CARD_REFS_PER_MESSAGE 개까지
+      const cardIds = Array.isArray(msg.cards) ? [...new Set(msg.cards.filter((id) => typeof id === 'string' && id))] : [];
+      if (cardIds.length > CARD_REFS_PER_MESSAGE) {
+        emitHub({ kind: 'error', code: 'CARD_LIMIT', message: `카드는 한 번에 ${CARD_REFS_PER_MESSAGE}개까지 붙일 수 있습니다` });
+        reason = 'error';
+        return;
+      }
+      const sentCards = (await Promise.all(cardIds.map((id) => cards.get(id)))).filter(Boolean);
+      if (sentCards.length !== cardIds.length) {
+        emitHub({ kind: 'error', code: 'CARD_NOT_FOUND', message: '붙인 카드 중 지워진 카드가 있습니다. 카드를 다시 붙여 주세요.' });
+        reason = 'error';
+        return;
+      }
+      if (!typed.trim() && incoming.list.length === 0 && sentCards.length === 0) {
         emitHub({ kind: 'error', code: 'INVALID_MESSAGE', message: '메시지가 비어 있습니다' });
         reason = 'error';
         return;
       }
       // 글 없이 파일만 보냈으면 무엇을 할지 되묻도록 한 줄을 대신 넣는다
-      const userText = typed.trim() ? typed : '첨부한 파일을 확인해 주세요.';
+      const userText = typed.trim() ? typed : incoming.list.length > 0 ? '첨부한 파일을 확인해 주세요.' : '붙인 카드를 확인해 주세요.';
       const mode = msg.mode === 'full' ? 'full' : 'agent';
       const thread = await store.get(threadId);
       const attached = await attachments.add(thread, incoming.list);
@@ -505,6 +580,9 @@ export async function createHub(opts = {}) {
         reason = 'error';
         return;
       }
+      // 카드 편집 화면의 AI 대화 — 문서 tool 을 막고 propose_card 만 연다 (dispatchTool)
+      if (msg.purpose === 'card-draft') thread.purpose = 'card-draft';
+      if (sentCards.length > 0) thread.cards = [...new Set([...(Array.isArray(thread.cards) ? thread.cards : []), ...sentCards.map((c) => c.id)])];
       // 앞선 기록이 끝맺지 못했으면(허브가 죽었던 경우) 먼저 닫는다
       closeDanglingTurn(thread);
       if (!thread.title) thread.title = userText.replace(/\s+/g, ' ').trim().slice(0, 40);
@@ -517,13 +595,18 @@ export async function createHub(opts = {}) {
         ...(attached.added.length > 0
           ? { attachments: attached.added.map(({ meta }) => ({ id: meta.id, name: meta.name, kind: meta.kind, size: meta.size, chars: meta.chars, images: meta.images })) }
           : {}),
+        ...(sentCards.length > 0 ? { cards: sentCards.map((c) => ({ id: c.id, name: c.name, icon: c.icon })) } : {}),
       });
       recordTo = thread;
       saveSoon(thread, true);
       const reviews = thread.pendingReviews.splice(0);
       const text = buildTurnText({
         text: userText, mode, context: msg.context, reviews,
-        attachments: attachmentsBlock(thread.attachments, attached.added),
+        attachments: [
+          attachmentsBlock(thread.attachments, attached.added),
+          cardsBlock(await cardsOf(thread), sentCards.map((c) => c.id)),
+          thread.purpose === 'card-draft' ? CARD_DRAFT_BLOCK : '',
+        ].filter(Boolean).join('\n\n'),
       });
       const messages = Array.isArray(thread.histories[providerId]) ? thread.histories[providerId] : [];
       const emit = (event) => {
@@ -609,7 +692,28 @@ export async function createHub(opts = {}) {
       running,
       transcript: Array.isArray(thread.transcript) ? thread.transcript : [],
       attachments: Array.isArray(thread.attachments) ? thread.attachments : [],
+      cards: (await cardsOf(thread)).map(cardBrief),
     });
+  }
+
+  /**
+   * 대화에서 카드 떼기 (S→H `thread_card_detach {threadId, id}` → H→S `thread_card_detached {threadId, id, ok, cards?, error?}`).
+   * 뗀 카드는 다음 턴부터 <doogle_cards>·자리표시자·read_card 에서 빠지고, 민감 값 가리기·쪽 그림 막기도 풀린다.
+   */
+  async function onThreadCardDetach(msg, socket) {
+    const { threadId, id } = msg;
+    const reply = (body) => send(socket, { type: 'thread_card_detached', threadId, id, ...(typeof msg.reqId === 'string' ? { reqId: msg.reqId } : {}), ...body });
+    if (typeof threadId !== 'string' || !threadId || typeof id !== 'string' || !id) {
+      return reply({ ok: false, error: { code: 'INVALID_ARGS', message: 'threadId 와 id 가 필요합니다' } });
+    }
+    if (turns.has(threadId)) {
+      return reply({ ok: false, error: { code: 'THREAD_BUSY', message: '답변을 만드는 중에는 카드를 뗄 수 없습니다' } });
+    }
+    const thread = await store.get(threadId);
+    const before = Array.isArray(thread.cards) ? thread.cards : [];
+    thread.cards = before.filter((c) => c !== id);
+    if (thread.cards.length !== before.length) await store.save(thread, { touch: false });
+    reply({ ok: true, cards: (await cardsOf(thread)).map(cardBrief) });
   }
 
   /** 대화 지우기 (S→H `thread_delete {threadId}` → H→S `thread_deleted {threadId, ok, error?}`) */
@@ -632,6 +736,52 @@ export async function createHub(opts = {}) {
     } catch (err) {
       reply({ ok: false, error: { code: 'DELETE_FAILED', message: String(err?.message ?? err) } });
     }
+  }
+
+  /**
+   * 카드 (S→H `cards_query` → H→S `cards {list}`,
+   *       `card_save {card}` → `card_saved {ok, card?|error?}`,
+   *       `card_delete {id}` → `card_deleted {id, ok, error?}`).
+   */
+  async function onCards(msg, socket) {
+    const reqId = typeof msg.reqId === 'string' ? { reqId: msg.reqId } : {};
+    const fail = (err, fallback) => ({ code: typeof err?.code === 'string' ? err.code : fallback, message: String(err?.message ?? err) });
+    if (msg.type === 'cards_query') {
+      try {
+        return send(socket, { type: 'cards', ...reqId, list: await cards.list() });
+      } catch (err) {
+        return send(socket, { type: 'error', ...reqId, requestType: 'cards_query', code: 'HUB_ERROR', message: String(err?.message ?? err) });
+      }
+    }
+    if (msg.type === 'card_save') {
+      try {
+        return send(socket, { type: 'card_saved', ...reqId, ok: true, card: await cards.save(msg.card) });
+      } catch (err) {
+        return send(socket, { type: 'card_saved', ...reqId, ok: false, error: fail(err, 'SAVE_FAILED') });
+      }
+    }
+    const id = msg.id;
+    if (typeof id !== 'string' || !id) {
+      return send(socket, { type: 'card_deleted', ...reqId, id, ok: false, error: { code: 'INVALID_ARGS', message: 'id가 없습니다' } });
+    }
+    try {
+      const gone = await cards.delete(id);
+      return send(socket, { type: 'card_deleted', ...reqId, id, ok: gone, ...(gone ? {} : { error: { code: 'NOT_FOUND', message: '그런 카드가 없습니다' } }) });
+    } catch (err) {
+      return send(socket, { type: 'card_deleted', ...reqId, id, ok: false, error: fail(err, 'DELETE_FAILED') });
+    }
+  }
+
+  /** 화면에 보일 카드 요약 (값 없음) */
+  function cardBrief(c) {
+    return { id: c.id, name: c.name, icon: c.icon, sensitive: c.fields.some((f) => f.sensitive) };
+  }
+
+  /** 대화에 붙은 카드 (지워진 카드는 빠진다) */
+  async function cardsOf(thread) {
+    const ids = Array.isArray(thread.cards) ? thread.cards : [];
+    const found = await Promise.all(ids.map((id) => cards.get(id)));
+    return found.filter(Boolean);
   }
 
   /** 보관 한도를 넘은 옛 대화를 뒤에서 정리한다 (응답 중인 대화는 남긴다) */
@@ -817,6 +967,12 @@ export async function createHub(opts = {}) {
           });
         case 'thread_delete':
           return void onThreadDelete(msg, ws).catch((e) => log(`thread_delete: ${e?.message}`));
+        case 'thread_card_detach':
+          return void onThreadCardDetach(msg, ws).catch((e) => log(`thread_card_detach: ${e?.message}`));
+        case 'cards_query':
+        case 'card_save':
+        case 'card_delete':
+          return void onCards(msg, ws).catch((e) => log(`${msg.type}: ${e?.message}`));
         case 'secret_set':
         case 'secrets_set':
         case 'secret_delete':
@@ -970,6 +1126,7 @@ export async function createHub(opts = {}) {
     systemPrompt,
     store,
     attachments,
+    cards,
     close,
     /** 테스트·내부용 */
     callTool,

@@ -113,7 +113,7 @@ export interface SavedThreadInfo {
 
 /** 화면 복원용 기록 한 줄 — 사용자 요청 또는 그때 화면에 보낸 agent_event */
 export type TranscriptEntry =
-  | { kind: 'user'; text: string; providerId?: string; at?: string; attachments?: SentAttachment[] }
+  | { kind: 'user'; text: string; providerId?: string; at?: string; attachments?: SentAttachment[]; cards?: SentCard[] }
   | AgentEvent;
 
 /** 요청에 붙였던 참고 파일 (기록에는 이름·종류만 남는다 — 내용은 hub 가 대화 폴더에 둔다) */
@@ -124,6 +124,56 @@ export interface SentAttachment {
   size?: number;
 }
 
+/** 카드 항목 하나 — key 는 자리표시자 `{{card:<id>.<key>}}` 에 그대로 쓰인다 */
+export interface CardField {
+  key: string;
+  /** LLM 이 서식 칸과 맞출 때 참고하는 설명 */
+  desc: string;
+  /** 모델에 보낼 때 가리는 항목 */
+  sensitive: boolean;
+}
+
+/** 사용자가 만들어 둔 카드 (hub `cards/<id>.json`, 이 컴퓨터에만 저장) */
+export interface Card {
+  id: string;
+  name: string;
+  icon: 'card' | 'person' | 'list' | 'school';
+  kind: 'item' | 'table';
+  fields: CardField[];
+  /** kind 'item' */
+  values?: Record<string, string>;
+  /** kind 'table' — 각 줄은 fields 순서 */
+  rows?: string[][];
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** 요청에 붙였던 카드 (기록에는 이름·아이콘만) */
+export interface SentCard {
+  id: string;
+  name: string;
+  icon?: Card['icon'];
+}
+
+/** 대화에 붙어 있는 카드 (hub `thread.cards`, 값 없음) */
+export interface ThreadCard extends SentCard {
+  /** 민감 항목이 있다 — 이 대화에서는 민감 값 가리기·쪽 그림 막기가 걸린다 */
+  sensitive?: boolean;
+}
+
+/**
+ * hub → studio `card_proposal` — 카드 편집 화면의 AI 가 `propose_card` 로 낸 초안.
+ * source: 파일에서 만들 때 — 원본 표의 몇째 줄부터 값인지(dataStart)와 항목별 원본 열(columns, -1 = 없음).
+ */
+export interface CardProposal {
+  threadId: string;
+  card: CardDraft;
+  source?: { dataStart: number; columns: number[] };
+}
+
+/** 저장할 카드 — id 가 없으면 새로 만든다 */
+export type CardDraft = Omit<Card, 'id' | 'createdAt' | 'updatedAt'> & { id?: string };
+
 export interface SavedThread {
   threadId: string;
   title: string;
@@ -131,6 +181,8 @@ export interface SavedThread {
   updatedAt: string;
   running: boolean;
   transcript: TranscriptEntry[];
+  /** 이 대화에 붙어 있는 카드 */
+  cards: ThreadCard[];
 }
 
 export interface ToolCallMessage {
@@ -345,6 +397,53 @@ export class HubClient {
     });
   }
 
+  /** 카드 목록 (최근에 고친 것부터). S→H `cards_query` → H→S `cards {list}` */
+  async listCards(): Promise<Card[]> {
+    const response = await this.request<{ type: 'cards'; list: Card[] }>({ type: 'cards_query' }, 'cards', { timeoutMs: 10_000 });
+    return Array.isArray(response.list) ? response.list : [];
+  }
+
+  /** 카드를 만들거나 고친다. S→H `card_save {card}` → H→S `card_saved {ok, card?, error?}` */
+  async saveCard(card: CardDraft): Promise<Card> {
+    const response = await this.request<{ type: 'card_saved'; ok: boolean; card?: Card; error?: ToolError }>(
+      { type: 'card_save', card },
+      'card_saved',
+      { timeoutMs: 10_000 },
+    );
+    if (!response.ok || !response.card) {
+      throw new HubRequestError(response.error?.code ?? 'SAVE_FAILED', response.error?.message ?? '카드를 저장하지 못했습니다');
+    }
+    return response.card;
+  }
+
+  /**
+   * 대화에서 카드를 뗀다 — 다음 턴부터 에이전트가 그 카드를 쓰지 않는다.
+   * S→H `thread_card_detach {threadId, id}` → H→S `thread_card_detached {threadId, id, ok, cards?, error?}`
+   */
+  async detachThreadCard(threadId: string, id: string): Promise<ThreadCard[]> {
+    const response = await this.request<{ type: 'thread_card_detached'; threadId: string; id: string; ok: boolean; cards?: ThreadCard[]; error?: ToolError }>(
+      { type: 'thread_card_detach', threadId, id },
+      'thread_card_detached',
+      { timeoutMs: 10_000, match: (r) => r.threadId === threadId && r.id === id },
+    );
+    if (!response.ok) {
+      throw new HubRequestError(response.error?.code ?? 'DETACH_FAILED', response.error?.message ?? '카드를 떼지 못했습니다');
+    }
+    return Array.isArray(response.cards) ? response.cards : [];
+  }
+
+  /** 카드를 지운다. S→H `card_delete {id}` → H→S `card_deleted {id, ok, error?}` */
+  async deleteCard(id: string): Promise<void> {
+    const response = await this.request<{ type: 'card_deleted'; id: string; ok: boolean; error?: ToolError }>(
+      { type: 'card_delete', id },
+      'card_deleted',
+      { timeoutMs: 10_000, match: (r) => r.id === id },
+    );
+    if (!response.ok) {
+      throw new HubRequestError(response.error?.code ?? 'DELETE_FAILED', response.error?.message ?? '카드를 지우지 못했습니다');
+    }
+  }
+
   // ─── CONTRACT §2 메시지 도우미 ───────────────────────────
 
   async queryProviders(): Promise<ProviderInfo[]> {
@@ -375,6 +474,13 @@ export class HubClient {
      * `read_attachment` 로 읽는다. 원본 바이트는 보내지 않는다.
      */
     attachments?: ReadonlyArray<Record<string, unknown>>;
+    /**
+     * 붙인 카드 id — hub 가 대화에 붙여 두고 항목 이름·설명만 에이전트에게 알린다. 값은 `read_card`(민감 항목은
+     * 가려서)와 자리표시자 `{{card:…}}` 치환으로만 쓰인다.
+     */
+    cards?: ReadonlyArray<string>;
+    /** 'card-draft': 카드 편집 화면의 AI 대화 (문서 편집 tool 없이 propose_card 만) */
+    purpose?: 'card-draft';
   }): boolean {
     return this.send({ type: 'chat_send', ...input });
   }
@@ -403,6 +509,7 @@ export class HubClient {
       updatedAt: response.updatedAt,
       running: !!response.running,
       transcript: Array.isArray(response.transcript) ? response.transcript : [],
+      cards: Array.isArray(response.cards) ? response.cards : [],
     };
   }
 

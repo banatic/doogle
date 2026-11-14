@@ -34,7 +34,7 @@ studio ↔ hub (`/studio`):
 | S→H | `providers_query` | `{}` |
 | H→S | `providers` | `{list:[{id, label, available:boolean, reason?:string, models:Model[], defaultModel:string\|null, modelsUpdatedAt:string\|null, modelsError?:string, authHint?:string}]}` |
 | S→H | `models_refresh` | `{providerId?}` — 모델 목록을 다시 받은 뒤(없으면 전체) `providers`로 응답 |
-| S→H | `chat_send` | `{threadId, providerId, model?, text, mode:"agent"\|"full", context?:{selection?, documentName?}, doc?:{key, name}\|null, attachments?:Attachment[]}` — `text` 는 `attachments` 가 있으면 비어도 된다 |
+| S→H | `chat_send` | `{threadId, providerId, model?, text, mode:"agent"\|"full", context?:{selection?, documentName?}, doc?:{key, name}\|null, attachments?:Attachment[], cards?:string[], purpose?:"card-draft"}` — `text` 는 `attachments`·`cards` 가 있으면 비어도 된다 |
 | S→H | `chat_cancel` | `{threadId}` |
 | H→S | `agent_event` | `{threadId, event}` — event는 §3 |
 | H→S | `tool_call` | `{callId, name, args, origin:"agent"\|"mcp", threadId?}` |
@@ -46,6 +46,24 @@ studio ↔ hub (`/studio`):
 | H→S | `thread` | `{reqId?, threadId, title, doc, createdAt, updatedAt, running, transcript}` — transcript = `{kind:"user", text, providerId, at}` 와 그때 보낸 `agent_event.event` 들 |
 | S→H | `thread_delete` | `{reqId?, threadId}` — 저장된 대화를 지운다(되돌릴 수 없다) |
 | H→S | `thread_deleted` | `{reqId?, threadId, ok, error?:{code, message}}` — 응답 중인 대화는 `THREAD_BUSY` |
+| S→H | `thread_card_detach` | `{reqId?, threadId, id}` — 대화에서 카드를 뗀다(다음 턴부터 블록·자리표시자·read_card·가리기·그림 막기에서 빠진다). `thread` 응답에는 붙은 카드 `cards:[{id, name, icon, sensitive}]` |
+| H→S | `thread_card_detached` | `{reqId?, threadId, id, ok, cards?, error?}` — 응답 중인 대화는 `THREAD_BUSY` |
+| S→H | `cards_query` | `{reqId?}` — 카드 목록 |
+| H→S | `cards` | `{reqId?, list:Card[]}` (최근에 고친 것부터) |
+| S→H | `card_save` | `{reqId?, card}` — `card.id` 가 있고 아는 카드면 고치고, 없으면 새로 만든다 |
+| H→S | `card_saved` | `{reqId?, ok, card?:Card, error?:{code, message}}` — `INVALID_CARD` · `TOO_MANY_CARDS` · `SAVE_FAILED` |
+| S→H | `card_delete` | `{reqId?, id}` |
+| H→S | `card_deleted` | `{reqId?, id, ok, error?:{code, message}}` — `NOT_FOUND` · `INVALID_ARGS` · `DELETE_FAILED` |
+
+**카드** (`doogle-agent/src/cards.mjs`): `Card` = `{id, name, icon:"card"|"person"|"list"|"school", kind:"item"|"table", fields:[{key, desc, sensitive}], values?:{[key]:string}, rows?:string[][], createdAt, updatedAt}`.
+카드 하나 = `appDataDir()/cards/<id>.json`, 이 컴퓨터에만 둔다.
+
+카드를 모델에 쓰는 규칙 (값은 되도록 모델에 보내지 않는다):
+- `chat_send.cards` 로 붙인 카드는 대화(`thread.cards`)에 남는다(한 메시지 5개까지, 없는 카드면 `error:CARD_NOT_FOUND` 뒤 `turn_end:"error"`). 매 턴 글에 `<doogle_cards>` 블록 — 항목 이름·설명·민감 여부만, 값은 없다. transcript 의 `user` 줄에는 `cards:[{id, name, icon}]`.
+- 문서로 가는 tool 인자(에이전트 대화에서)의 자리표시자 `{{card:<id>.<항목>}}` / `{{card:<id>.rows[N].<항목>}}`(N 은 1부터)는 hub 가 studio 로 넘기기 직전에 실제 값으로 바꾼다. 대화에 붙지 않은 카드·없는 항목·없는 줄이면 studio 에 보내지 않고 `CARD_PLACEHOLDER` 오류. 카드를 붙인 대화에서는 그 카드들의 **민감** 값을 모든 도구 결과(바뀐 문단 글, 뒤 턴의 문서 읽기)에서 가려 모델에 돌려준다. 카드를 붙이지 않은 대화에서 같은 문서를 읽으면 문서에 들어간 값은 그대로 보인다(문서 내용이므로). 그림 속 글자는 가릴 수 없으므로, 민감 항목이 있는 카드를 붙인 대화에서는 문서 그림을 만들지 않는다: 쓰기의 `render` 를 빼고 결과에 `renderSkipped` 를 달며, `render_page` 는 `NOT_AVAILABLE`.
+- hub tool `read_card {card, fields?, fromRow?, maxRows?}` — 값이 꼭 필요할 때(가공)만. 민감 항목은 가린 값(`010-****-5678`, `김**`).
+- 카드 편집 화면의 AI 대화는 `purpose:"card-draft"`(대화 id `card-draft-…`, 편집 화면을 닫으면 studio 가 지운다). 이 대화에서는 hub tool `propose_card` 만 열리고(다른 tool 은 `NOT_AVAILABLE`), 보통 대화에서는 `propose_card` 가 막힌다. `propose_card` 는 저장하지 않고 H→S `card_proposal {threadId, card, source?:{dataStart, columns}}` 로 초안을 보낸다 — 저장은 사람이 한다. 파일로 만들 때 모델에는 표의 머리 줄 + 앞 3줄만 보내고, 나머지 줄은 studio 가 `source` 의 열 짝대로 채운다.
+- 문서에 카드를 끌어 놓으면 studio(main.ts)가 놓은 자리로 캐럿을 옮기고 `doogle:card-drop` 을 알린다 → 사이드바가 그 카드를 붙인 채우기 요청을 보낸다. `item` 은 항목마다 값 하나(`values`), `table` 은 줄마다 `fields` 순서의 칸(`rows`). 항목 이름(`key`)은 자리표시자 `{{card:<id>.<key>}}` 에 쓰이므로 `. { } [ ]` 와 줄바꿈을 받지 않는다. 한도: 카드 200개, 항목 40개, 줄 1000개.
 
 **참고 파일** (`doogle-agent/src/attachments.mjs`): `Attachment` = `{name, kind:"text"|"hwp"|"pdf"|"docx"|"xlsx"|"pptx"|"image", mime, size, text?, images?:[{mimeType, base64, width?, height?, label?}], meta?:{pages?, sheets?, slides?, encoding?, note?, truncated?}}`.
 studio 가 파일을 읽어 글·그림으로 바꿔 보낸다(원본 바이트는 보내지 않는다). hub 는 내용을 `threads/<대화>.files/<id>.json` 에 두고 대화에는 목록만 붙인다.

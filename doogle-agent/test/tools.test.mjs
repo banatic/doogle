@@ -41,7 +41,7 @@ test('tool list: unique names, v1 only, every tool has kind/label/description', 
     assert.equal(getTool(t.name), t);
   }
   const count = (kind) => TOOLS.filter((t) => t.kind === kind).length;
-  assert.deepEqual({ read: count('read'), write: count('write'), control: count('control'), hub: count('hub') }, { read: 21, write: 31, control: 1, hub: 2 });
+  assert.deepEqual({ read: count('read'), write: count('write'), control: count('control'), hub: count('hub') }, { read: 21, write: 31, control: 1, hub: 4 });
   for (const n of ['get_structure', 'find_text', 'render_page', 'read_batch', 'insert_text', 'replace_range', 'apply_edits',
     'apply_engine_edits', 'insert_image', 'insert_paragraphs', 'delete_paragraphs', 'move_paragraphs']) {
     assert.ok(getTool(n), `missing ${n}`);
