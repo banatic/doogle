@@ -41,7 +41,7 @@ class ReviewSaveDialog extends ModalDialog {
       : `'${name}'을(를) 저장하기 전에 확인해 주세요.`;
     const warn = document.createElement('p');
     warn.className = 'dg-review-save-warn';
-    warn.textContent = `검토 대기 중인 에이전트 변경 ${this.options.pendingCount}건이 문서에 포함돼 있습니다. `
+    warn.textContent = `검토 대기 중인 AI 변경 ${this.options.pendingCount}건이 문서에 포함돼 있습니다. `
       + '그대로 저장하면 검토하지 않은 변경도 파일에 들어갑니다.';
     body.append(lead, warn);
     if (this.options.userEdits) {

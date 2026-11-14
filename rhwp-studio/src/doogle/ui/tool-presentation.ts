@@ -192,8 +192,8 @@ function paraProps(a: Args): string {
 }
 
 const EDIT_TABLE_OPS: Record<string, string> = {
-  insert_row: '행 추가', insert_col: '열 추가', delete_row: '행 삭제', delete_col: '열 삭제',
-  merge_cells: '셀 합치기', split_cell: '셀 나누기', set_column_widths: '열 너비 변경',
+  insert_row: '줄 추가', insert_col: '칸 추가', delete_row: '줄 삭제', delete_col: '칸 삭제',
+  merge_cells: '셀 합치기', split_cell: '셀 나누기', set_column_widths: '칸 너비 변경',
   fit_to_page: '표 폭 맞춤', apply_formula: '계산식 넣기', set_caption: '표 캡션',
 };
 

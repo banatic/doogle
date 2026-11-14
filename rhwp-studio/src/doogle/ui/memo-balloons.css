@@ -1,11 +1,11 @@
-/* 메모 말풍선 — 쪽 오른쪽에 뜨는 화면 전용 장식 (memo-balloons.ts) */
+/* 메모 말풍선 — 쪽 오른쪽에 뜨는 화면 전용 장식 (memo-balloons.ts)
+   색은 --dg-memo* (tokens.css). 종이 위에 그리는 표시·선은 종이가 늘 흰색이라 --dg-memo-on-paper 고정색을 쓴다. */
 
 .dg-memo-layer {
   position: absolute;
   inset: 0;
   z-index: 8;
   pointer-events: none;
-  --dg-memo-line: color-mix(in srgb, var(--dg-ok, #15803D) 55%, transparent);
 }
 
 .dg-memo-lines {
@@ -19,15 +19,17 @@
 
 .dg-memo-lines path {
   fill: none;
-  stroke: var(--dg-memo-line);
   stroke-width: 1;
 }
+/* 종이 위 구간 / 종이 밖(작업 공간) 구간 */
+.dg-memo-line-paper { stroke: color-mix(in srgb, var(--dg-memo-on-paper, #15803D) 60%, transparent); }
+.dg-memo-line-out { stroke: var(--dg-memo-border, #86C7A0); }
 
 /* 메모가 걸린 글 */
 .dg-memo-mark {
   position: absolute;
-  background: color-mix(in srgb, var(--dg-ok, #15803D) 22%, transparent);
-  border-bottom: 1px solid var(--dg-memo-line);
+  background: color-mix(in srgb, var(--dg-memo-on-paper, #15803D) 20%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--dg-memo-on-paper, #15803D) 60%, transparent);
   box-sizing: border-box;
 }
 
@@ -36,31 +38,35 @@
   box-sizing: border-box;
   margin: 0;
   padding: 6px 9px 8px;
-  border: 1px solid var(--dg-memo-line);
-  border-radius: 6px;
-  background: var(--dg-ok-soft, #F0FDF4);
+  border: 1px solid var(--dg-memo-border, #86C7A0);
+  border-radius: var(--dg-r-6, 6px);
+  background: var(--dg-memo-soft, #F0FDF4);
   color: var(--dg-text, #1F2937);
-  font: 12px/1.5 var(--dg-font-ui, 'Malgun Gothic', sans-serif);
+  font: var(--dg-fs-sm, 12px)/1.5 var(--dg-font-ui, 'Malgun Gothic', sans-serif);
   pointer-events: auto;
   user-select: text;
 }
 
 .dg-memo-jump { cursor: pointer; }
-.dg-memo-jump:hover { border-color: var(--dg-ok, #15803D); }
+.dg-memo-jump:hover { border-color: var(--dg-memo, #15803D); }
+.dg-memo:focus-visible {
+  outline: 2px solid var(--dg-focus, #1F5FBF);
+  outline-offset: 2px;
+}
 
 .dg-memo-head {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
+  align-items: center;
   gap: 8px;
   margin-bottom: 2px;
-  font-size: 11px;
+  min-height: var(--dg-ctl-h-sm, 24px);
+  font-size: var(--dg-fs-kbd, 11.5px);
   color: var(--dg-muted, #4B5563);
 }
 
 .dg-memo-author {
   font-weight: 600;
-  color: var(--dg-ok, #15803D);
+  color: var(--dg-memo, #15803D);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -68,6 +74,7 @@
 
 .dg-memo-date {
   flex: none;
+  margin-left: auto;
   font-variant-numeric: tabular-nums;
 }
 
@@ -75,4 +82,114 @@
   margin: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.dg-memo-text[hidden],
+.dg-memo-tools[hidden],
+.dg-memo-error[hidden] { display: none; }
+
+/* 고치기·지우기 */
+.dg-memo-tools {
+  display: inline-flex;
+  flex: none;
+  margin-right: -5px;
+}
+
+.dg-memo-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--dg-ctl-h-sm, 24px);
+  height: var(--dg-ctl-h-sm, 24px);
+  padding: 0;
+  border: 0;
+  border-radius: var(--dg-r-sm, 4px);
+  background: transparent;
+  color: var(--dg-muted, #4B5563);
+  cursor: pointer;
+}
+
+.dg-memo-tool:hover {
+  background: var(--dg-hover, #F1F5F9);
+  color: var(--dg-text, #1F2937);
+}
+.dg-memo-tool:active { background: var(--dg-active, #DBEAFE); }
+
+.dg-memo-tool:focus-visible,
+.dg-memo-btn:focus-visible,
+.dg-memo-input:focus-visible {
+  outline: 2px solid var(--dg-focus, #1F5FBF);
+  outline-offset: 1px;
+}
+
+.dg-memo--busy {
+  z-index: 1;
+  cursor: default;
+  border-color: var(--dg-memo, #15803D);
+}
+
+.dg-memo-input {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  margin: 2px 0 0;
+  padding: 5px 6px;
+  border: 1px solid var(--dg-field, #CBD5E1);
+  border-radius: var(--dg-r-sm, 4px);
+  background: var(--dg-surface, #FFFFFF);
+  color: var(--dg-text, #1F2937);
+  font: inherit;
+  resize: vertical;
+}
+
+.dg-memo-ask { margin: 2px 0 0; }
+
+.dg-memo-error {
+  margin: 4px 0 0;
+  color: var(--dg-bad, #B91C1C);
+}
+
+.dg-memo-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.dg-memo-hint {
+  margin-right: auto;
+  font-size: var(--dg-fs-kbd, 11.5px);
+  color: var(--dg-hint, #6B7280);
+}
+
+.dg-memo-btn {
+  height: var(--dg-ctl-h-sm, 24px);
+  padding: 0 10px;
+  border: 1px solid var(--dg-field, #CBD5E1);
+  border-radius: var(--dg-r-sm, 4px);
+  background: var(--dg-surface, #FFFFFF);
+  color: var(--dg-text, #1F2937);
+  font: inherit;
+  cursor: pointer;
+}
+
+.dg-memo-btn:hover { background: var(--dg-hover, #F1F5F9); }
+
+.dg-memo-btn--primary {
+  border-color: var(--dg-accent, #1F5FBF);
+  background: var(--dg-accent, #1F5FBF);
+  color: var(--dg-on-accent, #FFFFFF);
+}
+
+.dg-memo-btn--primary:hover { background: var(--dg-accent-hover, #1A51A3); }
+
+.dg-memo-btn--danger {
+  border-color: var(--dg-bad, #B91C1C);
+  background: var(--dg-bad, #B91C1C);
+  color: var(--dg-surface, #FFFFFF);
+}
+
+.dg-memo-btn--danger:hover {
+  background: color-mix(in srgb, var(--dg-bad, #B91C1C) 85%, var(--dg-text, #1F2937));
 }

@@ -47,6 +47,25 @@
   --dg-soft-text: #1E3A8A;
   --dg-hover: #F1F5F9;
   --dg-active: #DBEAFE;           /* 눌림·선택 바탕 */
+  /* 켜짐(토글이 켜진 단추·선택된 선택지) — 리본·옮겨 온 단추·사이드바·카드가 같은 한 벌을 쓴다.
+     테두리는 바탕과 3:1 이상(WCAG 1.4.11)이라 색 없이도 켜짐이 읽힌다. hover 는 늘 --dg-hover. */
+  --dg-on-bg: #DBEAFE;
+  --dg-on-border: #5B8DEF;
+  --dg-on-text: #1E3A8A;
+  --dg-on-bg-hover: #C7DBFB;
+  /* 조작부 눈금 */
+  --dg-ctl-h-sm: 24px;
+  --dg-ctl-h-md: 28px;
+  --dg-ctl-h-lg: 32px;
+  --dg-disabled-opacity: 0.45;
+  /* 리본 큰 단추의 색 아이콘 */
+  --dg-icon-image: #059669;
+  --dg-icon-shape: #7C3AED;
+  /* 메모 말풍선. 종이 위에 그리는 표시·선은 테마와 무관하게 종이(흰색) 기준 고정색이다. */
+  --dg-memo: #15803D;
+  --dg-memo-soft: #F0FDF4;
+  --dg-memo-border: #86C7A0;
+  --dg-memo-on-paper: #15803D;
   --dg-ink-06: rgba(15, 23, 42, 0.06);  /* 투명 잉크(겹침 hover·구분) */
   --dg-ink-12: rgba(15, 23, 42, 0.12);
   --dg-ins: #1D4ED8;
@@ -92,6 +111,8 @@
 
   /* ── 모서리 ── */
   --dg-r-sm: 4px;
+  --dg-r-6: 6px;                  /* 리본 큰 단추·팝업·대화상자 단추 */
+  --dg-r-10: 10px;                /* 카드·시트 */
   --dg-r-md: 8px;
   --dg-r-lg: 14px;
 
@@ -149,6 +170,15 @@
   --dg-soft-text: #BBD3F8;
   --dg-hover: #252D3D;
   --dg-active: #24375A;
+  --dg-on-bg: #24375A;
+  --dg-on-border: #6F9BE6;
+  --dg-on-text: #D6E4FB;
+  --dg-on-bg-hover: #2C4370;
+  --dg-icon-image: #34D399;
+  --dg-icon-shape: #A78BFA;
+  --dg-memo: #6FCF97;
+  --dg-memo-soft: #17251E;
+  --dg-memo-border: #3F7A58;
   --dg-ink-06: rgba(255, 255, 255, 0.06);
   --dg-ink-12: rgba(255, 255, 255, 0.12);
   --dg-ins: #8FB6F5;

@@ -63,7 +63,7 @@ export interface SidebarDeps {
   openDocument?(): void;
   /** 데스크탑 앱인가 (연결 카드의 "로그 열기") */
   isDesk?: boolean;
-  /** 에이전트 서비스 로그를 연다. 실패하면 reject — 로그 경로 복사로 물러선다. */
+  /** AI 서비스 로그를 연다. 실패하면 reject — 로그 경로 복사로 물러선다. */
   openHubLog?(): Promise<void>;
 }
 
@@ -576,7 +576,7 @@ export class DoogleSidebar {
     this.appendToLog(row);
   }
 
-  /** 설정 시트 (AI 계정 · 기본 적용 방식 · 에이전트 서비스 · 데이터 안내) */
+  /** 설정 시트 (AI 계정 · 기본 적용 방식 · AI 서비스 · 데이터 안내) */
   openSettings(focus?: 'accounts' | 'api'): void {
     if (!this.sheet) return;
     this.closeMenu(false);
@@ -668,7 +668,7 @@ export class DoogleSidebar {
     const cards = this.thread?.cards ?? [];
     row.hidden = cards.length === 0;
     const label = el('span', 'dg-thread-cards-label', '이 대화의 카드');
-    label.title = '이 대화에서 에이전트가 쓰는 카드입니다. 민감 항목이 있는 카드가 붙어 있으면 민감 값은 에이전트에게 가려지고 쪽 그림은 만들지 않습니다.';
+    label.title = '이 대화에서 AI 도우미가 쓰는 카드입니다. 민감 항목이 있는 카드가 붙어 있으면 민감 값은 AI 도우미에게 가려지고 쪽 그림은 만들지 않습니다.';
     row.replaceChildren(label, ...cards.map((card) => {
       const chip = el('span', 'dg-thread-card');
       chip.dataset.tone = card.icon ?? 'card';
@@ -786,7 +786,7 @@ export class DoogleSidebar {
       this.cardsBtn,
       this.historyBtn,
       iconButton('dg-icon-btn', 'compose', '새 대화', () => this.newThread(), 17),
-      iconButton('dg-icon-btn', 'close', '패널 닫기', () => this.closePanel(), 15),
+      iconButton('dg-icon-btn', 'close', '사이드바 닫기', () => this.closePanel(), 15),
       this.threadMenu,
     );
     return head;
@@ -1091,7 +1091,7 @@ export class DoogleSidebar {
       {
         done: !!account,
         title: 'AI 계정 연결',
-        sub: account ? `${account.label} 사용 가능` : this.deps.hub.state === 'open' ? 'Claude Code · ChatGPT · API 키 중 하나' : '에이전트 서비스에 연결되면 확인합니다',
+        sub: account ? `${account.label} 사용 가능` : this.deps.hub.state === 'open' ? 'Claude Code · ChatGPT · API 키 중 하나' : 'AI 서비스에 연결되면 확인합니다',
         act: () => this.openSettings('accounts'),
       },
       {
@@ -1484,7 +1484,7 @@ export class DoogleSidebar {
     if (this.suspendTimer !== null) clearTimeout(this.suspendTimer);
     this.suspendTimer = null;
     if (!this.busy) return;
-    this.addNotice('에이전트 서비스 연결이 끊겨 응답을 더 받지 못했습니다.', 'error');
+    this.addNotice('AI 서비스 연결이 끊겨 응답을 더 받지 못했습니다.', 'error');
     this.endTurn();
   }
 
@@ -1560,7 +1560,7 @@ export class DoogleSidebar {
 
   private requestModelRefresh(providerId: string): void {
     if (!this.deps.hub.refreshModels(providerId)) {
-      this.addNotice('에이전트 서비스에 연결되어 있지 않습니다.', 'error');
+      this.addNotice('AI 서비스에 연결되어 있지 않습니다.', 'error');
       return;
     }
     this.refreshingModels.add(providerId);
@@ -1600,7 +1600,7 @@ export class DoogleSidebar {
     const parts: HTMLElement[] = [];
     const usable = this.providers.filter((p) => p.available);
     if (this.providers.length === 0) {
-      parts.push(el('p', 'dg-menu-hint', this.deps.hub.state === 'open' ? '모델 목록을 받는 중…' : '에이전트 서비스에 연결되면 모델을 고를 수 있습니다.'));
+      parts.push(el('p', 'dg-menu-hint', this.deps.hub.state === 'open' ? '모델 목록을 받는 중…' : 'AI 서비스에 연결되면 모델을 고를 수 있습니다.'));
     } else if (usable.length === 0) {
       parts.push(el('p', 'dg-menu-hint', '사용할 수 있는 AI 계정이 없습니다. 설정에서 계정을 연결하세요.'));
     }
@@ -1661,7 +1661,7 @@ export class DoogleSidebar {
 
   private startLogin(providerId: string): void {
     if (!this.deps.hub.startLogin(providerId)) {
-      this.addNotice('에이전트 서비스에 연결되어 있지 않아 로그인을 시작할 수 없습니다.', 'error');
+      this.addNotice('AI 서비스에 연결되어 있지 않아 로그인을 시작할 수 없습니다.', 'error');
       return;
     }
     this.loginPending = providerId;
@@ -1861,7 +1861,7 @@ export class DoogleSidebar {
     } else {
       this.sendBtn.replaceChildren(icon('send', 16, 2.2));
       this.sendBtn.setAttribute('aria-label', '보내기');
-      this.sendBtn.title = ready ? '보내기 (Enter)' : this.deps.hub.state !== 'open' ? '에이전트 서비스에 연결되어 있지 않습니다' : provider ? `${provider.label}: AI 계정을 연결하세요` : '모델을 고르세요';
+      this.sendBtn.title = ready ? '보내기 (Enter)' : this.deps.hub.state !== 'open' ? 'AI 서비스에 연결되어 있지 않습니다' : provider ? `${provider.label}: AI 계정을 연결하세요` : '모델을 고르세요';
       // 파일만 붙여 보내도 된다. 파일을 아직 읽는 중이면 기다린다
       const nothing = this.input.value.trim() === '' && this.tray.count === 0 && this.cardRefs.length === 0;
       this.sendBtn.disabled = !ready || nothing || this.tray.busy;
@@ -1912,7 +1912,7 @@ export class DoogleSidebar {
       ...(cards.length > 0 ? { cards: cards.map((c) => c.id) } : {}),
     });
     if (!sent) {
-      this.addNotice('에이전트 서비스에 연결되어 있지 않습니다.', 'error');
+      this.addNotice('AI 서비스에 연결되어 있지 않습니다.', 'error');
       return;
     }
     storeSet(STORE_ONBOARDED, '1');

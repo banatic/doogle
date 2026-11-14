@@ -75,7 +75,10 @@ export function installNarrowFit(host: PluginHost, studio: NarrowFitStudio): voi
     const width = pageWidth();
     if (!width) return;
     const zoom = Math.round((ctx.zoom || 1) * 100);
-    const fit = Math.floor(((container!.clientWidth - FRAME_PADDING_PX) / width) * 100);
+    // clientWidth 는 안쪽 여백을 포함한다 — 메모 말풍선 자리(오른쪽 여백)는 쪽이 쓸 수 없는 폭이다
+    const style = getComputedStyle(container!);
+    const usable = container!.clientWidth - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0);
+    const fit = Math.floor(((usable - FRAME_PADDING_PX) / width) * 100);
     const next = nextAutoFit(auto, zoom, fit, window.innerWidth < NARROW_WINDOW_PX);
     auto = next.auto;
     if (next.set !== null) studio.run('view:zoom-set', { percent: next.set });
@@ -87,6 +90,8 @@ export function installNarrowFit(host: PluginHost, studio: NarrowFitStudio): voi
   }
 
   new ResizeObserver(queue).observe(container);
+  // 안쪽 여백만 바뀌면(메모 자리 생김·사라짐) 크기 관찰이 돌지 않는다
+  new MutationObserver(queue).observe(container, { attributes: true, attributeFilter: ['style'] });
   window.addEventListener('resize', queue);
   host.onDocumentSwap(() => { auto = null; queue(); });
   queue();

@@ -108,6 +108,22 @@ const P: Record<string, string> = {
   monitor: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>',
   ribbon: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 13h8"/>',
   ribbonSimple: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M3 13h18"/>',
+  // 방향·뜻이 같은 아이콘을 여럿이 나눠 쓰던 자리 — 좁은 폭에서 글자가 사라져도 구분되게
+  ratioNarrow: '<path d="M3 12h4M17 12h4M5 10l2 2-2 2M19 10l-2 2 2 2"/><path d="M9 17l3-10 3 10M10 14h4"/>',
+  spacingWide: '<path d="M2 12h3M19 12h3M4 10l-2 2 2 2M20 10l2 2-2 2"/><path d="M7 16l2-7 2 7M13 16l2-7 2 7"/>',
+  spacingNarrow: '<path d="M2 12h3M19 12h3M3 10l2 2-2 2M21 10l-2 2 2 2"/><path d="M7 16l2-7 2 7M13 16l2-7 2 7"/>',
+  lineSpaceMore: '<path d="M10 6h10M10 12h10M10 18h10"/><path d="M5 4v16M3 6l2-2 2 2M3 18l2 2 2-2"/>',
+  lineSpaceLess: '<path d="M10 6h10M10 12h10M10 18h10"/><path d="M5 3v6M5 21v-6M3 7l2 2 2-2M3 17l2-2 2 2"/>',
+  percent: '<circle cx="7" cy="7" r="2.5"/><circle cx="17" cy="17" r="2.5"/><path d="M19 5L5 19"/>',
+  zoom100: '<path d="M4 9l2-1.5V17M10 10a2 2 0 014 0v5a2 2 0 01-4 0zM16.5 10a2 2 0 014 0v5a2 2 0 01-4 0z"/>',
+  hideCurrent: '<rect x="5" y="3" width="14" height="18" rx="1"/><path d="M8 20L16 4"/>',
+  rowAddAbove: '<rect x="3" y="10" width="18" height="10" rx="1"/><path d="M3 15h18M12 3v5M9.5 5.5h5"/>',
+  colAddLeft: '<rect x="10" y="3" width="10" height="18" rx="1"/><path d="M15 3v18M3 12h5M5.5 9.5v5"/>',
+  colAddRight: '<rect x="4" y="3" width="10" height="18" rx="1"/><path d="M9 3v18M16 12h5M18.5 9.5v5"/>',
+  colDel: '<rect x="4" y="3" width="10" height="18" rx="1"/><path d="M9 3v18M16 12h5"/>',
+  rowsEqual: '<rect x="3" y="4" width="18" height="16" rx="1"/><path d="M3 9.3h18M3 14.7h18"/>',
+  average: '<path d="M5 6h14M8 20l4-9 4 9M9.5 16.5h5"/>',
+  thousand: '<path d="M4 8l2-1.5V16M10 9a1.5 1.5 0 013 0v5.5a1.5 1.5 0 01-3 0zM15.5 16l-1 3M18 9a1.5 1.5 0 013 0v5.5a1.5 1.5 0 01-3 0z"/>',
 };
 
 export type IconName = keyof typeof P | string;

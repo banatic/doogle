@@ -37,9 +37,9 @@
   --dg-x-bad-border: var(--dg-bad-border, #fecaca);
   --dg-x-shadow-pop: var(--dg-shadow-pop, 0 12px 32px rgba(15, 23, 42, 0.16));
   --dg-x-dur: var(--dg-dur, 0.18s);
-  --dg-x-r-sm: var(--dg-r-sm, 6px);
+  --dg-x-r-sm: var(--dg-r-sm, 4px);
   --dg-x-r-md: var(--dg-r-md, 8px);
-  --dg-x-r-lg: var(--dg-r-lg, 20px);
+  --dg-x-r-lg: var(--dg-r-lg, 14px);
 
   container: dg-panel / inline-size;
   display: flex;
@@ -994,9 +994,9 @@
 }
 
 .dg-ask-opt[aria-pressed='true'] {
-  border-color: var(--dg-x-accent);
-  background: var(--dg-x-soft);
-  color: var(--dg-x-soft-text) !important;
+  border-color: var(--dg-on-border);
+  background: var(--dg-on-bg);
+  color: var(--dg-on-text) !important;
   opacity: 1 !important;
 }
 
@@ -1307,7 +1307,8 @@
   overflow-wrap: anywhere;
 }
 
-.dg-btn {
+/* 리본 단추(shell.css 의 .dg-btn)와 이름이 같다 — 사이드바 안으로만 좁힌다. :where 로 특이도는 그대로 둔다. */
+:where(.dg-panel) .dg-btn {
   height: 28px;
   padding: 0 10px;
   border: 1px solid var(--dg-x-border);
@@ -1320,7 +1321,7 @@
   white-space: nowrap;
 }
 
-.dg-btn:hover:not(:disabled) {
+:where(.dg-panel) .dg-btn:hover:not(:disabled) {
   background: var(--dg-x-hover);
 }
 
@@ -1377,9 +1378,13 @@
   justify-content: center;
 }
 
-.dg-gear:hover:not(:disabled),
-.dg-gear[aria-expanded='true'] {
+.dg-gear:hover:not(:disabled) {
   background: var(--dg-x-hover);
+}
+
+.dg-gear[aria-expanded='true'] {
+  background: var(--dg-on-bg);
+  color: var(--dg-on-text) !important;
 }
 
 .dg-sheet {
@@ -1470,8 +1475,8 @@
 }
 
 .dg-mode-option.dg-on {
-  border-color: var(--dg-x-accent);
-  background: var(--dg-x-soft);
+  border-color: var(--dg-on-border);
+  background: var(--dg-on-bg);
 }
 
 .dg-radio {
@@ -1672,7 +1677,7 @@
 
 @media (forced-colors: active) {
   .dg-card,
-  .dg-btn {
+  :where(.dg-panel) .dg-btn {
     border-color: CanvasText;
   }
   .dg-dot {

@@ -54,7 +54,7 @@
 
 /* ── 제목 막대 ─────────────────────────────────────────── */
 .dg-titlebar {
-  height: 38px;
+  height: var(--dg-titlebar-h, 38px);
   display: flex;
   align-items: center;
   gap: 8px;
@@ -84,7 +84,7 @@
   border: 0;
   padding: 0;
   background: transparent;
-  border-radius: 5px;
+  border-radius: var(--dg-r-sm, 4px);
   color: var(--dg-title-text);
   display: flex;
   align-items: center;
@@ -93,7 +93,7 @@
 }
 .dg-qa:hover { background: var(--dg-ov); }
 .dg-qa:active { background: var(--dg-ov-strong); }
-.dg-qa[aria-disabled="true"] { opacity: 0.45; cursor: default; }
+.dg-qa[aria-disabled="true"] { opacity: var(--dg-disabled-opacity, 0.45); cursor: default; }
 .dg-qa[aria-disabled="true"]:hover { background: transparent; }
 
 /* 문서 제목 = 문서 상태: ● 이름 [HWPX] — 두글 · 저장됨 ✓ */
@@ -111,7 +111,7 @@
   height: 28px;
   padding: 0 10px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--dg-r-6, 6px);
   background: transparent;
   color: var(--dg-title-text);
   font: inherit;
@@ -139,7 +139,7 @@
   padding: 0 5px;
   border: 1px solid currentColor;
   border-radius: 3px;
-  font-size: 10.5px;
+  font-size: var(--dg-fs-kbd, 11.5px);
   font-weight: 600;
   line-height: 15px;
   letter-spacing: 0.02em;
@@ -174,6 +174,11 @@
   flex-shrink: 0;
 }
 .dg-command-chip:hover { background: var(--dg-ov-strong); }
+/* 좁은 창: 문서 이름이 0폭으로 눌리기 전에 칩을 아이콘만 남긴다 */
+@media (max-width: 720px) {
+  .dg-command-chip { padding: 0 7px; }
+  .dg-command-chip > :not(svg) { display: none; }
+}
 .dg-command-chip kbd {
   font: inherit;
   font-size: var(--dg-fs-kbd, 11.5px);
@@ -270,7 +275,7 @@
   padding: 8px 12px;
   border-radius: var(--dg-r-sm, 4px);
   background: var(--dg-surface-2, #F4F6F9);
-  font-size: 11.5px;
+  font-size: var(--dg-fs-kbd, 11.5px);
   color: var(--dg-muted);
   word-break: keep-all;
 }
@@ -308,19 +313,22 @@
   .dg-groups--enter { animation: none; }
 }
 
+/* 파일: 탭이 아니라 파일 화면을 여는 단추 — 선택된 탭(강조색 글자 + 밑줄)과 겹쳐 읽히지 않게 테두리 단추로 둔다 */
 .dg-tab--file {
-  background: var(--dg-accent);
-  color: var(--dg-on-accent, #FFFFFF);
-  font-weight: 500;
+  color: var(--dg-accent);
+  font-weight: 600;
+  box-shadow: inset 0 0 0 1px var(--dg-on-border);
+  border-radius: var(--dg-r-sm);
+  margin: 5px 6px 5px 0;
 }
-.dg-tab--file:hover { background: var(--dg-accent-hover); }
+.dg-tab--file:hover { background: var(--dg-on-bg); }
+.dg-tab--file:active { background: var(--dg-on-bg-hover); }
 .dg-tab--contextual { color: var(--dg-soft-text); background: var(--dg-soft); }
 .dg-tab:focus-visible {
   outline: 2px solid var(--dg-focus, var(--dg-accent));
   outline-offset: -3px;
   border-radius: 4px;
 }
-.dg-tab--file:focus-visible { outline-color: var(--dg-on-accent, #FFFFFF); }
 
 /* 탭 줄 오른쪽 고정석: AI 도우미 + ⌃ */
 .dg-tabs-end {
@@ -359,12 +367,12 @@
   border-color: color-mix(in srgb, var(--dg-accent) 82%, var(--dg-text));
 }
 .dg-tab-ai[aria-pressed="true"] {
-  background: var(--dg-soft);
-  border-color: var(--dg-soft-border);
-  color: var(--dg-soft-text);
+  background: var(--dg-on-bg);
+  border-color: var(--dg-on-border);
+  color: var(--dg-on-text);
 }
-.dg-tab-ai[aria-pressed="true"]:hover { background: var(--dg-active); }
-.dg-tab-ai[aria-pressed="true"]:active { background: var(--dg-active); border-color: var(--dg-accent); }
+.dg-tab-ai[aria-pressed="true"]:hover,
+.dg-tab-ai[aria-pressed="true"]:active { background: var(--dg-on-bg-hover); border-color: var(--dg-on-border); }
 @media (prefers-reduced-motion: reduce) { .dg-tab-ai { transition: none; } }
 .dg-tab-collapse {
   width: 28px;
@@ -395,7 +403,7 @@
   border-radius: 3px;
   background: var(--dg-text);
   color: var(--dg-surface, #FFFFFF);
-  font-size: 11px;
+  font-size: var(--dg-fs-kbd, 11.5px);
   font-weight: 700;
   line-height: 16px;
   text-align: center;
@@ -510,19 +518,24 @@
 }
 .dg-btn:hover { background: var(--dg-hover); }
 .dg-btn:active { background: var(--dg-active, #DBEAFE); }
+/* 켜짐 — 옮겨 온 단추(.sb-btn.active)·사이드바와 같은 --dg-on-* 한 벌 */
 .dg-btn[aria-pressed="true"] {
-  background: var(--dg-soft);
-  color: var(--dg-soft-text);
-  box-shadow: inset 0 0 0 1px var(--dg-soft-border);
+  background: var(--dg-on-bg);
+  color: var(--dg-on-text);
+  box-shadow: inset 0 0 0 1px var(--dg-on-border);
 }
-.dg-btn[aria-disabled="true"] { opacity: 0.4; cursor: default; }
+.dg-btn[aria-pressed="true"]:hover,
+.dg-btn[aria-pressed="true"]:active { background: var(--dg-on-bg-hover); }
+.dg-btn[aria-pressed="true"] svg { color: var(--dg-on-text); stroke: currentColor; }
+.dg-btn[aria-disabled="true"] { opacity: var(--dg-disabled-opacity, 0.45); cursor: default; }
+.dg-btn[aria-disabled="true"][aria-pressed="true"]:hover { background: var(--dg-on-bg); }
 .dg-btn[aria-disabled="true"]:hover { background: transparent; }
 
 .dg-btn--lg {
   min-width: 52px;
   height: 72px;
   padding: 0 4px;
-  border-radius: 6px;
+  border-radius: var(--dg-r-6, 6px);
   font-size: var(--dg-fs-sm, 12px);
   color: var(--dg-text);
   display: flex;
@@ -558,8 +571,15 @@
   color: var(--dg-ai-text);
   font-weight: 600;
 }
-.dg-btn--ai.dg-btn--lg:hover { background: var(--dg-warn-soft, var(--dg-ai-soft)); }
-.dg-btn--ai[aria-disabled="true"].dg-btn--lg:hover { background: var(--dg-ai-soft); }
+.dg-btn--ai.dg-btn--lg:hover { background: color-mix(in srgb, var(--dg-ai-soft) 82%, var(--dg-ai-text)); }
+/* 쓸 수 없을 때는 상자를 걷는다 — 다른 비활성 단추와 같은 모양 */
+.dg-btn--ai[aria-disabled="true"].dg-btn--lg,
+.dg-btn--ai[aria-disabled="true"].dg-btn--lg:hover {
+  border-color: transparent;
+  background: transparent;
+  color: var(--dg-text);
+  font-weight: inherit;
+}
 
 .dg-more {
   align-self: center;
@@ -568,7 +588,7 @@
   height: 72px;
   border: 0;
   background: transparent;
-  border-radius: 6px;
+  border-radius: var(--dg-r-6, 6px);
   font: inherit;
   font-size: var(--dg-fs-caption, 12px);
   color: var(--dg-muted);
@@ -580,8 +600,9 @@
   cursor: pointer;
   flex-shrink: 0;
 }
+.dg-more[hidden] { display: none; }
 .dg-more:hover { background: var(--dg-hover); }
-.dg-more[aria-expanded="true"] { background: var(--dg-soft); color: var(--dg-soft-text); }
+.dg-more[aria-expanded="true"] { background: var(--dg-on-bg); color: var(--dg-on-text); }
 
 .dg-ribbon :is(button, select, input):focus-visible {
   outline: 2px solid var(--dg-focus, var(--dg-accent));
@@ -622,7 +643,7 @@
 
 /* ── 리본으로 옮겨 온 upstream 서식 요소 ──────────────── */
 .dg-slot { display: inline-flex; align-items: center; }
-.dg-slot--disabled { opacity: 0.5; }
+.dg-slot--disabled { opacity: var(--dg-disabled-opacity, 0.45); }
 
 .dg-ribbon #style-name,
 .dg-ribbon #font-name {
@@ -638,6 +659,9 @@
 }
 .dg-ribbon #style-name { width: 92px; }
 .dg-ribbon #font-name { width: 132px; }
+/* 아주 좁은 폭: 접을 수 없는 글자·문단 묶음이 '더보기' 위로 겹치지 않게 */
+.dg-rpanel--tight .dg-slot[data-slot="style-name"] { display: none; }
+.dg-rpanel--tight #font-name { width: 88px; }
 
 .dg-ribbon .sb-size-group { height: 28px; }
 .dg-ribbon .sb-size {
@@ -680,11 +704,13 @@
 }
 .dg-ribbon .sb-btn.sb-has-arrow { width: 36px; min-width: 36px; }
 .dg-ribbon .sb-btn:hover { background: var(--dg-hover); border-color: transparent; }
+.dg-ribbon .sb-btn:active { background: var(--dg-active); }
 .dg-ribbon .sb-btn.active {
-  background: var(--dg-soft);
-  border-color: var(--dg-soft-border);
-  color: var(--dg-soft-text);
+  background: var(--dg-on-bg);
+  border-color: var(--dg-on-border);
+  color: var(--dg-on-text);
 }
+.dg-ribbon .sb-btn.active:hover { background: var(--dg-on-bg-hover); border-color: var(--dg-on-border); }
 .dg-ribbon .sb-btn:focus-visible { outline: 2px solid var(--dg-focus, var(--dg-accent)); outline-offset: 1px; }
 
 .dg-ribbon .sb-ls-group { height: 28px; }
@@ -710,10 +736,12 @@
   color: var(--dg-text2);
 }
 .dg-ribbon .tb-btn.dg-slot-btn:hover { background: var(--dg-hover); border-color: transparent; }
+.dg-ribbon .tb-btn.dg-slot-btn:active { background: var(--dg-active); }
+.dg-ribbon .tb-btn.dg-slot-btn.active:hover { background: var(--dg-on-bg-hover); border-color: var(--dg-on-border); }
 .dg-ribbon .tb-btn.dg-slot-btn.active {
-  background: var(--dg-soft);
-  border-color: var(--dg-soft-border);
-  color: var(--dg-soft-text);
+  background: var(--dg-on-bg);
+  border-color: var(--dg-on-border);
+  color: var(--dg-on-text);
 }
 
 /* ── 팝업 메뉴 ───────────────────────────────────────── */
@@ -742,7 +770,7 @@
   min-height: 28px;
   padding: 0 10px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--dg-r-6, 6px);
   background: transparent;
   font: inherit;
   color: inherit;
@@ -752,11 +780,13 @@
   text-align: left;
   cursor: pointer;
 }
-.dg-popup-item:hover,
-.dg-popup-item:focus-visible { background: var(--dg-soft); color: var(--dg-soft-text); outline: none; }
+.dg-popup-item:hover { background: var(--dg-hover); }
+/* 키보드 초점은 hover 와 다른 모양(안쪽 링) — 마우스 hover 와 동시에 두 줄이 강조되지 않게 */
+.dg-popup-item:focus-visible { background: var(--dg-hover); outline: 2px solid var(--dg-focus); outline-offset: -2px; }
 .dg-popup-item[aria-disabled="true"] { color: var(--dg-disabled-text, #9CA3AF); cursor: default; }
 .dg-popup-item[aria-disabled="true"]:hover { background: transparent; color: var(--dg-disabled-text, #9CA3AF); }
 .dg-popup-label { flex: 1 1 auto; }
+.dg-popup-check { flex: none; width: 14px; height: 14px; margin-right: -6px; color: var(--dg-accent); display: inline-flex; }
 .dg-popup-shortcut { color: var(--dg-muted); font-size: var(--dg-fs-kbd, 11.5px); }
 .dg-popup-heading {
   padding: 6px 10px 2px;
@@ -769,7 +799,7 @@
 /* ── 파일 백스테이지 ─────────────────────────────────── */
 .dg-backstage {
   position: fixed;
-  inset: 38px 0 0 0;
+  inset: var(--dg-titlebar-h, 38px) 0 0 0;
   z-index: 9000;
   display: flex;
   background: var(--dg-surface, #FFFFFF);
@@ -810,13 +840,15 @@
 .dg-bs-item-label { flex: 1 1 auto; }
 .dg-bs-item-sc { font-size: var(--dg-fs-kbd, 11.5px); color: var(--dg-muted); }
 .dg-bs-back:hover,
-.dg-bs-item:hover { background: var(--dg-soft); color: var(--dg-soft-text); }
+.dg-bs-item:hover { background: var(--dg-hover); }
 .dg-bs-item[aria-disabled="true"] { color: var(--dg-disabled-text, #9CA3AF); cursor: default; }
 .dg-bs-item[aria-disabled="true"] svg { color: inherit; }
 .dg-bs-item[aria-disabled="true"]:hover { background: transparent; color: var(--dg-disabled-text, #9CA3AF); }
 .dg-bs-heading { padding: 10px 12px 4px; font-size: var(--dg-fs-caption, 12px); font-weight: 600; color: var(--dg-muted); }
 .dg-bs-sep { height: 1px; margin: 6px 8px; background: var(--dg-divider); }
 .dg-bs-main { flex: 1 1 auto; padding: 28px 36px; overflow-y: auto; }
+/* 넓은 창에서 내용이 왼쪽 위에 몰리지 않게 읽기 좋은 폭으로 묶는다 */
+.dg-bs-main > * { max-width: 920px; }
 .dg-bs-section { max-width: 760px; margin-bottom: 28px; }
 .dg-bs-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .dg-bs-title { margin: 0 0 14px; font-size: 18px; font-weight: 600; }
@@ -862,7 +894,7 @@
 }
 .dg-bs-tpl--new .dg-bs-tpl-page { color: var(--dg-accent); border-style: dashed; border-color: var(--dg-soft-border); }
 .dg-bs-tpl:hover .dg-bs-tpl-page { border-color: var(--dg-accent); }
-.dg-bs-tpl[aria-disabled="true"] { opacity: 0.5; cursor: default; }
+.dg-bs-tpl[aria-disabled="true"] { opacity: var(--dg-disabled-opacity, 0.45); cursor: default; }
 .dg-bs-tpl-name { font-size: var(--dg-fs-sm, 12px); }
 
 /* 최근 문서 카드 */
@@ -979,7 +1011,7 @@
 :root[data-doogle] #status-bar .stb-item { line-height: 26px; color: var(--dg-muted); white-space: nowrap; }
 :root[data-doogle] #status-bar .stb-divider { display: none; }
 :root[data-doogle] #status-bar .stb-page-button { font: inherit; color: var(--dg-muted); background: transparent; }
-:root[data-doogle] #status-bar .stb-page-button:hover { color: var(--dg-text); }
+:root[data-doogle] #status-bar .stb-page-button:hover { background: var(--dg-hover); color: var(--dg-text); }
 /* 왼쪽 = 위치 */
 :root[data-doogle] #sb-page { order: 1; }
 :root[data-doogle] .dg-sb-line { order: 2; }
@@ -1014,8 +1046,8 @@
   gap: 6px;
   cursor: pointer;
 }
-:root[data-doogle] .dg-sb-fonts:hover,
-:root[data-doogle] .dg-sb-fonts[aria-expanded="true"] { background: var(--dg-hover); color: var(--dg-text); }
+:root[data-doogle] .dg-sb-fonts:hover { background: var(--dg-hover); color: var(--dg-text); }
+:root[data-doogle] .dg-sb-fonts[aria-expanded="true"] { background: var(--dg-on-bg); color: var(--dg-on-text); }
 :root[data-doogle] .dg-fontpop {
   position: fixed;
   z-index: 9500;
@@ -1060,7 +1092,7 @@
   background: var(--dg-surface, #fff);
   color: var(--dg-text, #1f2937);
 }
-:root[data-doogle] .dg-banner-btn:disabled { opacity: 0.55; cursor: default; }
+:root[data-doogle] .dg-banner-btn:disabled { opacity: var(--dg-disabled-opacity, 0.45); cursor: default; }
 :root[data-doogle] .dg-banner-hint { color: var(--dg-muted, #4b5563); }
 
 /* ── 좁은 창 — 사이드바가 문서를 밀어 쪽이 잘리지 않게 ─────────────────
@@ -1082,7 +1114,7 @@
     justify-self: end;
     width: min(360px, calc(100vw - 40px)) !important;
     z-index: 30;
-    box-shadow: -12px 0 32px rgba(15, 23, 42, 0.18);
+    box-shadow: var(--dg-shadow-dialog);
   }
 }
 
@@ -1139,7 +1171,7 @@
   height: 28px;
   padding: 0;
   border: 0;
-  border-radius: 5px;
+  border-radius: var(--dg-r-sm, 4px);
   background: transparent;
   color: var(--dg-title-text);
   display: flex;
@@ -1212,7 +1244,7 @@
 .dg-update-btn:hover:not(:disabled) { background: var(--dg-hover); }
 .dg-update-btn--primary { background: var(--dg-accent); border-color: var(--dg-accent); color: var(--dg-on-accent, #FFFFFF); }
 .dg-update-btn--primary:hover:not(:disabled) { background: var(--dg-accent-hover); }
-.dg-update-btn:disabled { opacity: 0.55; cursor: default; }
+.dg-update-btn:disabled { opacity: var(--dg-disabled-opacity, 0.45); cursor: default; }
 .dg-update-btn:focus-visible { outline: 2px solid var(--dg-focus, var(--dg-accent)); outline-offset: 2px; }
 
 /* ── 토스트(업데이트 재시작 예고·저장 확인 실패) ───────── */

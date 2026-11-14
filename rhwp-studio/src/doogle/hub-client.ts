@@ -369,7 +369,7 @@ export class HubClient {
       const timer = setTimeout(() => {
         off();
         offError();
-        reject(new HubRequestError('TIMEOUT', `에이전트 서비스가 응답하지 않습니다 (${message.type})`));
+        reject(new HubRequestError('TIMEOUT', `AI 서비스가 응답하지 않습니다 (${message.type})`));
       }, options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
       const finish = () => {
         clearTimeout(timer);
@@ -392,7 +392,7 @@ export class HubClient {
       });
       if (!this.send({ ...message, reqId })) {
         finish();
-        reject(new HubRequestError('NOT_CONNECTED', '에이전트 서비스에 연결되어 있지 않습니다'));
+        reject(new HubRequestError('NOT_CONNECTED', 'AI 서비스에 연결되어 있지 않습니다'));
       }
     });
   }
@@ -635,7 +635,7 @@ export class HubClient {
     }
     if (!endpoint) {
       this.connecting = false;
-      this.scheduleRetry('에이전트 서비스 연결 정보가 없습니다', true);
+      this.scheduleRetry('AI 서비스 연결 정보가 없습니다', true);
       return;
     }
     const url = `ws://127.0.0.1:${endpoint.port}/studio?token=${encodeURIComponent(endpoint.token)}&client=${encodeURIComponent(this.clientId)}`;
@@ -669,7 +669,7 @@ export class HubClient {
       if (this.socket !== socket) return;
       this.socket = null;
       if (this.stopped) return;
-      const reason = event.code === 1008 || event.code === 4401 ? '인증 실패 — 토큰을 다시 받습니다' : '에이전트 서비스 연결이 끊겼습니다';
+      const reason = event.code === 1008 || event.code === 4401 ? '인증 실패 — 토큰을 다시 받습니다' : 'AI 서비스 연결이 끊겼습니다';
       this.scheduleRetry(reason);
     };
     socket.onerror = () => {

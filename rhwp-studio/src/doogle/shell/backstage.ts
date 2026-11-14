@@ -138,7 +138,8 @@ export class Backstage {
     root.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); this.close(); return; }
       if (e.key === 'Tab') {
-        const f = Array.from(root.querySelectorAll<HTMLElement>('button:not([aria-disabled="true"])'));
+        const f = Array.from(root.querySelectorAll<HTMLElement>('button:not([aria-disabled="true"]):not([hidden])'))
+          .filter((el) => el.offsetParent !== null);
         if (!f.length) return;
         const first = f[0];
         const last = f[f.length - 1];
@@ -376,14 +377,14 @@ export class Backstage {
     title.textContent = '새로 만들기';
     const row = document.createElement('div');
     row.className = 'dg-bs-templates';
-    row.setAttribute('role', 'list');
+    row.setAttribute('role', 'group');
+    row.setAttribute('aria-label', '새로 만들기');
     sec.append(title, row);
 
     const card = (label: string, icon: string, onPick: () => void, primary = false) => {
       const b = document.createElement('button');
       b.type = 'button';
       b.className = `dg-bs-tpl${primary ? ' dg-bs-tpl--new' : ''}`;
-      b.setAttribute('role', 'listitem');
       b.innerHTML = `<span class="dg-bs-tpl-page">${iconSvg(icon, 22, 1.6)}</span><span class="dg-bs-tpl-name"></span>`;
       (b.querySelector('.dg-bs-tpl-name') as HTMLElement).textContent = label;
       b.addEventListener('click', () => { this.close(false); onPick(); });

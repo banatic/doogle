@@ -81,7 +81,7 @@ async function decideAll(kind: 'accept' | 'reject'): Promise<boolean> {
   try {
     const { reviewStore } = await import('../review/state.ts');
     if (reviewStore.busy) {
-      notify('에이전트가 작업하는 중이라 지금은 변경을 결정할 수 없습니다. 작업이 끝난 뒤 다시 저장해 주세요.');
+      notify('AI 도우미가 작업하는 중이라 지금은 변경을 결정할 수 없습니다. 작업이 끝난 뒤 다시 저장해 주세요.');
       return false;
     }
     reviewStore.decide(kind);

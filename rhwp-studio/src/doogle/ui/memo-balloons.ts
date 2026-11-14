@@ -5,10 +5,14 @@
  *  - 자리: `#scroll-content` 안 장식 레이어. 쪽 좌표 → 화면 좌표는 `rhwpStudio.view.pageToContent`.
  *  - 쪽 오른쪽에 자리가 있도록 메모가 있는 동안 `#scroll-container` 에 오른쪽 안쪽 여백을 둔다
  *    (쪽은 남은 폭 가운데로 온다).
- *  - 화면 전용이다. 문서·인쇄·내보내기에는 아무것도 넣지 않는다.
+ *  - 말풍선 자체는 화면 전용이다. 인쇄·내보내기에는 넣지 않는다.
  *  - 말풍선을 누르면 메모가 걸린 글을 선택한다(본문과 표 한 겹까지).
+ *  - 키보드: 말풍선에 초점을 두고 Enter(걸린 글로) · F2(고치기) · Delete(지우기).
+ *  - 고칠 수 있는 메모는 연필(또는 두 번 누르기)로 내용을 고치고, 휴지통으로 지운다. 문서 수정은
+ *    `host.transaction` 한 건이라 되돌리기 한 번으로 돌아온다. 작성자·날짜는 그대로다.
  */
-import type { PluginHost, PluginTextRange } from '@/plugin/types';
+import type { PluginHost, PluginTextRange, Tx } from '@/plugin/types';
+import { icon } from './icons.ts';
 import { memoBalloonsOn, setMemoBalloonsOn } from './memo-state.ts';
 import './memo-balloons.css';
 
@@ -18,6 +22,13 @@ const BALLOON_GAP = 16;
 const BALLOON_WIDTH = 216;
 const STACK_GAP = 6;
 const SVG_NS = 'http://www.w3.org/2000/svg';
+
+/** 편집기 입력 처리로 새지 않게 막을 이벤트 — 말풍선 안의 글 상자·단추가 직접 받는다 */
+const SHIELDED_EVENTS = [
+  'pointerdown', 'mousedown', 'mouseup', 'dblclick', 'contextmenu',
+  'keydown', 'keyup', 'keypress', 'beforeinput', 'input',
+  'compositionstart', 'compositionupdate', 'compositionend', 'copy', 'cut', 'paste', 'wheel',
+];
 
 type PathEntry =
   | { type: 'cell'; controlIndex: number; cellIndex: number; paraIndex: number }
@@ -34,6 +45,7 @@ interface MemoEntry {
   startCharIdx: number | null;
   endCharIdx: number | null;
   path: PathEntry[] | null;
+  editable: boolean;
 }
 
 interface PageRect { pageIndex: number; x: number; y: number; height: number }
@@ -47,6 +59,8 @@ interface Placed {
 }
 
 type PageToContent = (pageIndex: number, x: number, y: number) => { left: number; top: number; zoom: number } | null;
+type IconName = Parameters<typeof icon>[0];
+type Doc = ReturnType<Tx['doc']>;
 
 function pageToContent(): PageToContent | null {
   const view = (window as unknown as { rhwpStudio?: { view?: { pageToContent?: PageToContent } } }).rhwpStudio?.view;
@@ -113,6 +127,8 @@ export function mountMemoBalloons(host: PluginHost): MemoBalloonsHandle {
   let observed: Element | null = null;
   let timer: number | null = null;
   let disposed = false;
+  /** 고치는 중이거나 지우기 확인 중인 메모. 그동안은 다시 그리지 않는다(쓰던 글이 사라지지 않게). */
+  let busyId: number | null = null;
 
   const schedule = () => {
     if (disposed || timer !== null) return;
@@ -175,31 +191,147 @@ export function mountMemoBalloons(host: PluginHost): MemoBalloonsHandle {
     });
   }
 
+  /** 문서의 메모를 바꾼다. 엔진이 거절하면 무변경으로 끝내고 사유를 돌려준다. */
+  function change(label: string, run: (doc: Doc) => string): string | null {
+    try {
+      return host.transaction(label, (tx) => {
+        const result = JSON.parse(run(tx.doc())) as { ok?: boolean; message?: string };
+        if (result.ok) return null;
+        tx.noChange();
+        return result.message || '메모를 바꾸지 못했습니다.';
+      });
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  function finish(): void {
+    busyId = null;
+    render();
+  }
+
+  function toolButton(label: string, name: IconName, onClick: () => void): HTMLButtonElement {
+    const b = el('button', 'dg-memo-tool');
+    b.type = 'button';
+    b.title = label;
+    b.setAttribute('aria-label', label);
+    b.append(icon(name, 13));
+    b.addEventListener('click', (event) => { event.stopPropagation(); onClick(); });
+    return b;
+  }
+
+  function textButton(label: string, kind: '' | 'primary' | 'danger', onClick: () => void): HTMLButtonElement {
+    const b = el('button', kind ? `dg-memo-btn dg-memo-btn--${kind}` : 'dg-memo-btn', label);
+    b.type = 'button';
+    b.addEventListener('click', (event) => { event.stopPropagation(); onClick(); });
+    return b;
+  }
+
+  /** 말풍선의 내용 자리를 글 상자·단추 줄로 바꾼다 */
+  function openPanel(box: HTMLElement, memo: MemoEntry, body: HTMLElement[]): void {
+    busyId = memo.id;
+    box.classList.add('dg-memo--busy');
+    box.querySelector('.dg-memo-text')?.setAttribute('hidden', '');
+    box.querySelector('.dg-memo-tools')?.setAttribute('hidden', '');
+    const panel = el('div', 'dg-memo-panel');
+    panel.append(...body);
+    box.append(panel);
+  }
+
+  function startEdit(box: HTMLElement, memo: MemoEntry): void {
+    if (busyId !== null) return;
+    const area = el('textarea', 'dg-memo-input');
+    area.value = memo.text;
+    area.rows = Math.min(8, Math.max(2, memo.text.split('\n').length + 1));
+    area.setAttribute('aria-label', '메모 내용');
+    const error = el('p', 'dg-memo-error');
+    error.hidden = true;
+    const save = () => {
+      if (area.value === memo.text) { finish(); return; }
+      const failed = change('메모 고치기', (doc) => doc.setMemoText(memo.id, area.value));
+      if (failed) { error.textContent = failed; error.hidden = false; return; }
+      finish();
+    };
+    area.addEventListener('keydown', (event) => {
+      if (event.isComposing) return;
+      if (event.key === 'Escape') { event.preventDefault(); finish(); }
+      if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); save(); }
+    });
+    const actions = el('div', 'dg-memo-actions');
+    actions.append(
+      el('span', 'dg-memo-hint', 'Ctrl+Enter 저장'),
+      textButton('취소', '', finish),
+      textButton('저장', 'primary', save),
+    );
+    openPanel(box, memo, [area, error, actions]);
+    area.focus();
+    area.setSelectionRange(area.value.length, area.value.length);
+  }
+
+  function startRemove(box: HTMLElement, memo: MemoEntry): void {
+    if (busyId !== null) return;
+    const error = el('p', 'dg-memo-error');
+    error.hidden = true;
+    const remove = () => {
+      const failed = change('메모 지우기', (doc) => doc.removeMemo(memo.id));
+      if (failed) { error.textContent = failed; error.hidden = false; return; }
+      finish();
+    };
+    const confirm = textButton('지우기', 'danger', remove);
+    const actions = el('div', 'dg-memo-actions');
+    actions.append(textButton('취소', '', finish), confirm);
+    openPanel(box, memo, [el('p', 'dg-memo-ask', '이 메모를 지울까요? 걸린 글은 그대로 남습니다.'), error, actions]);
+    confirm.focus();
+  }
+
   function balloon(memo: MemoEntry): HTMLElement {
     const box = el('article', 'dg-memo');
-    box.setAttribute('aria-label', `메모 ${memo.index}`);
+    box.dataset.memoId = String(memo.id);
+    box.tabIndex = 0;
+    box.setAttribute('aria-label', `메모 ${memo.index}, ${memo.author || '작성자 없음'}: ${memo.text}`);
     const head = el('header', 'dg-memo-head');
     head.append(el('span', 'dg-memo-author', memo.author || '메모'));
     const date = formatMemoDate(memo.date);
     if (date) head.append(el('time', 'dg-memo-date', date));
+    if (memo.editable) {
+      const tools = el('span', 'dg-memo-tools');
+      tools.append(
+        toolButton('메모 고치기', 'compose', () => startEdit(box, memo)),
+        toolButton('메모 지우기', 'trash', () => startRemove(box, memo)),
+      );
+      head.append(tools);
+      box.addEventListener('dblclick', () => startEdit(box, memo));
+    }
     box.append(head, el('p', 'dg-memo-text', memo.text));
     const range = rangeOf(memo);
     if (range) {
       box.classList.add('dg-memo-jump');
-      box.title = '누르면 메모가 걸린 글을 선택합니다';
-      box.addEventListener('click', () => { host.selectTextRange(range); });
+      box.addEventListener('click', () => { if (busyId === null) host.selectTextRange(range); });
     }
+    // 키보드: Enter 걸린 글로, F2 고치기, Delete 지우기 (말풍선 자체에 초점이 있을 때만)
+    box.addEventListener('keydown', (event) => {
+      if (event.target !== box || busyId !== null) return;
+      if (event.key === 'Enter' && range) { event.preventDefault(); host.selectTextRange(range); }
+      else if (event.key === 'F2' && memo.editable) { event.preventDefault(); startEdit(box, memo); }
+      else if (event.key === 'Delete' && memo.editable) { event.preventDefault(); startRemove(box, memo); }
+    });
+    // 말풍선 안의 입력이 편집기 본문 입력으로 새지 않게 한다
+    for (const type of SHIELDED_EVENTS) box.addEventListener(type, (event) => event.stopPropagation());
     return box;
   }
 
   function render(): void {
-    if (disposed) return;
+    if (disposed || busyId !== null) return;
     const content = document.getElementById('scroll-content');
     if (content !== observed) {
       if (observed) observer?.unobserve(observed);
       observed = content;
       if (content) observer?.observe(content);
     }
+    // 다시 그려도 키보드 초점이 날아가지 않게, 초점이 있던 메모를 기억한다
+    const focused = layer?.contains(document.activeElement)
+      ? (document.activeElement as HTMLElement).closest<HTMLElement>('.dg-memo')?.dataset.memoId ?? null
+      : null;
     layer?.remove();
     layer = null;
     const toContent = pageToContent();
@@ -233,9 +365,8 @@ export function mountMemoBalloons(host: PluginHost): MemoBalloonsHandle {
       const markWidth = tail ? Math.max(2, tail.left - a.left) : 3;
       mark.style.cssText = `left:${a.left}px;top:${a.top}px;width:${markWidth}px;height:${lineHeight}px`;
       root.append(mark);
-      const box = balloon(memo);
       items.push({
-        box,
+        box: balloon(memo),
         wantedTop: a.top - 2,
         left: edge.left + BALLOON_GAP,
         fromX: a.left + markWidth,
@@ -256,15 +387,21 @@ export function mountMemoBalloons(host: PluginHost): MemoBalloonsHandle {
     const tops = stackTops(items.map((item) => item.wantedTop), items.map((item) => item.box.offsetHeight));
     items.forEach((item, i) => {
       item.box.style.top = `${tops[i]}px`;
-      const path = document.createElementNS(SVG_NS, 'path');
+      // 종이 위 구간과 종이 밖 구간을 따로 긋는다 — 종이는 어두운 테마에서도 흰색이다
       const y = Math.round(item.fromY) + 0.5;
-      path.setAttribute('d', `M${item.fromX},${y} H${item.edgeX + 2} L${item.left},${tops[i] + 12}`);
-      lines.append(path);
+      const onPaper = document.createElementNS(SVG_NS, 'path');
+      onPaper.setAttribute('class', 'dg-memo-line-paper');
+      onPaper.setAttribute('d', `M${item.fromX},${y} H${item.edgeX}`);
+      const out = document.createElementNS(SVG_NS, 'path');
+      out.setAttribute('class', 'dg-memo-line-out');
+      out.setAttribute('d', `M${item.edgeX},${y} L${item.left},${tops[i] + 12}`);
+      lines.append(onPaper, out);
     });
+    if (focused) root.querySelector<HTMLElement>(`.dg-memo[data-memo-id="${focused}"]`)?.focus({ preventScroll: true });
   }
 
   const offs: Array<() => void> = [
-    host.onDocumentSwap(schedule),
+    host.onDocumentSwap(() => { busyId = null; schedule(); }),
     ...['document-changed', 'document-view-changed', 'document-layout-refreshed', 'zoom-changed', 'viewport-resize']
       .map((name) => host.events.on(name, schedule)),
   ];
@@ -275,11 +412,13 @@ export function mountMemoBalloons(host: PluginHost): MemoBalloonsHandle {
   return {
     toggle() {
       setMemoBalloonsOn(!memoBalloonsOn());
+      busyId = null;
       render();
     },
     refresh: schedule,
     dispose() {
       disposed = true;
+      busyId = null;
       if (timer !== null) window.clearTimeout(timer);
       observer?.disconnect();
       for (const off of offs) off();

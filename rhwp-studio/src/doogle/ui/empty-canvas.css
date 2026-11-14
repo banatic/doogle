@@ -33,7 +33,7 @@
   padding: 28px 28px 22px;
   background: var(--dg-ce-surface);
   border: 1px solid var(--dg-ce-border);
-  border-radius: var(--dg-r-lg, 16px);
+  border-radius: var(--dg-r-lg, 14px);
   box-shadow: var(--dg-shadow-pop, 0 8px 24px rgba(15, 23, 42, 0.08));
   box-sizing: border-box;
 }
@@ -105,7 +105,7 @@
   min-height: 34px;
   padding: 0 8px;
   border: 0;
-  border-radius: var(--dg-r-sm, 6px);
+  border-radius: var(--dg-r-sm, 4px);
   background: transparent;
   color: var(--dg-ce-text);
   font: inherit;

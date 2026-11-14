@@ -110,7 +110,7 @@ export function createCardAi(opts: {
 
   return {
     readiness() {
-      if (opts.hub.state !== 'open') return { ok: false, reason: '에이전트 서비스에 연결되면 AI 로 만들 수 있습니다. 지금은 직접 입력하세요.' };
+      if (opts.hub.state !== 'open') return { ok: false, reason: 'AI 서비스에 연결되면 AI 로 만들 수 있습니다. 지금은 직접 입력하세요.' };
       const p = opts.provider();
       if (!p || !p.available) return { ok: false, reason: '사이드바에서 AI 계정을 연결하고 모델을 고르면 AI 로 만들 수 있습니다.' };
       return { ok: true };
@@ -162,7 +162,7 @@ export function createCardAi(opts: {
           else if (event.kind === 'turn_end') finish();
         }));
         offs.push(opts.hub.onState((state) => {
-          if (state !== 'open') { failure = '에이전트 서비스 연결이 끊겼습니다'; finish(); }
+          if (state !== 'open') { failure = 'AI 서비스 연결이 끊겼습니다'; finish(); }
         }));
       });
       const sent = opts.hub.sendChat({
@@ -173,7 +173,7 @@ export function createCardAi(opts: {
         mode: 'agent',
         purpose: 'card-draft',
       });
-      if (!sent) throw new Error('에이전트 서비스에 연결되어 있지 않습니다');
+      if (!sent) throw new Error('AI 서비스에 연결되어 있지 않습니다');
       await done;
       if (signal.aborted) throw new Error('그만두었습니다');
       if (failure && !proposal) throw new Error(failure);

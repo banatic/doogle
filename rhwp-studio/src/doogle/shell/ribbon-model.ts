@@ -9,6 +9,7 @@
  * 리본으로 옮겨 쓰는 자리다. 선택 상태 반영·적용 로직은 upstream `Toolbar` 가 그대로 맡는다.
  */
 import type { EditorContext } from '@/command/types';
+import { getThemeMode } from '@/core/theme';
 
 export type ItemSize = 'lg' | 'sm' | 'ico';
 
@@ -179,11 +180,11 @@ export const RIBBON_TABS: RibbonTab[] = [
         ],
       },
       {
-        id: 'insert', caption: '입력', priority: 3,
+        id: 'insert', caption: '개체 넣기', priority: 3,
         items: [
           cmd('table:create', '표', 'table', 'lg', { iconColor: 'var(--dg-accent)', simple: true }),
-          cmd('insert:image', '그림', 'image', 'lg', { iconColor: 'var(--dg-icon-image, #059669)', simple: true }),
-          cmd('insert:shape', '도형', 'shape', 'lg', { iconColor: 'var(--dg-icon-shape, #7C3AED)' }),
+          cmd('insert:image', '그림', 'image', 'lg', { iconColor: 'var(--dg-icon-image)', simple: true }),
+          cmd('insert:shape', '도형', 'shape', 'lg', { iconColor: 'var(--dg-icon-shape)' }),
           cmd('insert:field', '누름틀', 'field', 'lg', { iconColor: 'var(--dg-ai-text)' }),
         ],
       },
@@ -192,6 +193,8 @@ export const RIBBON_TABS: RibbonTab[] = [
         items: [
           cmd('edit:find', '찾기', 'find', 'lg', { iconColor: 'var(--dg-text2)', simple: true }),
           cmd('edit:find-replace', '바꾸기', 'replace', 'lg', { iconColor: 'var(--dg-text2)' }),
+          cmd('edit:find-again', '다시 찾기', 'findAgain', 'sm'),
+          cmd('edit:goto', '찾아가기', 'goto', 'sm'),
         ],
       },
     ],
@@ -203,14 +206,14 @@ export const RIBBON_TABS: RibbonTab[] = [
     key: 'ㅂ',
     groups: [
       {
-        id: 'zoom', caption: '확대/축소', priority: 5,
+        id: 'zoom', caption: '확대·축소', priority: 5,
         items: [
-          cmd('view:zoom-dialog', '배율', 'find', 'lg', { iconColor: 'var(--dg-accent)' }),
+          cmd('view:zoom-dialog', '배율', 'percent', 'lg', { iconColor: 'var(--dg-accent)' }),
           cmd('view:zoom-fit-page', '쪽 맞춤', 'fitPage', 'lg'),
           cmd('view:zoom-fit-width', '폭 맞춤', 'fitWidth', 'lg'),
           cmd('view:zoom-in', '확대', 'zoomIn', 'sm'),
           cmd('view:zoom-out', '축소', 'zoomOut', 'sm'),
-          cmd('view:zoom-100', '100%', 'cols1', 'sm'),
+          cmd('view:zoom-100', '100%', 'zoom100', 'sm'),
         ],
       },
       {
@@ -219,18 +222,17 @@ export const RIBBON_TABS: RibbonTab[] = [
           cmd('view:ctrl-mark', '조판 부호', 'ctrlMark', 'lg', { pressed: (c) => c.showControlCodes }),
           cmd('view:para-mark', '문단 부호', 'pilcrow', 'lg', { pressed: (c) => c.showParagraphMarks }),
           action('memo-toggle', '메모', 'memo', 'lg'),
-          cmd('view:border-transparent', '투명 선', 'borderDash', 'sm'),
-          cmd('view:toggle-clip', '잘림 보기', 'clip', 'sm'),
-          cmd('view:toggle-grid', '격자 보기', 'grid', 'sm'),
-          cmd('view:grid-settings', '격자 설정', 'gridSettings', 'sm'),
+          cmd('view:border-transparent', '투명 선', 'borderDash', 'sm', { pressed: activeIn('[data-cmd="view:border-transparent"]') }),
+          cmd('view:toggle-clip', '잘림 보기', 'clip', 'sm', { pressed: activeIn('[data-cmd="view:toggle-clip"]') }),
+          cmd('view:toggle-grid', '격자 보기', 'grid', 'sm', { pressed: activeIn('[data-cmd="view:toggle-grid"]') }),
         ],
       },
       {
         id: 'theme', caption: '테마', priority: 3,
         items: [
-          cmd('view:theme-system', '시스템 설정 따름', 'monitor', 'sm'),
-          cmd('view:theme-light', '밝게', 'sun', 'sm'),
-          cmd('view:theme-dark', '어둡게', 'moon', 'sm'),
+          cmd('view:theme-system', '시스템', 'monitor', 'sm', { pressed: () => getThemeMode() === 'system' }),
+          cmd('view:theme-light', '밝게', 'sun', 'sm', { pressed: () => getThemeMode() === 'light' }),
+          cmd('view:theme-dark', '어둡게', 'moon', 'sm', { pressed: () => getThemeMode() === 'dark' }),
         ],
       },
       {
@@ -252,8 +254,8 @@ export const RIBBON_TABS: RibbonTab[] = [
       {
         id: 'objects', caption: '개체', priority: 7,
         items: [
-          cmd('insert:image', '그림', 'image', 'lg', { iconColor: 'var(--dg-icon-image, #059669)' }),
-          cmd('insert:shape', '도형', 'shape', 'lg', { iconColor: 'var(--dg-icon-shape, #7C3AED)' }),
+          cmd('insert:image', '그림', 'image', 'lg', { iconColor: 'var(--dg-icon-image)' }),
+          cmd('insert:shape', '도형', 'shape', 'lg', { iconColor: 'var(--dg-icon-shape)' }),
           cmd('insert:textbox', '글상자', 'textbox', 'lg'),
           cmd('insert:equation', '수식', 'equation', 'lg'),
         ],
@@ -287,24 +289,25 @@ export const RIBBON_TABS: RibbonTab[] = [
         id: 'char', caption: '글자', priority: 8,
         items: [
           cmd('format:char-shape', '글자 모양', 'charShape', 'lg', { iconColor: 'var(--dg-accent)' }),
-          cmd('format:font-size-increase', '크게', 'fontBigger', 'sm'),
-          cmd('format:font-size-decrease', '작게', 'fontSmaller', 'sm'),
+          cmd('format:font-size-increase', '글자 크게', 'fontBigger', 'sm'),
+          cmd('format:font-size-decrease', '글자 작게', 'fontSmaller', 'sm'),
           cmd('format:char-ratio-increase', '장평 넓게', 'ratio', 'sm'),
-          cmd('format:char-ratio-decrease', '장평 좁게', 'ratio', 'sm'),
-          cmd('format:char-spacing-increase', '자간 넓게', 'ratio', 'sm'),
+          cmd('format:char-ratio-decrease', '장평 좁게', 'ratioNarrow', 'sm'),
+          cmd('format:char-spacing-increase', '자간 넓게', 'spacingWide', 'sm'),
+          cmd('format:char-spacing-decrease', '자간 좁게', 'spacingNarrow', 'sm'),
         ],
       },
       {
         id: 'para', caption: '문단', priority: 7,
         items: [
           cmd('format:para-shape', '문단 모양', 'paraShape', 'lg', { iconColor: 'var(--dg-accent)' }),
-          cmd('format:line-spacing-increase', '줄 간격 늘림', 'indent', 'sm'),
-          cmd('format:line-spacing-decrease', '줄 간격 줄임', 'outdent', 'sm'),
+          cmd('format:line-spacing-increase', '줄 간격 늘림', 'lineSpaceMore', 'sm'),
+          cmd('format:line-spacing-decrease', '줄 간격 줄임', 'lineSpaceLess', 'sm'),
           cmd('format:align-split', '나눔 정렬', 'alignDistribute', 'sm'),
         ],
       },
       {
-        id: 'numbering', caption: '번호·글머리', priority: 5,
+        id: 'numbering', caption: '번호·글머리표', priority: 5,
         items: [
           cmd('format:para-num-shape', '문단 번호 모양', 'numbering', 'lg'),
           cmd('format:bullet-shape', '글머리표 모양', 'bullets', 'lg'),
@@ -335,7 +338,8 @@ export const RIBBON_TABS: RibbonTab[] = [
           cmd('page:header-create', '머리말', 'header', 'lg'),
           cmd('page:footer-create', '꼬리말', 'footer', 'lg'),
           cmd('page:new-page-num', '새 번호로 시작', 'pageNum', 'sm'),
-          cmd('page:hide-current', '현재 쪽만 감추기', 'hide', 'sm'),
+          cmd('page:hide', '감추기', 'hide', 'sm'),
+          cmd('page:hide-current', '현재 쪽만 감추기', 'hideCurrent', 'sm'),
         ],
       },
       {
@@ -358,31 +362,13 @@ export const RIBBON_TABS: RibbonTab[] = [
     ],
   },
   {
-    id: 'security',
-    label: '보안',
-    key: 'ㄴ',
-    groups: [
-      {
-        id: 'form', caption: '양식', priority: 8,
-        items: [cmd('view:form-mode', '양식 모드', 'form', 'lg', { iconColor: 'var(--dg-accent)' })],
-      },
-      {
-        id: 'hide', caption: '감추기', priority: 7,
-        items: [
-          cmd('page:hide', '감추기', 'hide', 'lg'),
-          cmd('page:hide-current', '현재 쪽만 감추기', 'hide', 'sm'),
-        ],
-      },
-    ],
-  },
-  {
     id: 'review',
     label: '검토',
     key: 'ㄱ',
     groups: [
       {
         // 'AI 도우미' 탭을 합쳤다 — 에이전트가 만든 변경을 문서에서 탐색하고 한꺼번에 결정한다.
-        id: 'changes', caption: '에이전트 변경', priority: 9,
+        id: 'changes', caption: 'AI 변경', priority: 9,
         items: [
           action('review-accept-all', '모두 적용', 'checkAll', 'lg', { tone: 'ai' }),
           action('review-reject-all', '모두 거절', 'xAll', 'lg'),
@@ -395,14 +381,6 @@ export const RIBBON_TABS: RibbonTab[] = [
         items: [
           cmd('edit:compare-documents', '문서 비교', 'compare', 'lg', { iconColor: 'var(--dg-accent)' }),
           cmd('edit:document-history', '문서 이력', 'history', 'lg'),
-        ],
-      },
-      {
-        id: 'nav', caption: '이동', priority: 6,
-        items: [
-          cmd('edit:goto', '찾아가기', 'goto', 'sm'),
-          cmd('edit:find-again', '다시 찾기', 'findAgain', 'sm'),
-          cmd('edit:find', '찾기', 'find', 'sm'),
         ],
       },
     ],
@@ -421,6 +399,10 @@ export const RIBBON_TABS: RibbonTab[] = [
         id: 'command', caption: '명령', priority: 7,
         items: [action('palette', '명령 입력', 'command', 'lg')],
       },
+      {
+        id: 'form', caption: '양식', priority: 6,
+        items: [cmd('view:form-mode', '양식 모드', 'form', 'lg', { iconColor: 'var(--dg-accent)', pressed: (c) => c.isFormMode })],
+      },
     ],
   },
   {
@@ -433,20 +415,20 @@ export const RIBBON_TABS: RibbonTab[] = [
       {
         id: 'props', caption: '표', priority: 9,
         items: [
-          cmd('table:cell-props', '표/셀 속성', 'table', 'lg', { iconColor: 'var(--dg-accent)' }),
-          cmd('table:insert-row-col', '줄/칸 추가', 'rowAdd', 'lg'),
-          cmd('table:delete-row-col', '줄/칸 지우기', 'rowDel', 'lg'),
+          cmd('table:cell-props', '표·셀 속성', 'table', 'lg', { iconColor: 'var(--dg-accent)' }),
+          cmd('table:insert-row-col', '줄·칸 추가', 'rowAdd', 'lg'),
+          cmd('table:delete-row-col', '줄·칸 지우기', 'rowDel', 'lg'),
         ],
       },
       {
         id: 'rows', caption: '줄·칸', priority: 6,
         items: [
-          cmd('table:insert-row-above', '위에 줄 추가', 'rowAdd', 'sm'),
+          cmd('table:insert-row-above', '위에 줄 추가', 'rowAddAbove', 'sm'),
           cmd('table:insert-row-below', '아래에 줄 추가', 'rowAdd', 'sm'),
-          cmd('table:insert-col-left', '왼쪽에 칸 추가', 'rowAdd', 'sm'),
-          cmd('table:insert-col-right', '오른쪽에 칸 추가', 'rowAdd', 'sm'),
+          cmd('table:insert-col-left', '왼쪽에 칸 추가', 'colAddLeft', 'sm'),
+          cmd('table:insert-col-right', '오른쪽에 칸 추가', 'colAddRight', 'sm'),
           cmd('table:delete-row', '줄 지우기', 'rowDel', 'sm'),
-          cmd('table:delete-col', '칸 지우기', 'rowDel', 'sm'),
+          cmd('table:delete-col', '칸 지우기', 'colDel', 'sm'),
         ],
       },
       {
@@ -454,7 +436,7 @@ export const RIBBON_TABS: RibbonTab[] = [
         items: [
           cmd('table:cell-merge', '셀 합치기', 'cellMerge', 'lg'),
           cmd('table:cell-split', '셀 나누기', 'cellSplit', 'lg'),
-          cmd('table:cell-height-equal', '높이 같게', 'rowAdd', 'sm'),
+          cmd('table:cell-height-equal', '높이 같게', 'rowsEqual', 'sm'),
           cmd('table:cell-width-equal', '너비 같게', 'cols3', 'sm'),
         ],
       },
@@ -463,8 +445,8 @@ export const RIBBON_TABS: RibbonTab[] = [
         items: [
           cmd('table:block-formula', '계산식', 'sum', 'lg'),
           cmd('table:block-sum', '블록 합계', 'sum', 'sm'),
-          cmd('table:block-avg', '블록 평균', 'sum', 'sm'),
-          cmd('table:thousand-sep', '1,000 단위 쉼표', 'sum', 'sm'),
+          cmd('table:block-avg', '블록 평균', 'average', 'sm'),
+          cmd('table:thousand-sep', '1,000 단위 쉼표', 'thousand', 'sm'),
         ],
       },
     ],

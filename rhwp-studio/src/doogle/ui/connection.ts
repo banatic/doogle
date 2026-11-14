@@ -1,5 +1,5 @@
 /**
- * 에이전트 서비스 연결 상태 → 사용자 문구 (UI_AUDIT §3.4 연결 상태 카드).
+ * AI 서비스 연결 상태 → 사용자 문구 (UI_AUDIT §3.4 연결 상태 카드).
  *
  * 입력은 두 갈래다.
  *  - `HubClient` 상태(`connecting | open | retrying | unavailable | stopped`)와 detail
@@ -38,9 +38,9 @@ export interface ConnectionView {
 
 const NODE_DOWNLOAD = 'https://nodejs.org/ko/download';
 
-/** 내부 용어를 사용자 용어로 ("agent hub 가" → "에이전트 서비스가") */
+/** 내부 용어를 사용자 용어로 ("agent hub 가" → "AI 서비스가") */
 export function userWords(text: string): string {
-  return text.replace(/agent hub\s?/gi, '에이전트 서비스').replace(/\bhub\b/gi, '에이전트 서비스');
+  return text.replace(/agent hub\s?/gi, 'AI 서비스').replace(/\bhub\b/gi, 'AI 서비스');
 }
 
 function logPathOf(message: string): string {
@@ -60,7 +60,7 @@ function classify(message: string, desk: boolean): Cause {
   const node = /Node\.js\s*(\d+)?/.exec(m);
   if (node) {
     return {
-      title: '에이전트 서비스를 시작하지 못했습니다',
+      title: 'AI 서비스를 시작하지 못했습니다',
       body: `${node[1] ? `Node.js ${node[1]} 이상을` : 'Node.js 를'} 찾지 못했습니다. 설치한 뒤 다시 시도하세요.`,
       help: { label: 'Node.js 내려받기', url: NODE_DOWNLOAD },
       retry: true,
@@ -68,28 +68,28 @@ function classify(message: string, desk: boolean): Cause {
   }
   if (/EADDRINUSE|address already in use|포트/i.test(m)) {
     return {
-      title: '에이전트 서비스를 시작하지 못했습니다',
+      title: 'AI 서비스를 시작하지 못했습니다',
       body: '쓰려는 포트를 다른 프로그램이 이미 쓰고 있습니다. 그 프로그램을 끄거나 잠시 뒤 다시 시도하세요.',
       retry: true,
     };
   }
   if (/스크립트가 없습니다|script/i.test(m)) {
     return {
-      title: '에이전트 서비스 파일이 없습니다',
+      title: 'AI 서비스 파일이 없습니다',
       body: '설치가 손상됐을 수 있습니다. 두글을 다시 설치하세요.',
       retry: true,
     };
   }
   if (/준비되지 않았습니다|timed? ?out/i.test(m)) {
     return {
-      title: '에이전트 서비스가 응답하지 않습니다',
+      title: 'AI 서비스가 응답하지 않습니다',
       body: '시작은 했지만 제시간에 준비되지 않았습니다. 보안 프로그램이 막고 있을 수 있습니다. 로그를 확인한 뒤 다시 시도하세요.',
       retry: true,
     };
   }
   if (/시작하지 못했습니다/.test(m)) {
     return {
-      title: '에이전트 서비스를 시작하지 못했습니다',
+      title: 'AI 서비스를 시작하지 못했습니다',
       body: 'Node.js 를 실행하지 못했습니다. 로그를 확인한 뒤 다시 시도하세요.',
       retry: true,
     };
@@ -99,13 +99,13 @@ function classify(message: string, desk: boolean): Cause {
   }
   if (/연결 정보가 없습니다/.test(m) && !desk) {
     return {
-      title: '에이전트 서비스 주소가 없습니다',
+      title: 'AI 서비스 주소가 없습니다',
       body: '브라우저 개발 모드에서는 주소에 ?hubPort=…&hubToken=… 을 붙여야 AI 기능을 쓸 수 있습니다.',
       retry: true,
     };
   }
   return {
-    title: '에이전트 서비스를 쓸 수 없습니다',
+    title: 'AI 서비스를 쓸 수 없습니다',
     body: m ? userWords(m).replace(/\s*로그:\s*.+$/, '') : '잠시 뒤 다시 시도하세요.',
     retry: true,
   };
@@ -151,7 +151,7 @@ export function describeConnection(
     return {
       ...base,
       tone: 'warn',
-      title: '에이전트 서비스가 멈췄습니다',
+      title: 'AI 서비스가 멈췄습니다',
       body: '',
       retryAt: desk.restartAt,
       canRetry: true,
@@ -160,20 +160,20 @@ export function describeConnection(
   }
   switch (state) {
     case 'connecting':
-      return { ...base, tone: 'quiet', title: '에이전트 서비스에 연결하는 중…', body: '' };
+      return { ...base, tone: 'quiet', title: 'AI 서비스에 연결하는 중…', body: '' };
     case 'retrying':
       return {
         ...base,
         tone: 'warn',
-        title: '에이전트 서비스 연결이 끊겼습니다',
+        title: 'AI 서비스 연결이 끊겼습니다',
         body: '',
         retryAt: options.nextRetryAt,
         canRetry: true,
         raw: detail,
       };
     case 'stopped':
-      return { ...base, tone: 'quiet', title: '에이전트 서비스 연결을 닫았습니다', body: '' };
+      return { ...base, tone: 'quiet', title: 'AI 서비스 연결을 닫았습니다', body: '' };
     default:
-      return { ...base, tone: 'bad', title: '에이전트 서비스를 쓸 수 없습니다', body: '', canRetry: true };
+      return { ...base, tone: 'bad', title: 'AI 서비스를 쓸 수 없습니다', body: '', canRetry: true };
   }
 }

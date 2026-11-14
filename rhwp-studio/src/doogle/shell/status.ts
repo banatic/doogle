@@ -9,7 +9,7 @@
  *
  * - 단·줄/칸·글자 수는 플러그인 host 의 캐럿 + 읽기 전용 문서 조회로 계산한다. host 가 붙기 전에는 숨긴다.
  * - 변경 건수는 `doogle:pending-count {detail:{count}}`(review/state.ts 가 쏜다).
- * - 에이전트 서비스 연결 상태는 `doogle:hub-state`(index.ts) 또는 `doogle:agent-state` {detail:{state, detail?}}
+ * - AI 서비스 연결 상태는 `doogle:hub-state`(index.ts) 또는 `doogle:agent-state` {detail:{state, detail?}}
  *   (HubClient 상태 그대로) 를 받는다.
  *   아무도 보내지 않으면 데스크탑의 `doogle://hub` 이벤트로 대신 짐작한다.
  * - 하나의 aria-live 영역이 변경 건수·연결 상태·저장 완료를 읽어 준다(사이드바 announce 와 출처를 나눈다).
@@ -60,7 +60,7 @@ export function getAgentState(): { state: AgentConnState | null; detail: string 
   return { state: agentState, detail: agentDetail };
 }
 
-/** 에이전트 서비스 연결 상태를 알린다(window 이벤트 `doogle:agent-state` 와 같다). */
+/** AI 서비스 연결 상태를 알린다(window 이벤트 `doogle:agent-state` 와 같다). */
 export function setAgentState(state: AgentConnState, detail = ''): void {
   if (state === agentState && detail === agentDetail) return;
   agentState = state;
@@ -87,7 +87,7 @@ if (isDesk()) {
   void onHubEvent((event) => {
     if (agentFromClient || !event) return; // 사이드바 쪽 연결 상태가 더 정확하다
     if (event.state === 'ready') setAgentState('connecting');
-    else if (event.state === 'exited') setAgentState('retrying', '에이전트 서비스가 멈춰 다시 시작합니다');
+    else if (event.state === 'exited') setAgentState('retrying', 'AI 서비스가 멈춰 다시 시작합니다');
     else if (event.state === 'failed') setAgentState('failed', event.message);
   }).catch(() => {});
 }
@@ -185,6 +185,8 @@ export class StatusAddons {
     this.save = document.createElement('span');
     this.save.className = 'stb-item dg-sb-save';
     this.save.hidden = true;
+    // 저장 시각은 풍선 도움말에만 있다 — 키보드로도 읽을 수 있게 초점을 받게 한다
+    this.save.tabIndex = 0;
 
     this.chars = document.createElement('span');
     this.chars.className = 'stb-item dg-sb-chars';
@@ -208,7 +210,7 @@ export class StatusAddons {
     });
     agentListeners.add(() => {
       this.renderAgent();
-      if (agentState) announceStatus(`에이전트 서비스 ${agentText(agentState)}`);
+      if (agentState) announceStatus(`AI 서비스 ${agentText(agentState)}`);
     });
     updateListeners.add(() => this.renderUpdate());
     let lastSaved: number | null = null;
@@ -269,12 +271,12 @@ export class StatusAddons {
       dot.setAttribute('aria-hidden', 'true');
       this.agent.append(dot);
     }
-    const parts = ['에이전트 서비스'];
+    const parts = ['AI 서비스'];
     if (s && s !== 'open') parts.push(agentText(s));
     if (n > 0) parts.push(`변경 ${nf.format(n)}건`);
     this.agent.append(parts.join(' · '));
     this.agent.classList.toggle('dg-sb-agent--pending', n > 0);
-    const label = [`에이전트 서비스 ${s ? agentText(s) : ''}`.trim(), n > 0 ? `검토할 변경 ${n}건` : ''].filter(Boolean).join(', ');
+    const label = [`AI 서비스 ${s ? agentText(s) : ''}`.trim(), n > 0 ? `검토할 변경 ${n}건` : ''].filter(Boolean).join(', ');
     this.agent.setAttribute('aria-label', `${label}. 사이드바 열기`);
     this.agent.title = agentDetail ? `${agentDetail}\n누르면 사이드바를 엽니다` : '누르면 사이드바를 엽니다';
   }

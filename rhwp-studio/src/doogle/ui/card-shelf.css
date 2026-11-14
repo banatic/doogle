@@ -143,7 +143,7 @@
   color: var(--dg-x-text);
   text-align: left;
   cursor: inherit;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+  box-shadow: 0 1px 2px var(--dg-ink-12, rgba(15, 23, 42, 0.12));
   transition: transform var(--dg-x-dur) ease, box-shadow var(--dg-x-dur) ease, border-color var(--dg-x-dur) ease;
 }
 
@@ -151,7 +151,7 @@
 .dg-kc-face:focus-visible {
   transform: translateY(-2px);
   border-color: var(--tone);
-  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.12);
+  box-shadow: var(--dg-shadow-pop);
 }
 
 .dg-kc-face:focus-visible {
@@ -360,8 +360,9 @@
 
 /* 머리의 카드 단추 — 서랍이 열려 있으면 눌린 모양 */
 .dg-icon-btn[aria-pressed='true'] {
-  background: var(--dg-x-active);
-  color: var(--dg-x-soft-text) !important;
+  background: var(--dg-on-bg);
+  color: var(--dg-on-text) !important;
+  box-shadow: inset 0 0 0 1px var(--dg-on-border);
 }
 
 /* ─── 카드 칩 (입력 상자 · 보낸 메시지) ─── */
@@ -394,7 +395,7 @@
   color: var(--dg-x-text);
   font-size: 12px;
   line-height: 1;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+  box-shadow: 0 1px 2px var(--dg-ink-12, rgba(15, 23, 42, 0.12));
 }
 
 .dg-card-chip .dg-file-name,
@@ -597,8 +598,8 @@
 }
 
 .dg-ce-kind[aria-pressed='true'] {
-  border-color: var(--dg-x-accent);
-  background: var(--dg-x-active);
+  border-color: var(--dg-on-border);
+  background: var(--dg-on-bg);
 }
 
 .dg-ce-kind[aria-pressed='true'] .dg-ce-kind-title {

@@ -22,7 +22,7 @@ export const DOOGLE_TOGGLE_COMMAND = 'ext:doogle.toggle-panel';
 export const DOOGLE_OPEN_COMMAND = 'ext:doogle.open-native';
 /** 사이드바 열림 상태 기억 ('1' | '0'). 없으면 첫 실행 — 그때만 자동으로 연다 (UI_AUDIT §3.5). */
 const STORE_PANEL = 'doogle.panel';
-/** 에이전트 서비스 연결 상태를 셸(상태 표시줄 등)에 알리는 window 이벤트 */
+/** AI 서비스 연결 상태를 셸(상태 표시줄 등)에 알리는 window 이벤트 */
 export const HUB_STATE_EVENT = 'doogle:hub-state';
 
 /**
@@ -145,7 +145,7 @@ export async function initDoogle(host: PluginHost): Promise<PluginSurface> {
 
   host.ui.registerSidePanel({
     id: DOOGLE_PANEL_ID,
-    title: '두글 에이전트',
+    title: 'AI 도우미',
     defaultWidth: 420,
     mount: (container) => sidebar.mount(container),
     unmount: () => sidebar.dispose(),
@@ -156,7 +156,7 @@ export async function initDoogle(host: PluginHost): Promise<PluginSurface> {
   });
   host.automation.registerCommand({
     id: DOOGLE_TOGGLE_COMMAND,
-    label: '두글 에이전트',
+    label: 'AI 도우미',
     execute: () => { host.ui.toggleSidePanel(DOOGLE_PANEL_ID); },
   });
   host.automation.addMenuItem({ menuId: 'tool', commandId: DOOGLE_TOGGLE_COMMAND, position: 'top' });

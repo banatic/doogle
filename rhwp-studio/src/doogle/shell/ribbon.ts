@@ -23,6 +23,9 @@ import { commandShortcut, context, hasCommand, isEnabled, openCommandPalette, ru
 import { menuTitle, upstreamMenuEntries } from './upstream-menu';
 import { MEMO_STATE_EVENT, MEMO_TOGGLE_COMMAND, memoBalloonsOn } from '../ui/memo-state.ts';
 
+/** 켜고 끄는 서식 단추가 들어가는 slot 이름 */
+const TOGGLE_SLOT = /^(bold|italic|underline|strike|align-|bullet|numbering)/;
+
 export interface RibbonOptions {
   onFileTab: (tabButton: HTMLElement) => void;
   isAgentOpen: () => boolean;
@@ -144,8 +147,6 @@ export class Ribbon {
     const file = document.createElement('button');
     file.type = 'button';
     file.className = 'dg-tab dg-tab--file';
-    file.setAttribute('role', 'tab');
-    file.setAttribute('aria-selected', 'false');
     file.setAttribute('aria-haspopup', 'dialog');
     file.setAttribute('aria-keyshortcuts', 'Alt+V');
     file.id = 'dg-tab-file';
@@ -414,7 +415,7 @@ export class Ribbon {
   }
 
   private onTabKey(e: KeyboardEvent): void {
-    const tabs = Array.from(this.tablist.querySelectorAll<HTMLButtonElement>('[role="tab"]')).filter((t) => !t.hidden);
+    const tabs = Array.from(this.tablist.querySelectorAll<HTMLButtonElement>('.dg-tab--file, [role="tab"]')).filter((t) => !t.hidden);
     const i = tabs.indexOf(document.activeElement as HTMLButtonElement);
     if (i < 0) return;
     let next = -1;
@@ -661,15 +662,20 @@ export class Ribbon {
     for (const { def, el } of groups) {
       if (!el.hidden) continue;
       out.push({ label: def.caption, heading: true });
+      const ctx = context();
       for (const item of def.items ?? def.rows?.flat() ?? []) {
         if (item.kind === 'cmd' && hasCommand(item.id)) {
           out.push({ label: item.label, shortcut: commandShortcut(item.id), disabled: !isEnabled(item.id),
+            checked: item.pressed && ctx ? item.pressed(ctx) : undefined,
             onPick: (a) => { this.afterActivate(); run(item.id, { ...(item.params ?? {}), anchorEl: a }); } });
         } else if (item.kind === 'action') {
-          out.push({ label: item.label, disabled: this.actionDisabled(item.action), onPick: () => this.runAction(item.action) });
+          out.push({ label: item.label, disabled: this.actionDisabled(item.action), checked: this.actionChecked(item.action),
+            onPick: () => this.runAction(item.action) });
         } else if (item.kind === 'menu') {
           for (const e of item.entries) {
-            if (hasCommand(e.id)) out.push({ label: e.label, disabled: !isEnabled(e.id), onPick: (a) => run(e.id, { anchorEl: a }) });
+            if (!hasCommand(e.id)) continue;
+            out.push({ label: e.label, shortcut: commandShortcut(e.id), disabled: !isEnabled(e.id),
+              onPick: (a) => { this.afterActivate(); run(e.id, { ...(e.params ?? {}), anchorEl: a }); } });
           }
         }
       }
@@ -688,6 +694,14 @@ export class Ribbon {
 
   private actionDisabled(action: ShellAction): boolean {
     return action.startsWith('review-') && getPendingCount() <= 0;
+  }
+
+  /** 켜고 끄는 셸 동작의 지금 상태. 토글이 아니면 undefined. */
+  private actionChecked(action: ShellAction): boolean | undefined {
+    if (action === 'memo-toggle') return memoBalloonsOn();
+    if (action === 'ribbon-collapse') return this.mode === 'collapsed';
+    if (action === 'ribbon-simple') return this.mode === 'simple';
+    return undefined;
   }
 
   // ── upstream 서식 요소 옮겨 오기 ───────────────────────
@@ -733,6 +747,12 @@ export class Ribbon {
       }
       if (node instanceof HTMLButtonElement && !node.hasAttribute('aria-label') && node.title) {
         node.setAttribute('aria-label', node.title);
+      }
+      // upstream 은 켜짐을 .active 클래스로만 바꾼다 — 낭독기·고대비가 읽는 aria-pressed 로 비춘다
+      if (TOGGLE_SLOT.test(name) && node instanceof HTMLButtonElement) {
+        const sync = () => node.setAttribute('aria-pressed', String(node.classList.contains('active')));
+        sync();
+        new MutationObserver(sync).observe(node, { attributes: true, attributeFilter: ['class'] });
       }
     }
     this.slotsFilled = true;
@@ -791,17 +811,23 @@ export class Ribbon {
     if (!r) return;
     const panel = r.panel;
     if (panel.clientWidth === 0) return; // 접혀 있어 잴 수 없다 — 펼칠 때 다시 잰다
-    panel.classList.remove('dg-rpanel--compact');
+    panel.classList.remove('dg-rpanel--compact', 'dg-rpanel--tight');
     for (const g of r.groups) g.el.hidden = false;
+    r.more.hidden = false;
     const avail = () => panel.clientWidth - r.more.offsetWidth - 8;
     // 묶음 폭의 합으로 잰다 — 패널을 overflow:hidden 으로 두면 글자 효과·형광펜 드롭다운이 잘린다.
     const over = () => r.groups.reduce((sum, g) => sum + (g.el.hidden ? 0 : g.el.offsetWidth), 0) > avail();
-    if (!over()) return;
-    panel.classList.add('dg-rpanel--compact');
-    const order = r.groups.filter((g) => Number.isFinite(g.def.priority)).sort((a, b) => a.def.priority - b.def.priority);
-    for (const g of order) {
-      if (!over()) break;
-      g.el.hidden = true;
+    if (over()) {
+      panel.classList.add('dg-rpanel--compact');
+      const order = r.groups.filter((g) => Number.isFinite(g.def.priority)).sort((a, b) => a.def.priority - b.def.priority);
+      for (const g of order) {
+        if (!over()) break;
+        g.el.hidden = true;
+      }
+      // 접을 수 없는 묶음(글자·문단 모양)만 남아도 넘치면 선택 상자를 줄인다
+      if (over()) panel.classList.add('dg-rpanel--tight');
     }
+    // 접힌 묶음도 펼칠 upstream 메뉴도 없으면 '더보기' 는 빈 메뉴만 연다
+    r.more.hidden = !r.tab.menuId && !r.groups.some((g) => g.el.hidden);
   }
 }

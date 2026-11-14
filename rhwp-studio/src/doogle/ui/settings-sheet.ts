@@ -1,7 +1,7 @@
 /**
  * 사이드바 설정 시트 (UI_AUDIT §3.4) — 톱니로 열고, 패널 안에서 옆으로 밀려 들어온다(모달 아님).
  *
- * 구성: AI 계정 카드(Claude Code · Codex · ChatGPT · API 키) · 기본 적용 방식 · 에이전트 서비스 상태 ·
+ * 구성: AI 계정 카드(Claude Code · Codex · ChatGPT · API 키) · 기본 적용 방식 · AI 서비스 상태 ·
  * 데이터 안내. 모델 메뉴는 이제 모델 고르기만 하고, 계정 연결·키·로그아웃은 모두 여기서 한다.
  *
  * 정책: Claude 로그인 UI 를 만들지 않는다(CONTRACT §0). Claude Code 는 상태만 보여 주고,
@@ -23,7 +23,7 @@ export interface SettingsHost {
   refreshProviders(): Promise<void>;
   /** 사이드바 aria-live 로 읽어 준다 */
   announce(text: string): void;
-  /** 에이전트 서비스 한 줄 상태 */
+  /** AI 서비스 한 줄 상태 */
   connection(): { ok: boolean; text: string };
   retryConnection(): void;
   /** 시트가 닫혔다 (포커스 복귀는 사이드바가) */
@@ -140,14 +140,14 @@ export class SettingsSheet {
     const providers = [...this.host.providers()].sort((a, b) => rank(a.id) - rank(b.id));
     if (providers.length === 0) {
       const conn = this.host.connection();
-      parts.push(el('p', 'dg-sheet-note', conn.ok ? 'AI 계정 목록을 받는 중…' : '에이전트 서비스에 연결되면 AI 계정을 연결할 수 있습니다.'));
+      parts.push(el('p', 'dg-sheet-note', conn.ok ? 'AI 계정 목록을 받는 중…' : 'AI 서비스에 연결되면 AI 계정을 연결할 수 있습니다.'));
     }
     for (const provider of providers) parts.push(this.providerCard(provider));
 
     parts.push(el('h3', 'dg-sheet-heading', '기본 적용 방식'));
     parts.push(this.modeGroup());
 
-    parts.push(el('h3', 'dg-sheet-heading', '에이전트 서비스'));
+    parts.push(el('h3', 'dg-sheet-heading', 'AI 서비스'));
     parts.push(this.serviceCard());
 
     const data = el('p', 'dg-sheet-note dg-sheet-data');
@@ -202,7 +202,7 @@ export class SettingsSheet {
       if (provider.available) {
         card.append(el('p', 'dg-card-sub', 'ChatGPT Plus/Pro 구독으로 사용합니다.'));
         const logout = btn('dg-btn dg-btn-quiet', '로그아웃', () => {
-          if (!this.host.hub.logout(provider.id)) this.host.announce('에이전트 서비스에 연결되어 있지 않습니다');
+          if (!this.host.hub.logout(provider.id)) this.host.announce('AI 서비스에 연결되어 있지 않습니다');
         });
         logout.dataset.key = `${provider.id}:logout`;
         acts.append(logout);
@@ -232,10 +232,10 @@ export class SettingsSheet {
         add.dataset.key = `${provider.id}:add`;
         acts.append(add);
         if (provider.available) {
-          const remove = btn('dg-btn dg-btn-quiet', '키 삭제', () => {
+          const remove = btn('dg-btn dg-btn-quiet', '키 지우기', () => {
             this.host.hub.setSecret(secret.key, null).then(
-              () => { this.host.announce('API 키를 삭제했습니다'); void this.host.refreshProviders(); },
-              (error: unknown) => this.setKeyNote(provider.id, `삭제하지 못했습니다: ${messageOf(error)}`),
+              () => { this.host.announce('API 키를 지웠습니다'); void this.host.refreshProviders(); },
+              (error: unknown) => this.setKeyNote(provider.id, `지우지 못했습니다: ${messageOf(error)}`),
             );
           });
           remove.dataset.key = `${provider.id}:remove`;

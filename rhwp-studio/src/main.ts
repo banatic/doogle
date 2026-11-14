@@ -2095,6 +2095,9 @@ async function createNewDocument(): Promise<void> {
  */
 async function openBlankDocumentIfIdle(): Promise<void> {
   if (chromeMode === 'embed') return;
+  // [doogle] 두글은 문서가 없을 때 시작 화면(새 문서 · 열기 · 최근 문서, doogle/ui/empty-canvas.ts)을
+  // 보인다. 빈 문서를 먼저 열면 그 화면이 한 번도 뜨지 않는다.
+  if (isDoogleMode()) return;
   if (wasm.pageCount > 0 || documentState.isDirty()) return;
   await createNewDocument();
 }

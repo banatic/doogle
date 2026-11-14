@@ -133,8 +133,13 @@
 :root[data-doogle] .context-menu .md-item:hover,
 :root[data-doogle] .tb-split-item:hover,
 :root[data-doogle] .sb-dropdown-item:hover {
-  background: var(--dg-soft);
-  color: var(--dg-soft-text);
+  background: var(--dg-hover);
+}
+/* 목록에서 지금 고른 항목 — 리본의 켜짐과 같은 한 벌 */
+:root[data-doogle] .sb-dropdown-item.active {
+  background: var(--dg-on-bg);
+  color: var(--dg-on-text);
+  font-weight: 600;
 }
 :root[data-doogle] .context-menu .md-item.disabled:hover { background: transparent; color: inherit; }
 :root[data-doogle] .context-menu .md-sep { border-color: var(--dg-divider); margin: 4px 6px; }

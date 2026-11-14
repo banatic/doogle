@@ -140,7 +140,7 @@ export class CardShelf {
     } catch (error) {
       this.note.textContent = this.host.hub.state === 'open'
         ? `카드를 불러오지 못했습니다: ${error instanceof Error ? error.message : String(error)}`
-        : '에이전트 서비스에 연결되면 카드를 볼 수 있습니다.';
+        : 'AI 서비스에 연결되면 카드를 볼 수 있습니다.';
     } finally {
       this.loading = false;
     }
@@ -200,7 +200,7 @@ export class CardShelf {
     top.append(el('span', 'dg-kc-type', card.kind === 'table' ? `명단 · ${rows}줄` : `${TONE_LABEL[card.icon] ?? '카드'} · 항목 ${card.fields.length}`));
     if (card.fields.some((f) => f.sensitive)) {
       const lock = el('span', 'dg-kc-lock', '민감');
-      lock.title = '민감 항목이 있습니다 — 에이전트에게는 가려서 보냅니다';
+      lock.title = '민감 항목이 있습니다 — AI 도우미에게는 가려서 보냅니다';
       top.append(lock);
     }
 

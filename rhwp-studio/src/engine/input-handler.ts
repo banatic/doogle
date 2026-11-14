@@ -2109,7 +2109,7 @@ export class InputHandler {
       { type: 'command', commandId: 'format:char-shape', label: '글자 모양' },
       { type: 'command', commandId: 'format:para-shape', label: '문단 모양' },
       { type: 'separator' },
-      { type: 'command', commandId: 'format:para-num-shape', label: '문단 번호 모양(N)...' },
+      { type: 'command', commandId: 'format:para-num-shape', label: '문단 번호 모양' },
     ];
   }
 

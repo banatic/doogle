@@ -7,6 +7,8 @@ export interface PopupEntry {
   label: string;
   shortcut?: string;
   disabled?: boolean;
+  /** 켜고 끄는 항목의 지금 상태. 주면 체크 칸을 그리고 `menuitemcheckbox` 로 알린다. */
+  checked?: boolean;
   /** 하위 제목(구분용, 선택 불가) */
   heading?: boolean;
   separator?: boolean;
@@ -28,6 +30,8 @@ export function openPopupMenu(anchor: HTMLElement, entries: PopupEntry[], label:
   menu.setAttribute('aria-label', label);
 
   const items: HTMLButtonElement[] = [];
+  // 체크 항목이 하나라도 있으면 모든 항목에 체크 칸을 두어 글자 시작을 맞춘다
+  const hasChecks = entries.some((entry) => entry.checked !== undefined);
   for (const entry of entries) {
     if (entry.separator) {
       const sep = document.createElement('div');
@@ -46,8 +50,19 @@ export function openPopupMenu(anchor: HTMLElement, entries: PopupEntry[], label:
     const item = document.createElement('button');
     item.type = 'button';
     item.className = 'dg-popup-item';
-    item.setAttribute('role', 'menuitem');
+    item.setAttribute('role', entry.checked === undefined ? 'menuitem' : 'menuitemcheckbox');
+    if (entry.checked !== undefined) item.setAttribute('aria-checked', String(entry.checked));
     item.tabIndex = -1;
+    if (hasChecks) {
+      const check = document.createElement('span');
+      check.className = 'dg-popup-check';
+      check.setAttribute('aria-hidden', 'true');
+      if (entry.checked) {
+        check.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+          + 'stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
+      }
+      item.appendChild(check);
+    }
     const text = document.createElement('span');
     text.className = 'dg-popup-label';
     text.textContent = entry.label;
@@ -102,12 +117,14 @@ export function openPopupMenu(anchor: HTMLElement, entries: PopupEntry[], label:
   };
   menu.addEventListener('keydown', onKey);
   document.addEventListener('pointerdown', onDown, true);
-  window.addEventListener('resize', () => close(false), { once: true });
+  const onResize = () => close(false);
+  window.addEventListener('resize', onResize);
 
   function close(returnFocus = false) {
     if (current?.close !== close) return;
     current = null;
     document.removeEventListener('pointerdown', onDown, true);
+    window.removeEventListener('resize', onResize);
     menu.remove();
     anchor.setAttribute('aria-expanded', 'false');
     if (returnFocus) anchor.focus();

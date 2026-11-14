@@ -62,6 +62,8 @@ export function upstreamMenuEntries(menuId: string): PopupEntry[] {
         label: labelOf(h),
         shortcut: cmd ? commandShortcut(cmd) : undefined,
         disabled: cmd ? !isEnabled(cmd) : h.classList.contains('disabled'),
+        // upstream 은 켜진 토글 메뉴 항목에 .active 를 붙인다(view.ts 의 격자 보기 등)
+        checked: h.classList.contains('active') ? true : undefined,
         onPick: (anchor) => activateUpstreamItem(h, anchor),
       });
     }
