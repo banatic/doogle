@@ -9583,13 +9583,15 @@ impl LayoutEngine {
 
                 // 형광펜 배경 사각형 (RangeTag type=2)
                 if let Some(p) = para {
-                    if !p.range_tags.is_empty() {
+                    // [두글] HWPX 는 형광펜을 `markpen_marks` 에만 싣는다 — 그 표지로 범위를 만든다.
+                    let markpen_ranges = super::doogle_markpen::markpen_char_ranges(p);
+                    if !markpen_ranges.is_empty() {
                         let char_w = if run_char_count > 0 {
                             run_w / run_char_count as f64
                         } else {
                             0.0
                         };
-                        for rt in &p.range_tags {
+                        for rt in &markpen_ranges {
                             let rt_type = (rt.tag >> 24) & 0xFF;
                             if rt_type != 2 {
                                 continue;

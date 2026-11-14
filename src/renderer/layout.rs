@@ -5,6 +5,8 @@
 
 mod auto_number_positions;
 mod decorated_tac_frame;
+mod doogle_ladder_float;
+mod doogle_markpen;
 mod table_paint_order;
 mod textless_shape_host;
 use decorated_tac_frame::tac_has_only_in_front_decoration_shapes_before;
@@ -14025,6 +14027,24 @@ impl LayoutEngine {
                         table_y_start
                     }
                 };
+                // [두글] 조판이 확정한 표 위끝이 저장 글줄 좌표와 어긋나면 저장 사다리로 바로잡는다.
+                let doogle_ladder_top = (is_current_visible_para_float
+                    && self.table_push_floor.get().is_none()
+                    && !has_preceding_coanchored_float
+                    && ctx
+                        .paragraph_float_placements
+                        .contains_key(&(para_index, control_index)))
+                .then(|| {
+                    doogle_ladder_float::proven_host_float_border_top_hu(
+                        para,
+                        control_index,
+                        t,
+                        paragraphs.get(para_index + 1),
+                    )
+                })
+                .flatten()
+                .map(|hu| table_y_before + hwpunit_to_px(hu, self.dpi));
+                let table_y_start = doogle_ladder_top.unwrap_or(table_y_start);
                 let allow_para_top_bleed =
                     is_current_visible_para_float && signed_hwpunit(t.common.vertical_offset) < 0;
                 // 이월된 빈 RowBreak 그림 표의 stale negative picture offset은 native
@@ -14114,7 +14134,7 @@ impl LayoutEngine {
                             .map(|p| {
                                 (
                                     p.table_left.map(|left| col_area.x + left),
-                                    col_area.y + p.table_top,
+                                    doogle_ladder_top.unwrap_or(col_area.y + p.table_top),
                                 )
                             }),
                         Self::standalone_table_char_border_fill(Some(para), t, styles),
