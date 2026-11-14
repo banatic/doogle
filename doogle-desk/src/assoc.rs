@@ -83,6 +83,11 @@ mod win {
         format!("Doogle{ext}") // Doogle.hwp, Doogle.hwpx
     }
 
+    /// 파일 형식 아이콘 — 실행 파일에 넣은 아이콘 리소스 번호(build.rs)
+    fn icon_resource(ext: &str) -> u32 {
+        if ext == ".hwpx" { 32514 } else { 32513 }
+    }
+
     fn type_name(ext: &str) -> &'static str {
         if ext == ".hwpx" { "한글 문서 (HWPX)" } else { "한글 문서" }
     }
@@ -176,7 +181,7 @@ mod win {
             let base = format!(r"Software\Classes\{pid}");
             set_str(&base, None, type_name(ext))?;
             set_str(&base, Some("FriendlyTypeName"), type_name(ext))?;
-            set_str(&format!(r"{base}\DefaultIcon"), None, &icon)?;
+            set_str(&format!(r"{base}\DefaultIcon"), None, &format!("\"{exe}\",-{}", icon_resource(ext)))?;
             set_str(&format!(r"{base}\shell\open"), Some("FriendlyAppName"), APP_NAME)?;
             set_str(&format!(r"{base}\shell\open\command"), None, &open_cmd)?;
             // "연결 프로그램" 목록에 두글이 오르게
