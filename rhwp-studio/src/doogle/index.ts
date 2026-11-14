@@ -188,6 +188,17 @@ export async function initDoogle(host: PluginHost): Promise<PluginSurface> {
   const { mountEditSwarm } = await import('./ui/edit-swarm.ts');
   const swarm = mountEditSwarm();
   offs.push(() => swarm.dispose(), host.onDocumentSwap(() => swarm.clear()));
+  // 메모 말풍선: 쪽 오른쪽에 메모를 띄운다 (보기 탭 「메모」로 켜고 끈다)
+  const { mountMemoBalloons } = await import('./ui/memo-balloons.ts');
+  const { MEMO_TOGGLE_COMMAND } = await import('./ui/memo-state.ts');
+  const memos = mountMemoBalloons(host);
+  host.automation.registerCommand({
+    id: MEMO_TOGGLE_COMMAND,
+    label: '메모 보기',
+    execute: () => { memos.toggle(); },
+  });
+  host.automation.addMenuItem({ menuId: 'view', commandId: MEMO_TOGGLE_COMMAND });
+  offs.push(() => memos.dispose());
 
   if (desk.isDesk()) {
     // 데스크탑 앱은 서비스 워커를 쓰지 않는다. 예전 빌드가 남긴 sw·캐시가 있으면 지운다

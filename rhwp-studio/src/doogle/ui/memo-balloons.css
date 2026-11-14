@@ -1,0 +1,78 @@
+/* 메모 말풍선 — 쪽 오른쪽에 뜨는 화면 전용 장식 (memo-balloons.ts) */
+
+.dg-memo-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  pointer-events: none;
+  --dg-memo-line: color-mix(in srgb, var(--dg-ok, #15803D) 55%, transparent);
+}
+
+.dg-memo-lines {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  overflow: visible;
+}
+
+.dg-memo-lines path {
+  fill: none;
+  stroke: var(--dg-memo-line);
+  stroke-width: 1;
+}
+
+/* 메모가 걸린 글 */
+.dg-memo-mark {
+  position: absolute;
+  background: color-mix(in srgb, var(--dg-ok, #15803D) 22%, transparent);
+  border-bottom: 1px solid var(--dg-memo-line);
+  box-sizing: border-box;
+}
+
+.dg-memo {
+  position: absolute;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 6px 9px 8px;
+  border: 1px solid var(--dg-memo-line);
+  border-radius: 6px;
+  background: var(--dg-ok-soft, #F0FDF4);
+  color: var(--dg-text, #1F2937);
+  font: 12px/1.5 var(--dg-font-ui, 'Malgun Gothic', sans-serif);
+  pointer-events: auto;
+  user-select: text;
+}
+
+.dg-memo-jump { cursor: pointer; }
+.dg-memo-jump:hover { border-color: var(--dg-ok, #15803D); }
+
+.dg-memo-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 2px;
+  font-size: 11px;
+  color: var(--dg-muted, #4B5563);
+}
+
+.dg-memo-author {
+  font-weight: 600;
+  color: var(--dg-ok, #15803D);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dg-memo-date {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.dg-memo-text {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

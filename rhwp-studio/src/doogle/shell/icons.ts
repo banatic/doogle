@@ -40,6 +40,7 @@ const P: Record<string, string> = {
   clip: '<path d="M6 3v13a2 2 0 002 2h13M3 6h13a2 2 0 012 2v13"/>',
   textbox: '<rect x="3" y="5" width="18" height="14" rx="1"/><path d="M8 9h8M12 9v7"/>',
   equation: '<path d="M4 6h7l-4 6 4 6H4M14 9l6 6M20 9l-6 6"/>',
+  memo: '<path d="M5 4h14a1 1 0 011 1v10a1 1 0 01-1 1h-7l-4 4v-4H5a1 1 0 01-1-1V5a1 1 0 011-1z"/><path d="M8 8h8M8 12h5"/>',
   footnote: '<path d="M4 6h12M4 10h12M4 14h7"/><path d="M17 15v5M15 17h4" /><path d="M4 20h7"/>',
   endnote: '<rect x="4" y="3" width="16" height="18" rx="1"/><path d="M8 7h8M8 11h8M8 17h4"/>',
   link: '<path d="M10 14a4 4 0 005.7 0l3-3a4 4 0 00-5.7-5.7l-1 1"/><path d="M14 10a4 4 0 00-5.7 0l-3 3a4 4 0 005.7 5.7l1-1"/>',

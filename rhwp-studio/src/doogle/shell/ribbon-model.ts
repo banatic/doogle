@@ -41,11 +41,13 @@ export interface SlotItem {
  *  - palette: 명령 입력 열기
  *  - review-*: 검토 대기 중인 에이전트 변경 탐색·결정(review/state.ts 의 reviewStore)
  *  - ribbon-collapse / ribbon-simple: 리본 표시 방식
+ *  - memo-toggle: 쪽 옆 메모 말풍선 보이기/숨기기(ui/memo-balloons.ts)
  */
 export type ShellAction =
   | 'palette'
   | 'review-prev' | 'review-next' | 'review-accept-all' | 'review-reject-all'
-  | 'ribbon-collapse' | 'ribbon-simple';
+  | 'ribbon-collapse' | 'ribbon-simple'
+  | 'memo-toggle';
 
 export interface ActionItem {
   kind: 'action';
@@ -216,6 +218,7 @@ export const RIBBON_TABS: RibbonTab[] = [
         items: [
           cmd('view:ctrl-mark', '조판 부호', 'ctrlMark', 'lg', { pressed: (c) => c.showControlCodes }),
           cmd('view:para-mark', '문단 부호', 'pilcrow', 'lg', { pressed: (c) => c.showParagraphMarks }),
+          action('memo-toggle', '메모', 'memo', 'lg'),
           cmd('view:border-transparent', '투명 선', 'borderDash', 'sm'),
           cmd('view:toggle-clip', '잘림 보기', 'clip', 'sm'),
           cmd('view:toggle-grid', '격자 보기', 'grid', 'sm'),

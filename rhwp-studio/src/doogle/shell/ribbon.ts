@@ -21,6 +21,7 @@ import {
 import { getPendingCount, onPendingCount } from './status';
 import { commandShortcut, context, hasCommand, isEnabled, openCommandPalette, run, toggleAgentPanel } from './studio';
 import { menuTitle, upstreamMenuEntries } from './upstream-menu';
+import { MEMO_STATE_EVENT, MEMO_TOGGLE_COMMAND, memoBalloonsOn } from '../ui/memo-state.ts';
 
 export interface RibbonOptions {
   onFileTab: (tabButton: HTMLElement) => void;
@@ -209,6 +210,7 @@ export class Ribbon {
     this.watchStyleBar();
     this.installKeys();
     onPendingCount(() => this.queueRefresh());
+    window.addEventListener(MEMO_STATE_EVENT, () => this.queueRefresh());
 
     // 접힌 리본의 플라이아웃은 바깥을 누르면 닫는다(리본·탭 줄·리본이 띄운 메뉴 제외).
     document.addEventListener('pointerdown', (e) => {
@@ -616,6 +618,7 @@ export class Ribbon {
       case 'palette': this.afterActivate(); openCommandPalette(); break;
       case 'ribbon-collapse': this.toggleCollapsed(); break;
       case 'ribbon-simple': this.setMode(this.mode === 'simple' ? 'expanded' : 'simple'); break;
+      case 'memo-toggle': this.afterActivate(); run(MEMO_TOGGLE_COMMAND); this.queueRefresh(); break;
       default: this.afterActivate(); void reviewAction(action).then(() => this.queueRefresh());
     }
   }
@@ -625,7 +628,9 @@ export class Ribbon {
     b.title = item.action === 'ribbon-collapse' ? `${item.label} (Ctrl+F1)` : item.label;
     b.dataset.action = item.action;
     if (item.tone === 'ai') b.classList.add('dg-btn--ai');
-    if (item.action === 'ribbon-collapse' || item.action === 'ribbon-simple') b.setAttribute('aria-pressed', 'false');
+    if (item.action === 'ribbon-collapse' || item.action === 'ribbon-simple' || item.action === 'memo-toggle') {
+      b.setAttribute('aria-pressed', 'false');
+    }
     bindActivate(b, () => this.runAction(item.action));
     return b;
   }
@@ -766,6 +771,8 @@ export class Ribbon {
         b.setAttribute('aria-pressed', String(this.mode === 'collapsed'));
       } else if (action === 'ribbon-simple') {
         b.setAttribute('aria-pressed', String(this.mode === 'simple'));
+      } else if (action === 'memo-toggle') {
+        b.setAttribute('aria-pressed', String(memoBalloonsOn()));
       } else if (action) {
         b.setAttribute('aria-disabled', String(this.actionDisabled(action)));
       }
