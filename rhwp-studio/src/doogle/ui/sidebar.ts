@@ -87,6 +87,21 @@ export interface DocContext {
   inTable: boolean;
   /** 누름틀(양식 칸)이 있다 */
   hasFields: boolean;
+  /** 문서 이름 (빈 대화의 문서 칩) */
+  name?: string;
+  /** 쪽 수 (모르면 0) */
+  pageCount?: number;
+}
+
+/** 최근 대화 줄의 때 — 오늘이면 시각, 어제면 "어제", 그 밖은 "11. 12." */
+export function threadWhen(at: number, now = Date.now()): string {
+  if (!(at > 0)) return '';
+  const day = (t: number) => { const d = new Date(t); return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(); };
+  const diff = Math.round((day(now) - day(at)) / 86_400_000);
+  const d = new Date(at);
+  if (diff <= 0) return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  if (diff === 1) return '어제';
+  return `${d.getMonth() + 1}. ${d.getDate()}.`;
 }
 
 const GENERIC_SUGGESTIONS = ['이 문서를 세 줄로 요약해 줘', '맞춤법과 띄어쓰기를 고쳐 줘'];
@@ -807,15 +822,9 @@ export class DoogleSidebar {
     }
   }
 
-  private renderThreadMenu(): void {
-    const items: HTMLElement[] = [];
-    const fresh = button('dg-menu-item', '', () => { this.closeMenu(true); this.newThread(); });
-    fresh.setAttribute('role', 'menuitem');
-    fresh.append(icon('compose', 14), el('span', '', '새 대화'));
-    items.push(fresh);
-    // 이 문서의 대화만 — 화면에 있는 것 + hub 에 저장된 것(새로고침 전). 최근에 쓴 것부터
-    type Row = { id: string; title: string; at: number };
-    const rows = new Map<string, Row>();
+  /** 이 문서의 대화 — 화면에 있는 것 + hub 에 저장된 것(새로고침 전). 최근에 쓴 것부터 */
+  private docThreadRows(): Array<{ id: string; title: string; at: number }> {
+    const rows = new Map<string, { id: string; title: string; at: number }>();
     for (const t of this.savedThreads) rows.set(t.id, { id: t.id, title: t.title, at: Date.parse(t.updatedAt) || 0 });
     for (const t of this.threads.values()) {
       if (t !== this.thread && (t.turns.length === 0 || !this.doc || !sameDoc(t.doc, this.doc))) continue;
@@ -823,7 +832,16 @@ export class DoogleSidebar {
       const at = Math.max(rows.get(t.id)?.at ?? 0, lastTurn?.endedAt ?? lastTurn?.startedAt ?? t.createdAt);
       rows.set(t.id, { id: t.id, title: t.title, at });
     }
-    const list = [...rows.values()].sort((a, b) => b.at - a.at).slice(0, 20);
+    return [...rows.values()].sort((a, b) => b.at - a.at);
+  }
+
+  private renderThreadMenu(): void {
+    const items: HTMLElement[] = [];
+    const fresh = button('dg-menu-item', '', () => { this.closeMenu(true); this.newThread(); });
+    fresh.setAttribute('role', 'menuitem');
+    fresh.append(icon('compose', 14), el('span', '', '새 대화'));
+    items.push(fresh);
+    const list = this.docThreadRows().slice(0, 20);
     if (!this.doc) {
       // 대화는 문서에 딸린다 — 문서를 열어야 그 문서의 지난 대화가 보인다
       items.push(el('div', 'dg-menu-note', '문서를 열면 그 문서의 지난 대화를 고를 수 있습니다.'));
@@ -888,6 +906,7 @@ export class DoogleSidebar {
       return;
     }
     this.savedThreads = this.savedThreads.filter((t) => t.id !== id);
+    this.renderEmpty();
     const view = this.threads.get(id);
     if (view) {
       this.threads.delete(id);
@@ -1005,7 +1024,7 @@ export class DoogleSidebar {
       frame = requestAnimationFrame(() => {
         frame = 0;
         if (this.stick) {
-          scroller.scrollTop = scroller.scrollHeight;
+          this.scrollToBottom(); // 빈 대화의 시작 화면이면 맨 위에 둔다
           lastTop = scroller.scrollTop;
         }
       });
@@ -1047,40 +1066,66 @@ export class DoogleSidebar {
     }
   }
 
+  /**
+   * 빈 대화의 시작 화면 — 가운데에 물음과 문서 칩, 그 아래 이 문서의 최근 대화 세 개.
+   * 지난 대화가 없으면 그 자리에 예시 요청 칩을 둔다. 첫 요청 전에는 시작하기 체크리스트도 보인다.
+   */
   private fillEmpty(box: HTMLElement): void {
     const ctx = this.docContext();
     const onboarded = storeGet(STORE_ONBOARDED) === '1';
     const account = this.providers.find((p) => p.available)?.id ?? '';
+    const recents = ctx.hasDocument ? this.docThreadRows().filter((t) => t.id !== this.thread?.id).slice(0, 3) : [];
+    const name = ctx.hasDocument ? (ctx.name ?? this.doc?.name ?? '') : '';
     // 바뀐 것이 없으면 다시 그리지 않는다 — 칩에 있던 키보드 포커스를 잃지 않게
-    const sig = [ctx.hasDocument, ctx.hasSelection, ctx.inTable, ctx.hasFields, onboarded, account, this.providerId, this.deps.hub.state].join('|');
+    const sig = [
+      ctx.hasDocument, ctx.hasSelection, ctx.inTable, ctx.hasFields, onboarded, account, this.providerId, this.deps.hub.state,
+      name, ctx.pageCount ?? 0, ...recents.map((t) => `${t.id}:${t.title}:${t.at}`),
+    ].join('|');
     if (box.dataset.sig === sig) return;
     box.dataset.sig = sig;
-    const parts: HTMLElement[] = [
-      el('p', 'dg-empty-title', '무엇을 도와드릴까요?'),
-      el('p', 'dg-empty-sub', '열린 문서를 읽고, 고칠 곳은 검토할 수 있게 제안해요.'),
-    ];
-    if (!onboarded) parts.push(this.buildChecklist(ctx));
 
-    const chips = el('div', 'dg-suggest');
-    const list = suggestionsFor(ctx);
-    if (list.length === 0) {
-      const none = el('p', 'dg-suggest-none', '문서를 열면 시작할 수 있어요.');
-      chips.append(none);
-      if (this.deps.openDocument) {
-        const open = button('dg-btn', '', () => this.deps.openDocument?.());
-        open.append(icon('folder', 13), el('span', '', '문서 열기…'));
-        chips.append(open);
+    const head = el('div', 'dg-empty-head');
+    head.append(el('p', 'dg-empty-title', ctx.hasDocument ? '이 문서에서 무엇을 고칠까요?' : '문서를 열면 시작할 수 있어요'));
+    if (name) {
+      const chip = el('div', 'dg-doc-chip');
+      chip.title = name;
+      chip.append(icon('file', 14), el('span', 'dg-doc-chip-name', name));
+      if ((ctx.pageCount ?? 0) > 0) chip.append(el('span', 'dg-doc-chip-pages', `· ${ctx.pageCount}쪽`));
+      head.append(chip);
+    }
+    if (!ctx.hasDocument && this.deps.openDocument) {
+      const open = button('dg-btn', '', () => this.deps.openDocument?.());
+      open.append(icon('folder', 13), el('span', '', '문서 열기…'));
+      head.append(open);
+    }
+    const parts: HTMLElement[] = [head];
+    // 지난 대화가 있으면 이미 써 본 사람이다 — 시작하기 체크리스트는 띄우지 않는다
+    if (!onboarded && recents.length === 0) parts.push(this.buildChecklist(ctx));
+
+    if (recents.length > 0) {
+      const section = el('div', 'dg-recents');
+      const title = el('div', 'dg-recent-head');
+      const all = button('dg-recent-all', '모두 보기', () => this.toggleMenu('threads', this.historyBtn));
+      title.append(el('span', 'dg-recent-heading', '이 문서의 최근 대화'), all);
+      section.append(title);
+      for (const t of recents) {
+        const row = button('dg-recent', '', () => { void this.openSavedThread(t.id); });
+        row.append(icon('chat', 15), el('span', 'dg-recent-title', t.title), el('span', 'dg-recent-when', threadWhen(t.at)));
+        section.append(row);
       }
+      parts.push(section);
+    } else if (ctx.hasDocument) {
+      const chips = el('div', 'dg-suggest');
+      for (const item of suggestionsFor(ctx)) {
+        chips.append(button(`dg-suggest-chip${item.contextual ? ' dg-suggest-ctx' : ''}`, item.text, () => {
+          this.input.value = item.text;
+          this.renderComposer();
+          if (!this.sendBtn.disabled) this.submit();
+          else this.input.focus();
+        }));
+      }
+      parts.push(chips);
     }
-    for (const item of list) {
-      chips.append(button(`dg-suggest-chip${item.contextual ? ' dg-suggest-ctx' : ''}`, item.text, () => {
-        this.input.value = item.text;
-        this.renderComposer();
-        if (!this.sendBtn.disabled) this.submit();
-        else this.input.focus();
-      }));
-    }
-    parts.push(chips);
     box.replaceChildren(...parts);
   }
 
@@ -1129,6 +1174,8 @@ export class DoogleSidebar {
     if (this.titleText) this.titleText.textContent = view.title;
     if (this.titleBtn) this.titleBtn.setAttribute('aria-label', `대화: ${view.title}`);
     this.awaitingAnswer = false;
+    // 빈 대화면 시작 화면을 지금 대화 기준으로 다시 채운다 (만들 때는 아직 앞 대화를 보고 있었다)
+    this.renderEmpty();
     this.renderPlaceholder();
     this.renderThreadCards();
     // 다른 대화를 열면 그 끝에서 시작해 따라간다
@@ -1176,7 +1223,7 @@ export class DoogleSidebar {
 
   /**
    * 열린 문서가 바뀌었는지 본다(문서 상태가 바뀔 때마다 불린다). 대화는 문서에 딸린다:
-   *  - 다른 문서를 열면 → 새 빈 대화로 바꾸고, 그 문서의 지난 대화 중 가장 최근 것을 연다.
+   *  - 다른 문서를 열면 → 새 빈 대화(시작 화면)로 바꾸고, 그 문서의 지난 대화를 목록으로 보인다.
    *  - 문서를 닫았거나 저장 안 한 새 문서면 → 새 빈 대화. 지난 대화는 보이지 않는다.
    *  - 같은 문서에 경로가 늦게 붙거나 다른 이름으로 저장하면(교체 없음) → 지금 대화가 새 이름을 따른다.
    */
@@ -1218,10 +1265,10 @@ export class DoogleSidebar {
   }
 
   /**
-   * 지금 문서의 저장된 대화 목록을 받는다. openLatest 면 (빈 대화를 보고 있을 때) 가장 최근 대화를 연다.
+   * 지금 문서의 저장된 대화 목록을 받아 시작 화면에 보인다. resumeRunning 이면 (빈 대화를 보고 있을 때) 답을 만드는 중인 대화를 연다.
    * hub 는 응답 도중에도 기록을 저장하므로 새로고침·재시작 뒤 문서를 다시 열면 대화가 그대로 있다.
    */
-  private async loadDocThreads(openLatest: boolean): Promise<void> {
+  private async loadDocThreads(resumeRunning: boolean): Promise<void> {
     const doc = this.doc;
     if (!doc) {
       this.savedThreads = [];
@@ -1235,8 +1282,12 @@ export class DoogleSidebar {
     }
     if (!sameDoc(doc, this.doc)) return; // 그새 다른 문서로 바뀌었다
     this.savedThreads = list;
-    if (openLatest && list[0] && !this.busy && this.thread.turns.length === 0) {
-      await this.openSavedThread(list[0].id);
+    this.renderEmpty();
+    // 문서를 열면 시작 화면(최근 대화 목록)을 먼저 보인다 — 지난 대화는 거기서 고른다.
+    // 아직 hub 에서 답을 만들고 있는 대화만은 바로 연다(새로고침·재시작 뒤 그 답이 이어 붙게).
+    const running = list.find((t) => t.running);
+    if (resumeRunning && running && !this.busy && this.thread.turns.length === 0) {
+      await this.openSavedThread(running.id);
     }
   }
 
@@ -1318,7 +1369,10 @@ export class DoogleSidebar {
   }
 
   private scrollToBottom(): void {
-    if (this.scroller) this.scroller.scrollTop = this.scroller.scrollHeight;
+    if (!this.scroller) return;
+    // 빈 대화의 시작 화면은 위에서부터 읽는다 — 물음과 문서 칩이 가려지지 않게
+    const empty = this.thread?.turns.length === 0 && !!this.thread.log.querySelector(':scope > .dg-empty');
+    this.scroller.scrollTop = empty ? 0 : this.scroller.scrollHeight;
   }
 
   private announce(text: string): void {

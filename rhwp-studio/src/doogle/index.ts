@@ -332,9 +332,14 @@ function hasFields(host: PluginHost): boolean {
 }
 
 /** 상황별 제안 칩의 입력 — automation 게이트와 같은 EditorContext 를 읽는다 */
-function docContext(host: PluginHost): { hasDocument: boolean; hasSelection: boolean; inTable: boolean; hasFields: boolean } {
-  const hasDocument = host.borrowDocument() !== null;
+function docContext(host: PluginHost): { hasDocument: boolean; hasSelection: boolean; inTable: boolean; hasFields: boolean; name?: string; pageCount?: number } {
+  const lease = host.borrowDocument();
+  const hasDocument = lease !== null;
   if (!hasDocument) return { hasDocument, hasSelection: false, inTable: false, hasFields: false };
+  let pageCount = 0;
+  try {
+    pageCount = Number((lease.handle as { pageCount?: () => number }).pageCount?.()) || 0;
+  } catch { /* 쪽 수를 모르면 칩에 적지 않는다 */ }
   let ctx: { hasSelection?: boolean; inTable?: boolean } = {};
   try { ctx = host.automation.getContext(); } catch { /* 화면 없는 구성 */ }
   return {
@@ -342,6 +347,8 @@ function docContext(host: PluginHost): { hasDocument: boolean; hasSelection: boo
     hasSelection: !!ctx.hasSelection && !!host.getSelectionText()?.text,
     inTable: !!ctx.inTable,
     hasFields: hasFields(host),
+    name: currentDocumentName(),
+    pageCount,
   };
 }
 
