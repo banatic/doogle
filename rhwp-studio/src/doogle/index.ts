@@ -206,6 +206,11 @@ export async function initDoogle(host: PluginHost): Promise<PluginSurface> {
         ['ext:doogle.tab-close', '탭 닫기', () => { void workspace.closeFocused(); }],
         ['ext:doogle.tab-next', '다음 탭', () => workspace.cycle(1)],
         ['ext:doogle.tab-prev', '이전 탭', () => workspace.cycle(-1)],
+        ['ext:doogle.glass-toggle', '유리 리본(실험) 켜기/끄기', () => {
+          void import('./workspace/glass.ts').then(({ toggleGlass }) => {
+            shell.announceStatus(toggleGlass() ? '유리 리본을 켰습니다' : '유리 리본을 껐습니다');
+          });
+        }],
       ];
       for (const [id, label, execute] of commands) host.automation.registerCommand({ id, label, execute });
     }

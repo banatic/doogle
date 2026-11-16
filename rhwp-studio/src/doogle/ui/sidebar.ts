@@ -788,7 +788,7 @@ export class DoogleSidebar {
       this.cardsBtn,
       this.historyBtn,
       iconButton('dg-icon-btn', 'compose', '새 대화', () => this.newThread(), 17),
-      iconButton('dg-icon-btn', 'close', '사이드바 닫기', () => this.closePanel(), 15),
+      iconButton('dg-icon-btn', 'panelRight', '사이드바 접기', () => this.closePanel(), 17),
       this.threadMenu,
     );
     return head;

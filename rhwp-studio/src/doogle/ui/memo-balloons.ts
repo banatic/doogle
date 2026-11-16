@@ -139,12 +139,16 @@ export function mountMemoBalloons(host: PluginHost): MemoBalloonsHandle {
   function setZone(active: boolean): void {
     const sc = document.getElementById('scroll-container');
     // 문서 탭: 말풍선은 지금 문서에만 그린다 — 다른 문서의 스크롤 영역에 남은 자리는 걷는다
+    // 자리는 CSS 변수로 낸다 — 스크롤 영역의 오른쪽 여백은 이 값과 다른 여백(유리 사이드바 자리)을 더한 것이다
     for (const other of document.querySelectorAll<HTMLElement>('.dg-doc-view')) {
-      if (other !== sc && other.style.paddingRight) other.style.paddingRight = '';
+      if (other !== sc && other.style.getPropertyValue('--dg-memo-zone')) other.style.removeProperty('--dg-memo-zone');
     }
     if (!sc) return;
     const want = active ? `${ZONE_WIDTH}px` : '';
-    if (sc.style.paddingRight !== want) sc.style.paddingRight = want;
+    if (sc.style.getPropertyValue('--dg-memo-zone') !== want) {
+      if (want) sc.style.setProperty('--dg-memo-zone', want);
+      else sc.style.removeProperty('--dg-memo-zone');
+    }
   }
 
   /** 문서에서 메모와 그 자리를 읽는다. 자리를 알 수 없는 메모는 뺀다. */

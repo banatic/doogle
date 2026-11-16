@@ -17,6 +17,16 @@ const ZOOM_SETTLE_EPSILON = 0.001;
 const ZOOM_SMOOTHING_TIME_MS = 16;
 const WHEEL_ZOOM_SENSITIVITY = 0.00625;
 const MAX_WHEEL_DELTA_PX = 120;
+/** 마우스 휠 한 칸으로 치는 delta(px) — 이보다 작으면 트랙패드 핀치로 본다 */
+const WHEEL_NOTCH_DELTA_PX = 50;
+/**
+ * [doogle] 마우스 휠 한 칸의 배율 변화(0.1 = 10%). null 이면 종전 감도 그대로.
+ * 종전 감도는 휠 한 칸(100px)에 약 1.87배라 마우스로는 너무 크게 뛴다 — 트랙패드 핀치(작은 delta)는 그대로 둔다.
+ */
+let wheelNotchZoomStep: number | null = null;
+export function setWheelNotchZoomStep(step: number | null): void {
+  wheelNotchZoomStep = step !== null && step > 0 ? step : null;
+}
 
 export class ViewportManager {
   private scrollY = 0;
@@ -180,7 +190,10 @@ export class ViewportManager {
       })
       : CENTER_ZOOM_ANCHOR;
 
-    const target = this.clampZoom(this.zoomTarget * Math.exp(-boundedDelta * WHEEL_ZOOM_SENSITIVITY));
+    const factor = wheelNotchZoomStep !== null && Math.abs(boundedDelta) >= WHEEL_NOTCH_DELTA_PX
+      ? Math.pow(1 + wheelNotchZoomStep, -boundedDelta / 100)
+      : Math.exp(-boundedDelta * WHEEL_ZOOM_SENSITIVITY);
+    const target = this.clampZoom(this.zoomTarget * factor);
     // min/max 바깥의 무효 입력으로 정착 timer를 연장하거나 새 raster를 만들지 않는다.
     if (target === this.zoomTarget) return;
     this.zoomInputSettle.input();

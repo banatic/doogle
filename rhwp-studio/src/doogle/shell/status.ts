@@ -225,15 +225,19 @@ export class StatusAddons {
     this.renderAgent();
   }
 
-  /** 저장 상태 — 저장 안 한 변경이 있으면 "저장 안 됨", 없으면 "저장됨" */
+  /**
+   * 저장 결과 — 저장한 뒤 고친 것이 없을 때만 "저장됨"을 보인다.
+   * 저장 안 한 변경은 문서 탭의 점이 알린다(여기서 또 알리면 같은 말이 두 번 보인다).
+   */
   private renderSave(s: DocState): void {
-    this.save.hidden = !s.hasDocument;
-    if (!s.hasDocument) return;
+    const show = s.hasDocument && !s.dirty && Boolean(s.savedAt);
+    this.save.hidden = !show;
+    if (!show) return;
     const dot = document.createElement('span');
-    dot.className = `dg-sb-dot dg-sb-dot--${s.dirty ? 'warn' : 'ok'}`;
+    dot.className = 'dg-sb-dot dg-sb-dot--ok';
     dot.setAttribute('aria-hidden', 'true');
-    this.save.replaceChildren(dot, s.dirty ? '저장 안 됨' : '저장됨');
-    this.save.title = s.dirty ? '저장하지 않은 변경이 있습니다 (Ctrl+S)' : savedTitle(s.savedAt);
+    this.save.replaceChildren(dot, '저장됨');
+    this.save.title = savedTitle(s.savedAt);
   }
 
   /** 가운데 메시지 칸에서 "파일 이름 — N페이지 (ms)" 요약을 지운다 */

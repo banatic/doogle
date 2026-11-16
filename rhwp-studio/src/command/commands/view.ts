@@ -1,4 +1,5 @@
 import type { CommandDef, CommandServices } from '../types';
+import { usablePageWidth } from '../../doogle/workspace/usable-width.ts';
 import { setThemeMode, setThemeSkin, syncThemeMenu, type EffectiveTheme } from '../../core/theme';
 import { userSettings, type ThemeMode, type ThemeSkin } from '../../core/user-settings';
 import { GridSettingsDialog } from '../../ui/grid-settings-dialog';
@@ -38,8 +39,9 @@ function getZoomFitMetrics(
   if (!container) return null;
   // getPageInfo 의 width/height 는 이미 px 단위 (96dpi 기준)
   const pageInfo = services.wasm.getPageInfo(0);
+  // [doogle] 안쪽 좌우 여백(메모 말풍선 자리·떠 있는 사이드바 자리)은 쪽이 쓸 수 없는 폭이다
   return {
-    containerWidth: container.clientWidth,
+    containerWidth: usablePageWidth(container),
     containerHeight: container.clientHeight,
     pageWidth: pageInfo.width,
     pageHeight: pageInfo.height,

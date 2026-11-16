@@ -47,8 +47,6 @@ export { setBackstagePathOpener, openRecentByKnownPath } from './backstage';
 export const DOC_FOCUS_EVENT = 'doogle:doc-focus';
 
 const AGENT_PANEL_ID = 'agent';
-/** "저장됨 ✓" 표시 시간 */
-const SAVED_FLASH_MS = 1500;
 
 interface ShellState {
   ribbon: Ribbon;
@@ -75,7 +73,10 @@ function quickButton(id: string, label: string, icon: string, act?: (b: HTMLButt
   return b;
 }
 
-/** 제목: [● 이름 HWPX] 단추 + "저장됨 ✓". 누르면 이름 바꾸기·폴더에서 보기·경로 복사 팝업. */
+/**
+ * 제목: [이름 HWPX] 단추. 누르면 이름 바꾸기·폴더에서 보기·경로 복사 팝업.
+ * 저장 상태는 여기 두지 않는다 — 저장 안 한 변경은 문서 탭의 점이, 저장 결과는 상태 표시줄이 알린다.
+ */
 function buildDocTitle(): HTMLElement {
   const wrap = document.createElement('div');
   wrap.className = 'dg-doctitle';
@@ -85,9 +86,6 @@ function buildDocTitle(): HTMLElement {
   btn.className = 'dg-doctitle-btn';
   btn.setAttribute('aria-haspopup', 'menu');
   btn.setAttribute('aria-expanded', 'false');
-  const dot = document.createElement('span');
-  dot.className = 'dg-dirty-dot';
-  dot.setAttribute('aria-hidden', 'true');
   const name = document.createElement('span');
   name.className = 'dg-doctitle-name';
   const badge = document.createElement('span');
@@ -95,14 +93,9 @@ function buildDocTitle(): HTMLElement {
   const app = document.createElement('span');
   app.className = 'dg-doctitle-app';
   app.textContent = ' — 두글';
-  btn.append(dot, name, badge, app);
+  btn.append(name, badge, app);
 
-  const saved = document.createElement('span');
-  saved.className = 'dg-saved';
-  saved.setAttribute('aria-hidden', 'true');
-  saved.innerHTML = `저장됨 ${iconSvg('check', 12, 2.4)}`;
-
-  wrap.append(btn, saved);
+  wrap.append(btn);
 
   btn.addEventListener('mousedown', (e) => e.preventDefault());
   btn.addEventListener('dblclick', (e) => e.stopPropagation());
@@ -126,25 +119,52 @@ function buildDocTitle(): HTMLElement {
     openPopupMenu(btn, entries, '문서', false);
   });
 
-  let flashTimer: number | undefined;
-  let lastSavedAt: number | null = null;
   const render = (s: DocState) => {
     const display = s.hasDocument ? s.name.replace(/\.(hwpx|hwp|hml|pdf)$/i, '') : '새 문서';
     name.textContent = display;
-    dot.hidden = !s.dirty;
     badge.hidden = !s.format;
     badge.textContent = s.format ? s.format.toUpperCase() : '';
     btn.classList.toggle('dg-doctitle-btn--static', !s.hasDocument);
     const status = s.dirty ? '저장 안 한 변경 있음' : '저장됨';
     btn.title = s.hasDocument ? `${s.path ?? s.name}\n${status}` : '';
     btn.setAttribute('aria-label', s.hasDocument ? `${display}${s.format ? ` ${s.format.toUpperCase()}` : ''}, ${status}. 문서 메뉴` : '새 문서');
-    if (s.savedAt && s.savedAt !== lastSavedAt) {
-      lastSavedAt = s.savedAt;
-      saved.classList.add('dg-saved--on');
-      window.clearTimeout(flashTimer);
-      flashTimer = window.setTimeout(() => saved.classList.remove('dg-saved--on'), SAVED_FLASH_MS);
-    }
+    centre();
   };
+
+  // 제목은 제 칸의 가운데가 아니라 창(제목 막대)의 가운데에 둔다. 칸 왼쪽(메뉴·탭)이 오른쪽보다 넓어 칸 가운데는
+  // 오른쪽으로 치우친다 — 그 차이만큼 옮기되, 칸 밖으로는 나가지 않는다(좁은 창에서는 닿는 데까지만).
+  const centre = () => {
+    const bar = wrap.parentElement;
+    if (!bar) return;
+    const slot = wrap.getBoundingClientRect();
+    const host = bar.getBoundingClientRect();
+    const room = Math.max(0, (slot.width - btn.offsetWidth) / 2);
+    const want = (host.left + host.width / 2) - (slot.left + slot.width / 2);
+    const shift = Math.round(Math.max(-room, Math.min(room, want)));
+    btn.style.transform = shift ? `translateX(${shift}px)` : '';
+  };
+  // 칸의 자리는 이웃(메뉴·탭·명령 단추)의 폭이 바뀔 때도 달라진다 — 이웃도 함께 지켜본다
+  const settle = () => { centre(); requestAnimationFrame(centre); };
+  if (typeof ResizeObserver !== 'undefined') {
+    const watch = new ResizeObserver(settle);
+    watch.observe(wrap);
+    watch.observe(btn);
+    const watchSiblings = () => {
+      const bar = wrap.parentElement;
+      if (!bar) return;
+      for (const child of Array.from(bar.children)) watch.observe(child);
+    };
+    queueMicrotask(watchSiblings);
+    // 유리 모드는 리본 탭 줄을 제목 막대 안으로 옮긴다 — 새로 들어온 이웃도 지켜본다
+    if (typeof MutationObserver !== 'undefined') {
+      queueMicrotask(() => {
+        const bar = wrap.parentElement;
+        if (bar) new MutationObserver(() => { watchSiblings(); settle(); }).observe(bar, { childList: true });
+      });
+    }
+  }
+  window.addEventListener('resize', settle);
+
   render(getDocState());
   onDocState(render);
   const titleEl = document.querySelector('head > title');

@@ -11,6 +11,7 @@
  */
 import type { PluginHost } from '@/plugin/types';
 import { getDocHub } from '../workspace/hub-ref.ts';
+import { usablePageWidth } from '../workspace/usable-width.ts';
 
 /** 셸이 건네는 upstream 창구 (studio.ts) — 이 모듈은 DOM·호스트 밖의 의존이 없게 둔다(단위 시험) */
 export interface NarrowFitStudio {
@@ -107,9 +108,8 @@ export function installNarrowFit(host: PluginHost, studio: NarrowFitStudio): voi
     const width = pageWidth();
     if (!width) return;
     const zoom = Math.round((ctx.zoom || 1) * 100);
-    // clientWidth 는 안쪽 여백을 포함한다 — 메모 말풍선 자리(오른쪽 여백)는 쪽이 쓸 수 없는 폭이다
-    const style = getComputedStyle(container);
-    const usable = container.clientWidth - (parseFloat(style.paddingLeft) || 0) - (parseFloat(style.paddingRight) || 0);
+    // 안쪽 여백(메모 말풍선 자리·떠 있는 사이드바 자리)은 쪽이 쓸 수 없는 폭이다
+    const usable = usablePageWidth(container);
     const fit = Math.floor(((usable - FRAME_PADDING_PX) / width) * 100);
     const next = nextFit(autos.get(key) ?? null, zoom, fit, narrow);
     autos.set(key, next.memory);

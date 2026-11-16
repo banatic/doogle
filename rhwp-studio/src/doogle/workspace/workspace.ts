@@ -18,6 +18,8 @@
  */
 import './workspace.css';
 import type { DocHub, DocSession, SessionFrame, WorkspaceUi } from './doc-hub.ts';
+import { clearBeforeFill, installGlass, rulerUsesFullWidth, trimClientHeight } from './glass.ts';
+import { setWheelNotchZoomStep } from '@/view/viewport-manager';
 
 const TAB_MIME = 'application/x-doogle-tab';
 const MIN_PANE_RATIO = 0.2;
@@ -86,6 +88,10 @@ export function mountWorkspace(hub: DocHub): Workspace | null {
   original.classList.add('dg-doc-view');
   empty.appendChild(original);
   root.appendChild(empty);
+  // 유리 리본(실험): 문서가 리본 뒤까지 올라간다 — 가려진 높이는 편집기가 "보이는 높이"로 치지 않게 한다
+  installGlass();
+  // 마우스 휠 확대는 한 칸에 10% — upstream 감도(한 칸에 약 1.9배)는 마우스로 쓰기에 너무 크다
+  setWheelNotchZoomStep(0.1);
 
   const panes: Pane[] = [];
   let orientation: Orientation = 'row';
@@ -182,6 +188,14 @@ export function mountWorkspace(hub: DocHub): Workspace | null {
   function layoutPanes(): void {
     root.dataset.orientation = orientation;
     root.dataset.split = panes.length > 1 ? 'true' : 'false';
+    // 창 맨 위에 닿는 칸 — 좌우로 나눴으면 둘 다, 상하로 나눴으면 위 칸만 (유리 리본이 쓴다)
+    panes.forEach((pane, i) => {
+      pane.el.dataset.top = String(orientation === 'row' || i === 0);
+      // 창 오른쪽에 닿는 칸 — 떠 있는 사이드바가 그 위에 얹힌다
+      pane.el.dataset.right = String(orientation === 'column' || i === panes.length - 1);
+      // 창 아래(상태 표시줄)에 닿는 칸
+      pane.el.dataset.bottom = String(orientation === 'row' || i === panes.length - 1);
+    });
     splitter?.remove();
     splitter = null;
     for (const pane of panes) {
@@ -269,6 +283,9 @@ export function mountWorkspace(hub: DocHub): Workspace | null {
     const content = document.createElement('div');
     content.id = 'scroll-content';
     container.appendChild(content);
+    trimClientHeight(container);
+    clearBeforeFill(hRuler);
+    clearBeforeFill(vRuler);
     frameRoot.append(corner, hRuler, vRuler, container);
     return { root: frameRoot, hRuler, vRuler, container };
   }
@@ -545,6 +562,7 @@ export function mountWorkspace(hub: DocHub): Workspace | null {
     attach(frame, session) {
       const tab = allTabs().find((t) => t.frame === frame);
       if (tab) tab.session = session;
+      rulerUsesFullWidth(session.engine.ruler);
       render();
     },
     removeFrame(frame) {
@@ -602,6 +620,15 @@ export function mountWorkspace(hub: DocHub): Workspace | null {
       e.stopPropagation();
     }
   }, true);
+
+  // 테마가 바뀐 뒤 색 토큰이 자리 잡으면 눈금자·쪽을 한 번 더 그리게 한다 — 알림이 토큰보다 먼저 오면 옛 색으로 그려진 채 남는다
+  new MutationObserver(() => {
+    window.setTimeout(() => {
+      for (const session of hub.sessions) {
+        try { session.eventBus.emitLocal('theme-changed'); } catch (error) { console.warn('[doogle] 테마 다시 그리기 실패', error); }
+      }
+    }, 60);
+  }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme-effective', 'data-theme-skin'] });
 
   render();
 

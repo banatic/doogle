@@ -80,6 +80,10 @@
   background: var(--ruler-bg);
   cursor: default;
 }
+/* 오른쪽 안쪽 여백 = 메모 말풍선 자리(memo-balloons.ts) + 떠 있는 사이드바 자리(glass.css) */
+:root[data-doogle] .dg-doc-view {
+  padding-right: calc(var(--dg-memo-zone, 0px) + var(--dg-pane-right, 0px));
+}
 /* 스크롤 영역 — upstream `#scroll-container` 규칙과 같은 값(초점이 아닌 문서의 것은 그 id 가 없다) */
 :root[data-doogle] .dg-docframe > .dg-doc-view {
   grid-column: 2; grid-row: 2;
