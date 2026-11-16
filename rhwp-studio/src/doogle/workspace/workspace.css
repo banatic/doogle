@@ -1,0 +1,225 @@
+/* 문서 영역 — 탭 줄 · 화면 나누기 (workspace.ts). 전부 :root[data-doogle] 범위. */
+
+/* 원래의 눈금자 자리는 문서 틀마다 따로 그린다 — #editor-area 의 것은 감춘다 */
+:root[data-doogle] #editor-area.dg-ws-on > #ruler-corner,
+:root[data-doogle] #editor-area.dg-ws-on > #h-ruler,
+:root[data-doogle] #editor-area.dg-ws-on > #v-ruler {
+  display: none;
+}
+
+:root[data-doogle] #dg-workspace {
+  grid-column: 1 / 3;
+  grid-row: 1 / 3;
+  display: flex;
+  flex-direction: row;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--dg-bg);
+}
+:root[data-doogle] #dg-workspace[data-orientation="column"] { flex-direction: column; }
+
+/* 문서 없음 — 원래의 스크롤 영역(시작 화면) */
+:root[data-doogle] .dg-ws-empty {
+  flex: 1 1 0;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+:root[data-doogle] .dg-ws-empty[hidden] { display: none; }
+:root[data-doogle] .dg-ws-empty > .dg-doc-view { flex: 1 1 0; min-width: 0; }
+
+/* ── 칸 ── */
+:root[data-doogle] .dg-docpane {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+:root[data-doogle] .dg-docstack {
+  position: relative;
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* ── 문서 틀: 눈금자 + 스크롤 영역 (upstream #editor-area 의 2×2 배치와 같다) ── */
+:root[data-doogle] .dg-docframe {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  grid-template-rows: 20px minmax(0, 1fr);
+}
+/* 가려진 탭: 자리는 그대로 두고 보이지만 않게 한다 — 스크롤 위치·배율·크기 계산이 그대로 남는다 */
+:root[data-doogle] .dg-docframe[data-active="false"] {
+  visibility: hidden;
+  pointer-events: none;
+  z-index: -1;
+}
+:root[data-doogle] .dg-ruler-corner {
+  grid-column: 1; grid-row: 1;
+  background: var(--ruler-bg);
+  border-right: 1px solid var(--dg-field);
+  border-bottom: 1px solid var(--dg-field);
+}
+:root[data-doogle] .dg-hruler {
+  grid-column: 2; grid-row: 1;
+  display: block;
+  width: 100%; height: 100%;
+  border-bottom: 1px solid var(--dg-field);
+  background: var(--ruler-bg);
+  cursor: default;
+}
+:root[data-doogle] .dg-vruler {
+  grid-column: 1; grid-row: 2;
+  display: block;
+  width: 100%; height: 100%;
+  border-right: 1px solid var(--dg-field);
+  background: var(--ruler-bg);
+  cursor: default;
+}
+/* 스크롤 영역 — upstream `#scroll-container` 규칙과 같은 값(초점이 아닌 문서의 것은 그 id 가 없다) */
+:root[data-doogle] .dg-docframe > .dg-doc-view {
+  grid-column: 2; grid-row: 2;
+  position: relative;
+  overflow: auto;
+  background: var(--doc-workspace);
+}
+:root[data-doogle] .dg-doc-view.drag-over {
+  background: var(--ui-selected);
+  outline: 3px dashed var(--focus-ring);
+  outline-offset: -3px;
+}
+:root[data-doogle] .dg-doc-view.hf-editing { background: var(--ui-active); }
+/* 초점이 아닌 칸의 캐럿은 감춘다 — 글자가 어디로 들어가는지 헷갈리지 않게 */
+:root[data-doogle] #dg-workspace[data-split="true"] .dg-docpane[data-focused="false"] .dg-doc-view .caret {
+  visibility: hidden;
+}
+
+/* ── 탭 줄 ── */
+:root[data-doogle] .dg-doctabs {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: stretch;
+  height: 32px;
+  background: var(--dg-chrome);
+  border-bottom: 1px solid var(--dg-border);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+:root[data-doogle] .dg-doctabs::-webkit-scrollbar { display: none; }
+:root[data-doogle] .dg-doctab {
+  position: relative;
+  flex: 0 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 96px;
+  max-width: 240px;
+  padding: 0 6px 0 12px;
+  border-right: 1px solid var(--dg-border);
+  color: var(--dg-muted);
+  font-size: var(--dg-fs-sm, 12px);
+  cursor: default;
+  user-select: none;
+  outline: none;
+}
+:root[data-doogle] .dg-doctab:hover { background: var(--dg-hover); }
+:root[data-doogle] .dg-doctab[aria-selected="true"] {
+  background: var(--dg-surface);
+  color: var(--dg-text);
+}
+/* 초점 칸의 활성 탭 — 위쪽 강조선으로 "지금 문서"를 알린다 */
+:root[data-doogle] .dg-docpane[data-focused="true"] .dg-doctab[aria-selected="true"] {
+  box-shadow: inset 0 2px 0 var(--dg-accent);
+  font-weight: 600;
+}
+:root[data-doogle] .dg-doctab:focus-visible { box-shadow: inset 0 0 0 2px var(--dg-focus); }
+:root[data-doogle] .dg-doctab-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+:root[data-doogle] .dg-doctab-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--dg-dirty, #F5B86B);
+}
+:root[data-doogle] .dg-doctab[data-dirty="false"] .dg-doctab-dot { display: none; }
+:root[data-doogle] .dg-doctab-close,
+:root[data-doogle] .dg-doctab-action {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+:root[data-doogle] .dg-doctab-close { opacity: 0; }
+:root[data-doogle] .dg-doctab:hover .dg-doctab-close,
+:root[data-doogle] .dg-doctab[aria-selected="true"] .dg-doctab-close,
+:root[data-doogle] .dg-doctab-close:focus-visible { opacity: 1; }
+:root[data-doogle] .dg-doctab-close:hover,
+:root[data-doogle] .dg-doctab-action:hover { background: var(--dg-ink-12); }
+:root[data-doogle] .dg-doctab-actions {
+  position: sticky;
+  right: 0;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px;
+  background: var(--dg-chrome);
+  color: var(--dg-muted);
+}
+
+/* ── 칸 경계 ── */
+:root[data-doogle] .dg-docsplit {
+  flex: 0 0 5px;
+  background: var(--dg-border);
+  cursor: col-resize;
+  touch-action: none;
+}
+:root[data-doogle] #dg-workspace[data-orientation="column"] > .dg-docsplit { cursor: row-resize; }
+:root[data-doogle] .dg-docsplit:hover,
+:root[data-doogle] #dg-workspace[data-resizing="true"] > .dg-docsplit { background: var(--dg-accent); }
+:root[data-doogle] #dg-workspace[data-resizing="true"] { user-select: none; }
+/* 칸이 둘일 때 초점 칸을 테두리로도 알린다 */
+:root[data-doogle] #dg-workspace[data-split="true"] .dg-docpane[data-focused="true"] .dg-docstack {
+  box-shadow: inset 0 0 0 1px var(--dg-on-border);
+}
+:root[data-doogle] #dg-workspace[data-split="true"] .dg-docpane[data-focused="false"] .dg-doctabs { opacity: 0.8; }
+
+/* ── 탭 끌어 놓기 자리 ── */
+:root[data-doogle] .dg-tabdrop {
+  display: none;
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+}
+:root[data-doogle] #dg-workspace[data-tab-drag="true"] .dg-tabdrop { display: block; }
+:root[data-doogle] .dg-tabdrop::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--dg-on-bg);
+  border: 2px solid var(--dg-on-border);
+  opacity: 0;
+  pointer-events: none;
+}
+:root[data-doogle] .dg-tabdrop[data-side]::after { opacity: 0.45; }
+:root[data-doogle] .dg-tabdrop[data-side="right"]::after { left: 50%; }
+:root[data-doogle] .dg-tabdrop[data-side="down"]::after { top: 50%; }

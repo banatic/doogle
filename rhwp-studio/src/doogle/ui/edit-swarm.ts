@@ -17,6 +17,7 @@
  *
  * swarm-cursors(DhvanilPatel)의 "커서 무리가 화면을 만든다" 는 발상에서 영감을 받았고, 코드는 가져오지 않았다.
  */
+import { isAgentEditOnFocusedDocument } from './runtime-wiring.ts';
 import './edit-swarm.css';
 import { commonColor, paperSamplePoints, type Rgba } from './swarm-paper.ts';
 
@@ -177,7 +178,7 @@ export function mountEditSwarm(): EditSwarmHandle {
   }
 
   function ensureLayer(): HTMLDivElement | null {
-    const content = document.getElementById('scroll-content');
+    const content = document.querySelector<HTMLElement>('#scroll-container > #scroll-content');
     if (!content) return null;
     if (layer && layer.parentElement === content) return layer;
     layer?.remove();
@@ -237,7 +238,7 @@ export function mountEditSwarm(): EditSwarmHandle {
   const SNAPSHOT_TTL_MS = 4000;
 
   function captureBefore(): void {
-    const content = document.getElementById('scroll-content');
+    const content = document.querySelector<HTMLElement>('#scroll-container > #scroll-content');
     const sc = document.getElementById('scroll-container');
     if (!content || !sc || reducedMotion()) { snapshot = null; return; }
     const base = content.getBoundingClientRect();
@@ -297,7 +298,7 @@ export function mountEditSwarm(): EditSwarmHandle {
 
   /** 지금 화면에 그려진 쪽 캔버스 중 r 을 품은 것 — 찍어 둔 옛 화면이 없을 때 바탕색을 여기서 읽는다 */
   function liveShot(r: Box): Shot | undefined {
-    const content = document.getElementById('scroll-content');
+    const content = document.querySelector<HTMLElement>('#scroll-container > #scroll-content');
     if (!content) return undefined;
     const base = content.getBoundingClientRect();
     for (const canvas of content.querySelectorAll<HTMLCanvasElement>('canvas')) {
@@ -419,6 +420,8 @@ export function mountEditSwarm(): EditSwarmHandle {
   }
 
   async function onEdit(event: Event): Promise<void> {
+    // 문서 탭: 에이전트가 초점이 아닌 문서를 고치는 중이면 그리지 않는다(자리가 이 문서의 것이 아니다)
+    if (!isAgentEditOnFocusedDocument()) return;
     const detail = (event as CustomEvent<{ rects?: EditRect[] }>).detail;
     const rects = Array.isArray(detail?.rects) ? detail.rects : [];
     const target = ensureLayer();
@@ -480,7 +483,7 @@ export function mountEditSwarm(): EditSwarmHandle {
   }
 
   const listener = (event: Event) => { void onEdit(event); };
-  const beforeListener = () => captureBefore();
+  const beforeListener = () => { if (isAgentEditOnFocusedDocument()) captureBefore(); };
 
   function clear(): void {
     generation++;

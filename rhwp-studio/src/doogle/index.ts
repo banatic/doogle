@@ -20,6 +20,8 @@ export const DOOGLE_PLUGIN_ID = 'doogle';
 export const DOOGLE_PANEL_ID = 'agent';
 export const DOOGLE_TOGGLE_COMMAND = 'ext:doogle.toggle-panel';
 export const DOOGLE_OPEN_COMMAND = 'ext:doogle.open-native';
+export const DOOGLE_SPLIT_RIGHT_COMMAND = 'ext:doogle.split-right';
+export const DOOGLE_SPLIT_DOWN_COMMAND = 'ext:doogle.split-down';
 /** 사이드바 열림 상태 기억 ('1' | '0'). 없으면 첫 실행 — 그때만 자동으로 연다 (UI_AUDIT §3.5). */
 const STORE_PANEL = 'doogle.panel';
 /** AI 서비스 연결 상태를 셸(상태 표시줄 등)에 알리는 window 이벤트 */
@@ -76,6 +78,8 @@ export async function initDoogle(host: PluginHost): Promise<PluginSurface> {
   shell.attachShellHost(host);
 
   const runtime = await createRuntime(host);
+  // e2e·개발 확인용 — 실행기를 직접 불러 본다(개발 빌드 전용)
+  if (import.meta.env.DEV) (window as unknown as { __doogleRuntime?: unknown }).__doogleRuntime = runtime;
   let mode: 'agent' | 'full' = 'agent';
 
   // eslint-disable-next-line prefer-const
@@ -140,6 +144,8 @@ export async function initDoogle(host: PluginHost): Promise<PluginSurface> {
     },
     openExternal: (url) => desk.openExternal(url),
     onModeChange: (next) => { mode = next; },
+    // 문서 탭: 이 대화의 편집을 지금 초점 문서에 묶는다 — 답을 만드는 중에 탭을 바꿔도 다른 문서로 새지 않는다
+    onTurnStart: (threadId) => { (runtime as { bindThread?: (id: string) => void } | null)?.bindThread?.(threadId); },
   });
   mode = sidebar.state.mode;
 
@@ -166,6 +172,11 @@ export async function initDoogle(host: PluginHost): Promise<PluginSurface> {
   fieldsCache = null;
   const refreshContext = () => sidebar.refreshContext();
   offs.push(host.onDocumentSwap(() => { fieldsCache = null; refreshContext(); sidebar.noteDocumentSwap(); }));
+  // 문서 탭: 초점 문서가 바뀌는 것도 사이드바에는 "다른 문서를 열었다"와 같다 — 대화는 문서에 딸린다
+  let clearSwarm = () => {};
+  const onDocFocus = () => { fieldsCache = null; refreshContext(); sidebar.noteDocumentSwap(); clearSwarm(); };
+  window.addEventListener(shell.DOC_FOCUS_EVENT, onDocFocus);
+  offs.push(() => window.removeEventListener(shell.DOC_FOCUS_EVENT, onDocFocus));
   for (const name of ['command-state-changed', 'cursor-format-changed', 'field-info-changed']) {
     offs.push(host.events.on(name, refreshContext));
   }
@@ -181,12 +192,31 @@ export async function initDoogle(host: PluginHost): Promise<PluginSurface> {
   offs.push(hub.onState((state, detail) => {
     window.dispatchEvent(new CustomEvent(HUB_STATE_EVENT, { detail: { state, detail } }));
   }));
+  // 문서 탭·화면 나누기 명령 — 명령 입력(Ctrl+/)과 리본 「보기」에서 쓴다. 단축키는 workspace.ts 가 직접 받는다.
+  {
+    const { getWorkspace } = await import('./workspace/workspace.ts');
+    const workspace = getWorkspace();
+    if (workspace) {
+      const split = (side: 'right' | 'down') => {
+        if (!workspace.splitFocused(side)) shell.announceStatus('문서를 둘 이상 열면 화면을 나눌 수 있습니다');
+      };
+      const commands: Array<[`ext:${string}`, string, () => void]> = [
+        [DOOGLE_SPLIT_RIGHT_COMMAND, '화면 나누기: 오른쪽으로', () => split('right')],
+        [DOOGLE_SPLIT_DOWN_COMMAND, '화면 나누기: 아래로', () => split('down')],
+        ['ext:doogle.tab-close', '탭 닫기', () => { void workspace.closeFocused(); }],
+        ['ext:doogle.tab-next', '다음 탭', () => workspace.cycle(1)],
+        ['ext:doogle.tab-prev', '이전 탭', () => workspace.cycle(-1)],
+      ];
+      for (const [id, label, execute] of commands) host.automation.registerCommand({ id, label, execute });
+    }
+  }
   // 문서가 없을 때의 캔버스 빈 상태
   const { mountEmptyCanvas } = await import('./ui/empty-canvas.ts');
-  offs.push(mountEmptyCanvas(host, { openDocument }));
+  offs.push(mountEmptyCanvas(host, { openDocument, openRecent: (fileName) => shell.openRecentByKnownPath(fileName) }));
   // 에이전트가 문서를 고치면 커서 무리가 그 자리로 간다 (실행기의 doogle:agent-edit)
   const { mountEditSwarm } = await import('./ui/edit-swarm.ts');
   const swarm = mountEditSwarm();
+  clearSwarm = () => swarm.clear();
   offs.push(() => swarm.dispose(), host.onDocumentSwap(() => swarm.clear()));
   // 메모 말풍선: 쪽 오른쪽에 메모를 띄운다 (보기 탭 「메모」로 켜고 끈다)
   const { mountMemoBalloons } = await import('./ui/memo-balloons.ts');
@@ -218,6 +248,17 @@ export async function initDoogle(host: PluginHost): Promise<PluginSurface> {
       },
     });
     host.automation.addMenuItem({ menuId: 'file', commandId: DOOGLE_OPEN_COMMAND, position: 'top' });
+    // Ctrl+O 도 두글의 열기로 — upstream 의 열기(WebView 파일 대화상자)로 열면 경로를 몰라
+    // 제목 막대 경로·「폴더에서 보기」·최근 문서 바로 열기가 빠진다.
+    const onOpenKey = (e: KeyboardEvent) => {
+      if (e.code !== 'KeyO' || !(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return;
+      if (document.querySelector('.modal-overlay, dialog[open]')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      openDocument();
+    };
+    window.addEventListener('keydown', onOpenKey, true);
+    offs.push(() => window.removeEventListener('keydown', onOpenKey, true));
     // hub.rs: ready · exited{restartInMs} · failed{message} — 연결 카드가 원인·카운트다운을 보인다
     offs.push(await desk.onHubEvent((event) => {
       sidebar.noteDeskHubEvent(event);
@@ -225,9 +266,9 @@ export async function initDoogle(host: PluginHost): Promise<PluginSurface> {
     }));
     const drainOpens = async () => {
       const paths = await desk.takeOpenRequests().catch(() => [] as string[]);
-      // 한 창에 문서 하나 — 여러 개가 오면 마지막 것을 연다.
-      const last = paths[paths.length - 1];
-      if (last) await openPath(host, desk, shell, last);
+      // 문서 탭: 온 것을 차례로 모두 연다. 탭이 없는 구성(한 창에 문서 하나)이면 마지막 것만 연다.
+      const { getDocHub } = await import('./workspace/doc-hub.ts');
+      for (const path of getDocHub() ? paths : paths.slice(-1)) await openPath(host, desk, shell, path);
     };
     shell.setBackstagePathOpener((path) => openPath(host, desk, shell, path));
     offs.push(await desk.onOpenRequest(() => void drainOpens()));
@@ -316,6 +357,9 @@ async function openPath(
   shell: typeof import('./shell/index.ts'),
   path: string,
 ): Promise<boolean> {
+  // 문서 탭: 이미 열린 파일이면 그 탭으로 간다
+  const { getWorkspace } = await import('./workspace/workspace.ts');
+  if (getWorkspace()?.focusPath(path)) return true;
   return shell.replaceDocument(async () => {
     const bytes = await desk.readFile(path);
     try {

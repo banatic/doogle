@@ -67,6 +67,7 @@ import { PdfPrintDialog } from '@/ui/pdf-print-dialog';
 import { userSettings } from '@/core/user-settings';
 import { showToast } from '@/ui/toast';
 import { isDesk } from '@/doogle/ui/desk-bridge';
+import { getDocHub } from '@/doogle/workspace/doc-hub.ts';
 import { addRecentDoc, clearRecentDocs, listRecentDocs, removeRecentDoc } from '@/recent/recent-store';
 import { openRecentEntry } from '@/recent/recent-open';
 
@@ -504,6 +505,8 @@ export async function confirmSaveBeforeReplacingDocument(
     allowLocalSave?: boolean;
   } = {},
 ): Promise<boolean> {
+  // [doogle] 문서 탭: 지금 문서를 닫지 않고 새 탭에 열므로 물을 것이 없다
+  if (getDocHub()) return true;
   const ctx = services.getContext();
   if (!ctx.hasDocument || !ctx.isDirty) return true;
 
@@ -870,7 +873,19 @@ export const fileCommands: CommandDef[] = [
         toast: (message, durationMs) => showToast({ message, durationMs }),
         emitOpen: (payload) => services.eventBus.emit('open-document-bytes', payload),
         // 메타-only 항목: 핸들이 없어 자동 재열기 불가 → 열기 대화상자를 다시 연다.
-        requestReopen: () => { void openFileViaPicker(services); },
+        requestReopen: () => {
+          // [doogle] 데스크탑: 두글의 열기(OS 대화상자)로 — 경로를 알아야 다음부터 바로 열린다
+          const automation = (window as unknown as { rhwpStudio?: { automation?: {
+            isEnabled(id: string): boolean; execute(id: string, params?: unknown, options?: unknown): unknown;
+          } } }).rhwpStudio?.automation;
+          if (isDesk() && automation) {
+            try {
+              automation.execute('ext:doogle.open-native', {}, { allowDialog: true });
+              return;
+            } catch { /* 명령이 없으면 아래 upstream 열기로 */ }
+          }
+          void openFileViaPicker(services);
+        },
       });
     },
   },

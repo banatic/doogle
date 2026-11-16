@@ -534,6 +534,18 @@ async function openTemplate(t: TemplateInfo): Promise<void> {
 type PathOpener = (path: string) => Promise<unknown>;
 let pathOpener: PathOpener | null = null;
 
+/**
+ * 최근 문서를 기억해 둔 경로로 연다(데스크탑). 경로를 알고 열기를 시작했으면 true —
+ * false 면 부르는 쪽이 upstream 의 최근 문서 열기(브라우저 파일 손잡이 또는 다시 고르기)로 간다.
+ * 백스테이지의 최근 문서 카드와 시작 화면의 최근 문서가 같은 길을 쓴다.
+ */
+export function openRecentByKnownPath(fileName: string): boolean {
+  const path = isDesk() ? rememberedPath(fileName) : null;
+  if (!path || !pathOpener) return false;
+  void pathOpener(path);
+  return true;
+}
+
 /** 경로로 문서를 여는 길(index.ts openPath) — 데스크탑의 최근 문서 카드가 쓴다 */
 export function setBackstagePathOpener(fn: PathOpener | null): void {
   pathOpener = fn;

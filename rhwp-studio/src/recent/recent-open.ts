@@ -38,7 +38,7 @@ export async function openRecentEntry(
   // 메타-only 항목: 라이브 핸들이 없어 자동 재열기 불가 → 파일 다시 선택 유도.
   if (!entry.handle) {
     deps.toast(
-      `"${entry.fileName}"은(는) 핸들 없이 열려 자동 재열기가 불가합니다. 파일을 다시 선택하세요.`,
+      `"${entry.fileName}"의 파일 위치를 기억하지 못했습니다(끌어다 놓아 연 문서 등). 파일을 다시 골라 주세요.`,
       4000,
     );
     deps.requestReopen?.();

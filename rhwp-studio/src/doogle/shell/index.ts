@@ -26,7 +26,8 @@ import { installWindowControls, markDragRegion } from './window-controls';
 import { guardedSave, installCloseGuard } from './close-guard';
 import { installNativeSavePicker } from './native-file.ts';
 import { installUpdater } from './updater';
-import { getDocState, noteDocumentSwap, onDocState, refreshDocState, type DocState } from './doc-state';
+import { getDocState, noteDocumentSwap, onDocState, refreshDocState, switchDocState, type DocState } from './doc-state';
+import { getDocHub } from '../workspace/doc-hub.ts';
 import { openPopupMenu, type PopupEntry } from './popup-menu';
 import { mountFontNotice } from './font-notice';
 import { installNarrowFit } from './narrow-fit';
@@ -40,7 +41,10 @@ export { getDocState, onDocState, noteDocumentPath, DOC_STATE_EVENT, DOC_PATH_EV
 export type { DocState } from './doc-state';
 export { confirmLeaveDocument, guardedSave, replaceDocument } from './close-guard';
 export { deskFileHandle, installNativeSavePicker } from './native-file.ts';
-export { setBackstagePathOpener } from './backstage';
+export { setBackstagePathOpener, openRecentByKnownPath } from './backstage';
+
+/** 초점 문서(탭)가 바뀌었다 — 문서 상태를 새 문서의 것으로 바꾼 뒤에 쏜다. detail: { id } (문서 없으면 null) */
+export const DOC_FOCUS_EVENT = 'doogle:doc-focus';
 
 const AGENT_PANEL_ID = 'agent';
 /** "저장됨 ✓" 표시 시간 */
@@ -272,6 +276,24 @@ export function attachShellHost(host: PluginHost): void {
     host.events.on(name, queueRefreshAll);
   }
   host.onDocumentSwap(() => { noteDocumentSwap(); queueRefreshAll(); });
+  // 문서 탭: 초점 문서가 바뀌면 문서 상태(이름·dirty·경로·저장 시각)를 그 문서의 것으로 바꾸고 다른 표면에 알린다.
+  // 경로·저장 시각은 문서마다 따로라 세션에 적어 둔다.
+  const hub = getDocHub();
+  if (hub) {
+    onDocState((s) => {
+      const focused = hub.focused;
+      if (!focused || !focused.ready || !s.hasDocument) return;
+      const pathChanged = focused.path !== s.path;
+      focused.path = s.path;
+      focused.savedAt = s.savedAt;
+      if (pathChanged) hub.refreshUi();
+    });
+    hub.onFocus((next) => {
+      switchDocState(next ? { path: next.path, savedAt: next.savedAt } : null);
+      window.dispatchEvent(new CustomEvent(DOC_FOCUS_EVENT, { detail: { id: next?.id ?? null } }));
+      queueRefreshAll();
+    });
+  }
   // 서식으로 새 문서 열기도 지금 문서를 바꾼다 — 열기와 같은 확인을 거친다
   setBackstageLoader((bytes, fileName) => host.loadDocument(bytes, fileName).catch((error: unknown) => {
     // 파싱 실패는 host.loadDocument 가 이미 화면에 알렸다

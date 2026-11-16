@@ -12,7 +12,7 @@
  *  - 브라우저: 아무것도 하지 않는다.
  */
 import { invoke, isDesk, listen } from '../ui/desk-bridge';
-import { confirmLeaveDocument, discardRecoveryDraft } from './close-guard';
+import { confirmLeaveAllDocuments, discardRecoveryDraft } from './close-guard';
 import { iconSvg } from './icons';
 import { setUpdateProgress } from './status';
 
@@ -228,7 +228,7 @@ export function openUpdatePopover(): void {
 
 async function runInstall(): Promise<void> {
   if (installing) return;
-  if (!(await confirmLeaveDocument())) return;
+  if (!(await confirmLeaveAllDocuments())) return;
   // 설치기가 앱을 끝낸다 — 정상 종료와 같으니 자동 저장 임시본을 먼저 지운다(재시작 뒤 복구 안내가 뜨지 않게)
   await discardRecoveryDraft();
   installing = true;

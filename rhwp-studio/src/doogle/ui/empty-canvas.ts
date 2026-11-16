@@ -13,6 +13,8 @@ import './empty-canvas.css';
 export interface EmptyCanvasOptions {
   /** 열기 (데스크탑이면 기본 파일 대화상자) */
   openDocument(): void;
+  /** 최근 문서를 기억해 둔 경로로 연다(데스크탑). 열기를 시작했으면 true — false 면 upstream 의 최근 문서 열기로 간다 */
+  openRecent?(fileName: string): boolean;
 }
 
 const MAX_RECENT = 3;
@@ -33,7 +35,8 @@ function refreshRecent(): void {
 }
 
 export function mountEmptyCanvas(host: PluginHost, options: EmptyCanvasOptions): () => void {
-  const container = document.getElementById('scroll-container');
+  // 문서 탭: 시작 화면은 "문서 없음" 자리(원래의 스크롤 영역)에 붙는다 — 문서마다 있는 스크롤 영역이 아니다
+  const container = document.querySelector<HTMLElement>('.dg-ws-empty > .dg-doc-view') ?? document.getElementById('scroll-container');
   if (!container) return () => {};
 
   const root = el('div', 'dg-canvas-empty');
@@ -74,7 +77,8 @@ export function mountEmptyCanvas(host: PluginHost, options: EmptyCanvasOptions):
       b.type = 'button';
       if (item.title) b.title = item.title;
       b.append(icon('file', 14), el('span', 'dg-ce-recent-name', name), el('span', 'dg-ce-recent-meta', meta));
-      b.addEventListener('click', () => item.click());
+      // 데스크탑에서 경로를 아는 문서는 그 경로로 바로 연다 — upstream 항목은 파일 손잡이가 없으면 다시 고르게 한다
+      b.addEventListener('click', () => { if (!options.openRecent?.(name)) item.click(); });
       li.append(b);
       recent.append(li);
     }
@@ -113,6 +117,10 @@ export function mountEmptyCanvas(host: PluginHost, options: EmptyCanvasOptions):
     host.onDocumentSwap(() => update()),
     host.events.on('document-changed', () => update()),
   ];
+  // 문서 탭: 마지막 탭을 닫으면 문서 교체 없이 문서가 없어진다
+  const onDocFocus = () => update();
+  window.addEventListener('doogle:doc-focus', onDocFocus);
+  offs.push(() => window.removeEventListener('doogle:doc-focus', onDocFocus));
   update();
 
   return () => {

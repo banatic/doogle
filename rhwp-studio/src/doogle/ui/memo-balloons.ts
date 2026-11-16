@@ -138,6 +138,10 @@ export function mountMemoBalloons(host: PluginHost): MemoBalloonsHandle {
 
   function setZone(active: boolean): void {
     const sc = document.getElementById('scroll-container');
+    // 문서 탭: 말풍선은 지금 문서에만 그린다 — 다른 문서의 스크롤 영역에 남은 자리는 걷는다
+    for (const other of document.querySelectorAll<HTMLElement>('.dg-doc-view')) {
+      if (other !== sc && other.style.paddingRight) other.style.paddingRight = '';
+    }
     if (!sc) return;
     const want = active ? `${ZONE_WIDTH}px` : '';
     if (sc.style.paddingRight !== want) sc.style.paddingRight = want;
@@ -322,7 +326,7 @@ export function mountMemoBalloons(host: PluginHost): MemoBalloonsHandle {
 
   function render(): void {
     if (disposed || busyId !== null) return;
-    const content = document.getElementById('scroll-content');
+    const content = document.querySelector<HTMLElement>('#scroll-container > #scroll-content');
     if (content !== observed) {
       if (observed) observer?.unobserve(observed);
       observed = content;
@@ -407,6 +411,10 @@ export function mountMemoBalloons(host: PluginHost): MemoBalloonsHandle {
   ];
   window.addEventListener('resize', schedule);
   offs.push(() => window.removeEventListener('resize', schedule));
+  // 문서 탭: 초점 문서가 바뀌면 그 문서의 메모로 다시 그린다
+  const onDocFocus = () => { busyId = null; schedule(); };
+  window.addEventListener('doogle:doc-focus', onDocFocus);
+  offs.push(() => window.removeEventListener('doogle:doc-focus', onDocFocus));
   schedule();
 
   return {

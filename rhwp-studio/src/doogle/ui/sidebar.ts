@@ -57,6 +57,8 @@ export interface SidebarDeps {
   openExternal(url: string): Promise<void>;
   /** 모드가 바뀌었을 때 (실행기가 다음 도구 호출부터 반영) */
   onModeChange?(mode: AgentMode): void;
+  /** 턴을 시작한다 — 문서 탭에서 이 대화의 편집을 지금 초점 문서에 묶는다 */
+  onTurnStart?(threadId: string): void;
   /** 문서·선택 상황 — 빈 대화의 상황별 제안과 첫 실행 체크리스트 */
   getDocContext?(): DocContext;
   /** 문서 열기 (체크리스트 ②, "문서를 열면…" 안내) */
@@ -1976,6 +1978,7 @@ export class DoogleSidebar {
     this.appendToLog(root);
     this.renderPlaceholder();
     this.busy = true;
+    try { this.deps.onTurnStart?.(turn.threadId); } catch (error) { console.error('[doogle] onTurnStart 실패', error); }
     reviewStore.setBusy(true);
     this.announce('응답을 작성하는 중');
     this.renderComposer();

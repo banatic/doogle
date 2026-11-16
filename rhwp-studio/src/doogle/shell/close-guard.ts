@@ -15,6 +15,8 @@ import { getDocState } from './doc-state';
 import { getPendingCount } from './status';
 import { context, run } from './studio';
 import { showReviewSaveDialog } from './unsaved-review-dialog';
+import { getDocHub } from '../workspace/doc-hub.ts';
+import { getWorkspace } from '../workspace/workspace.ts';
 
 const EVENT_CLOSE_REQUESTED = 'doogle://close-requested';
 /** 저장 명령을 보낸 뒤 문서가 깨끗해지기를 기다리는 최대 시간 */
@@ -145,7 +147,8 @@ export function confirmLeaveDocument(): Promise<boolean> {
  * load 가 던진 오류 가운데 `shown` 표시가 있는 것은 이미 화면에 알린 것이다(파싱 실패 — host.loadDocument).
  */
 export async function replaceDocument(load: () => Promise<void>, failed = '문서를 열지 못했습니다'): Promise<boolean> {
-  if (!(await confirmLeaveDocument())) return false;
+  // 문서 탭: 지금 문서를 닫지 않고 새 탭에 열므로 묻지 않는다
+  if (!getDocHub() && !(await confirmLeaveDocument())) return false;
   try {
     await load();
     return true;
@@ -216,10 +219,19 @@ export async function discardRecoveryDraft(): Promise<void> {
   }
 }
 
+/**
+ * 열린 문서를 모두 떠나도 되는가(창 닫기·업데이트 재시작). 문서 탭이면 손댄 문서를 차례로 묻고,
+ * 하나라도 취소하면 false. 탭이 없는 구성에서는 지금 문서 하나만 묻는다.
+ */
+export function confirmLeaveAllDocuments(): Promise<boolean> {
+  const workspace = getWorkspace();
+  return workspace ? workspace.confirmCloseAll() : confirmLeaveDocument();
+}
+
 /** 창 닫기 — 확인 뒤 `confirm_close`. 확인 중 다시 불리면 같은 확인을 기다린다. */
 export async function requestClose(): Promise<void> {
   if (!isDesk()) return;
-  if (!(await confirmLeaveDocument())) return;
+  if (!(await confirmLeaveAllDocuments())) return;
   await discardRecoveryDraft();
   try {
     await invoke<void>('confirm_close');

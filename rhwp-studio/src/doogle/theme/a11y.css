@@ -18,7 +18,7 @@
     [role="menuitemcheckbox"], [role="option"], [role="switch"], [role="checkbox"],
     [role="radio"], [role="treeitem"], [role="gridcell"],
     input[type="checkbox"], input[type="radio"], input[type="range"],
-    [tabindex]:not([tabindex="-1"]):not(#scroll-container):not(canvas)
+    [tabindex]:not([tabindex="-1"]):not(#scroll-container):not(.dg-doc-view):not(canvas)
   ):focus-visible {
   outline: 2px solid var(--dg-focus);
   outline-offset: 2px;

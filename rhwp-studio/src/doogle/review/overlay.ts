@@ -69,7 +69,7 @@ function rangeOf(change: PendingChangeSet): PluginTextRange | null {
 
 /** 화면에 보이는 선택 사각형들의 합 (없으면 캐럿) */
 function anchorRect(): DOMRect | null {
-  const boxes = [...document.querySelectorAll<HTMLElement>('#scroll-content .selection-layer > div')]
+  const boxes = [...document.querySelectorAll<HTMLElement>('#scroll-container > #scroll-content .selection-layer > div')]
     .filter((node) => node.style.display !== 'none')
     .map((node) => node.getBoundingClientRect())
     .filter((r) => r.width > 0 && r.height > 0);
@@ -80,7 +80,7 @@ function anchorRect(): DOMRect | null {
     const bottom = Math.max(...boxes.map((r) => r.bottom));
     return new DOMRect(left, top, right - left, bottom - top);
   }
-  const caret = document.querySelector<HTMLElement>('#scroll-content .caret');
+  const caret = document.querySelector<HTMLElement>('#scroll-container > #scroll-content .caret');
   if (caret && caret.offsetParent !== null) {
     const r = caret.getBoundingClientRect();
     if (r.height > 0) return r;
@@ -211,7 +211,7 @@ export function mountReviewOverlay(host: PluginHost, pending: PendingApi): Revie
   }
   function renderMarks(): void {
     const rows = reviewStore.rows();
-    const content = document.getElementById('scroll-content');
+    const content = document.querySelector<HTMLElement>('#scroll-container > #scroll-content');
     const map = pageToContent();
     if (rows.length === 0 || !content || !map || !pending.rectsOf) {
       marks?.remove();

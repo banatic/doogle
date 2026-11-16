@@ -12,7 +12,7 @@ import {
   describeToolCall, doneText, formatToolFailure, needsUserAction, parseBatchFailures, progressText, progressive,
 } from '../../ui/tool-presentation.ts';
 import { matchReviewKey, impactSentence, chainSentence, gutterPositions, rejectLabel } from '../../review/keys.ts';
-import { nextAutoFit } from '../../shell/narrow-fit.ts';
+import { nextAutoFit, nextFit } from '../../shell/narrow-fit.ts';
 import { fontNoticeText } from '../../shell/font-notice.ts';
 
 // ─── 가짜 원천 / 엔진 ──────────────────────────────────
@@ -424,6 +424,27 @@ test('narrow window: zoom shrinks to fit, restores when there is room, and yield
   assert.deepEqual(nextAutoFit(shrunk.auto, 50, 120, false), { auto: null, set: null });
   // 이미 들어와 있으면 그대로
   assert.deepEqual(nextAutoFit(null, 70, 78, true), { auto: null, set: null });
+});
+
+test('narrow fit: a zoom the user picked is kept even when the page overflows', () => {
+  // 처음 잴 때는 좁으면 폭에 맞춘다
+  const first = nextFit(null, 100, 60, true);
+  assert.equal(first.set, 60);
+  // 사용자가 확대했다 — 넘쳐도 되돌리지 않고, 다시 재도 그대로 둔다
+  const zoomed = nextFit(first.memory, 120, 60, true);
+  assert.deepEqual(zoomed, { memory: { auto: null, lastZoom: 120, hold: true }, set: null });
+  assert.equal(nextFit(zoomed.memory, 120, 60, true).set, null);
+  assert.equal(nextFit(zoomed.memory, 120, 55, true).set, null);
+  // 맞춘 적이 없는 상태에서 확대해도 같다
+  const plain = nextFit(null, 50, 60, true);
+  assert.equal(plain.set, null);
+  assert.equal(nextFit(plain.memory, 90, 60, true).set, null);
+  // 그 배율이 다시 폭에 들어오면 지키기를 푼다 — 그 뒤 좁아지면 다시 맞춘다
+  const roomy = nextFit(zoomed.memory, 120, 130, true);
+  assert.deepEqual(roomy, { memory: { auto: null, lastZoom: 120, hold: false }, set: null });
+  assert.equal(nextFit(roomy.memory, 120, 70, true).set, 70);
+  // 우리가 넣은 배율은 사용자가 바꾼 것으로 보지 않는다 — 넓어지면 원래대로 돌아간다
+  assert.equal(nextFit(first.memory, 60, 130, false).set, 100);
 });
 
 test('font notice: says "not checked yet" until the fonts were actually looked for', () => {

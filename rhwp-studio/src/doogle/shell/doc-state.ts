@@ -123,6 +123,26 @@ export function refreshDocState(): void {
   publish({ hasDocument, dirty, format: hasDocument ? formatOf(name, ctx?.sourceFormat) : null, path, name, savedAt });
 }
 
+/**
+ * 초점 문서가 바뀌었다(문서 탭) — 상태를 새 문서의 것으로 통째로 바꾼다. 경로·저장 시각은 문서마다 따로라
+ * 부르는 쪽(탭)이 기억해 둔 값을 준다. 창 제목이 새 문서 이름으로 바뀐 뒤에 불러야 한다.
+ */
+export function switchDocState(next: { path: string | null; savedAt: number | null } | null): void {
+  const ctx = context();
+  const name = titleName();
+  const hasDocument = !!ctx?.hasDocument && !!name;
+  swapped = false;
+  pending = null;
+  publish({
+    hasDocument,
+    dirty: hasDocument && !!ctx?.isDirty,
+    format: hasDocument ? formatOf(name, ctx?.sourceFormat) : null,
+    path: hasDocument ? next?.path ?? null : null,
+    name,
+    savedAt: hasDocument ? next?.savedAt ?? null : null,
+  });
+}
+
 /** 문서 교체(새 문서·열기) — 이어지는 clean 전환을 저장으로 오인하지 않게 한다. */
 export function noteDocumentSwap(): void {
   swapped = true;

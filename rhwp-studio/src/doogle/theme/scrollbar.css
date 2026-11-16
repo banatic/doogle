@@ -57,12 +57,16 @@
 
 /* 문서 캔버스 스크롤러(캔버스와 사이드바 사이의 세로 막대): 크롬 바탕 위에 둔다. */
 :root[data-doogle] #scroll-container::-webkit-scrollbar-track,
-:root[data-doogle] #scroll-container::-webkit-scrollbar-corner {
+:root[data-doogle] #scroll-container::-webkit-scrollbar-corner,
+:root[data-doogle] .dg-doc-view::-webkit-scrollbar-track,
+:root[data-doogle] .dg-doc-view::-webkit-scrollbar-corner {
   background: var(--dg-chrome);
 }
-:root[data-doogle] #scroll-container::-webkit-scrollbar-track:vertical {
+:root[data-doogle] #scroll-container::-webkit-scrollbar-track:vertical,
+:root[data-doogle] .dg-doc-view::-webkit-scrollbar-track:vertical {
   border-left: 1px solid var(--dg-divider);
 }
-:root[data-doogle] #scroll-container::-webkit-scrollbar-track:horizontal {
+:root[data-doogle] #scroll-container::-webkit-scrollbar-track:horizontal,
+:root[data-doogle] .dg-doc-view::-webkit-scrollbar-track:horizontal {
   border-top: 1px solid var(--dg-divider);
 }

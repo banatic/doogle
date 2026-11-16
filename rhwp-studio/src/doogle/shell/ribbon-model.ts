@@ -236,6 +236,13 @@ export const RIBBON_TABS: RibbonTab[] = [
         ],
       },
       {
+        id: 'split', caption: '화면 나누기', priority: 3,
+        items: [
+          cmd('ext:doogle.split-right', '오른쪽으로', 'panelRight', 'sm'),
+          cmd('ext:doogle.split-down', '아래로', 'panel', 'sm'),
+        ],
+      },
+      {
         id: 'ribbon', caption: '리본', priority: 2,
         items: [
           action('ribbon-collapse', '리본 접기', 'chevronUp', 'sm'),

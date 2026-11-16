@@ -32,6 +32,8 @@ import { getChromeVisibility, setChromeVisibility } from '@/automation/chrome';
 import type { ChromeVisibility } from '@/automation/types';
 import { PluginHostRegistry } from '@/plugin/host';
 import { isDoogleMode, dooglePlugin } from '@/doogle/index.ts';
+import { createDocHub, type DocSession, type SessionEngine } from '@/doogle/workspace/doc-hub.ts';
+import { mountWorkspace } from '@/doogle/workspace/workspace.ts';
 import { flashCardDropHint, hideCardDropHint, updateCardDropHint } from '@/doogle/shell/card-drop-hint.ts';
 import type { StudioPlugin } from '@/plugin/types';
 import { CommandDispatcher } from '@/command/dispatcher';
@@ -129,10 +131,16 @@ import { navigateToSearchHit } from '@/ui/find-dialog';
 // 원문(ko)으로 물러나므로 번역이 없는 상태에서도 화면은 도입 전과 같다.
 initI18n();
 
-const wasm = new WasmBridge();
+// [doogle] 문서 탭 — 두글 모드(embed·iframe 제외)에서는 문서마다 세션(WasmBridge + 편집기 묶음)을 두고,
+// 아래 전역 넷은 "지금 문서"(초점 세션)로 넘기는 대리 객체가 된다(doogle/workspace/doc-hub.ts).
+// 그 밖의 구성에서는 docHub 가 null 이고 종전과 똑같이 객체를 하나씩 만든다.
+const docHub = isDoogleMode() && window.parent === window
+  && resolveChromeModeRequest(window.location.search).mode !== 'embed'
+  ? createDocHub() : null;
+const wasm = docHub?.wasm ?? new WasmBridge();
 installDocumentTitle(wasm);
-const eventBus = new EventBus();
-const documentState = new DocumentDirtyState(eventBus);
+const eventBus: EventBus = docHub?.eventBus ?? new EventBus();
+const documentState = docHub?.documentState ?? new DocumentDirtyState(eventBus);
 installCommandErrorGlobalRouting(window);
 // WKWebView 등 직접 호스트는 EventTarget을 구독하고 이 조회로 현재 문서 세션을 확인한다.
 Object.defineProperty(window, 'rhwpCommandErrors', { value: Object.freeze({
@@ -141,8 +149,9 @@ Object.defineProperty(window, 'rhwpCommandErrors', { value: Object.freeze({
   inspect: inspectCommandError,
   getState: () => inputHandler?.getCommandErrorState() ?? null,
 }), configurable: true });
-documentState.installBeforeUnload(window);
-const autosaveManager = new AutosaveManager({
+// [doogle] 문서(세션)마다 하나씩 만들 수 있게 함수로 뺐다. 상태 표시줄 알림은 초점 문서의 것만 보인다.
+function createAutosaveManager(wasm: WasmBridge): AutosaveManager {
+  const manager: AutosaveManager = new AutosaveManager({
   exportBytes: () => wasm.exportHwp(),
   // No plaintext persistence: protected documents need a session-only recovery key.
   isRecoveryBlocked: () => wasm.requiresPasswordForSave && !wasm.recoveryCipher,
@@ -153,10 +162,16 @@ const autosaveManager = new AutosaveManager({
     return cipher.protect(draft);
   },
   schedule: autosaveScheduleFromUserSettings(),
-  onStatus: handleAutosaveStatus,
-});
-autosaveManager.connect(eventBus);
-wasm.onRecoveryProtectionChanged = () => { void autosaveManager.discardCurrentDraft('protection-changed'); };
+  onStatus: (status) => { if (!docHub || docHub.focused?.autosaveManager === manager) handleAutosaveStatus(status); },
+  });
+  wasm.onRecoveryProtectionChanged = () => { void manager.discardCurrentDraft('protection-changed'); };
+  return manager;
+}
+const autosaveManager = docHub?.autosaveManager ?? createAutosaveManager(wasm);
+if (!docHub) {
+  documentState.installBeforeUnload(window);
+  autosaveManager.connect(eventBus);
+}
 initThemeSync((effective, mode) => {
   eventBus.emit('theme-changed', { mode, effective });
   eventBus.emit('command-state-changed');
@@ -191,7 +206,13 @@ async function completeHostSave(fileName?: string): Promise<{ ok: true; wasDirty
   fonts: { setProvider: setHostFontProvider, getState: getHostFontState },
   // [doogle] 창을 닫기로 확정했을 때(저장했거나 "저장 안 함") 자동 저장 임시본을 지운다.
   // 삭제 완료까지 await 하므로 resolve 뒤 창을 없애도 IndexedDB 삭제가 잘리지 않는다.
-  recovery: { discardDraft: (reason = 'host-close') => autosaveManager.discardCurrentDraft(reason) },
+  // 문서 탭이 여럿이면 열린 문서 모두의 임시본을 지운다.
+  recovery: { discardDraft: (reason = 'host-close') => docHub
+    ? Promise.all(docHub.sessions.map((s) => s.autosaveManager.discardCurrentDraft(reason))).then(() => undefined)
+    : autosaveManager.discardCurrentDraft(reason) },
+  // [doogle] 명령 입력을 연다. InputHandler 의 Ctrl+/ 는 문서가 열려 있고 편집 입력에 초점이 있을 때만
+  // 받으므로(시작 화면·사이드바·리본에서는 안 먹는다) 셸이 이 통로로 직접 연다. 아직 없으면 false.
+  palette: { open: (): boolean => { commandPalette?.open(); return commandPalette !== null; } },
   // [doogle] 쪽 좌표(px, 배율 1) → #scroll-content 안 좌표. 캐럿과 같은 계산(caret-renderer updatePosition).
   // 읽기 전용 — 문서 위에 장식(에이전트 편집 표시)을 얹을 때 쓴다. 뷰가 없으면 null.
   view: {
@@ -199,7 +220,7 @@ async function completeHostSave(fileName?: string): Promise<{ ok: true; wasDirty
       if (!canvasView) return null;
       const vs = canvasView.getVirtualScroll();
       const zoom = canvasView.getViewportManager().getZoom();
-      const content = document.getElementById('scroll-content');
+      const content = document.querySelector('#scroll-container > #scroll-content');
       const pageLeft = vs.getPageLeftResolved(pageIndex, content?.clientWidth ?? 0);
       return { left: pageLeft + x * zoom, top: vs.getPageOffset(pageIndex) + y * zoom, zoom };
     },
@@ -212,6 +233,7 @@ if (import.meta.env.DEV) {
   (window as any).__eventBus = eventBus;
   (window as any).__documentState = documentState;
   (window as any).__autosaveManager = autosaveManager;
+  (window as any).__docHub = docHub;
   (window as any).__theme = { getThemeMode, getEffectiveTheme, setThemeMode };
   (window as any).__localFonts = {
     clearStoredLocalFonts,
@@ -222,6 +244,8 @@ if (import.meta.env.DEV) {
   initRhwpDev(wasm);
 }
 let canvasView: CanvasView | null = null;
+// [doogle] 명령 입력(Ctrl+/) — 편집 입력에 초점이 없거나 문서가 없을 때도 셸이 직접 연다.
+let commandPalette: CommandPalette | null = null;
 let inputHandler: InputHandler | null = null;
 let documentAgent: DocumentAgentController | null = null;
 let toolbar: Toolbar | null = null;
@@ -615,6 +639,8 @@ async function initialize(): Promise<void> {
     const canvaskitMode = canvaskitModeRequest.mode;
     const canvaskitSurfaceRequest = resolveCanvasKitSurfaceRequest(window.location.search);
     const renderProfile = resolveRenderProfile(window.location.search);
+    // [doogle] 문서(탭)마다 RendererSession 하나 — 안쪽의 wasm 은 그 문서의 것이다(들여쓰기는 diff 를 줄이려 그대로 둔다).
+    const makeRendererSession = (wasm: WasmBridge): RendererSession => {
     // Each renderer decision owns a fresh report (document/edit/resource revision).
     // Share declarations only; local/host availability is resolved again after preparation.
     const documentFontUsage = new WeakMap<CanvasKitDocumentPreflight, DocumentCanvasKitFontUsage[]>();
@@ -655,7 +681,7 @@ async function initialize(): Promise<void> {
       );
     }
     renderBackendFallbackReason = renderBackendRequest.unsupportedReason ?? null;
-    rendererSession = new RendererSession(
+    return new RendererSession(
       renderBackendRequest,
       canvaskitModeRequest,
       canvaskitSurfaceRequest,
@@ -731,16 +757,23 @@ async function initialize(): Promise<void> {
         },
       },
     );
+    };
     msg.textContent = 'HWP 파일을 선택해주세요.';
 
-    const container = document.getElementById('scroll-container')!;
-    canvasView = new CanvasView(
+    commandPalette = new CommandPalette(registry, dispatcher);
+    // [doogle] 편집기 묶음(뷰·눈금자·입력·렌더러) — 문서(탭)마다 하나. 비두글 모드에서는 아래에서 한 번만 만든다.
+    // 안쪽의 wasm·eventBus·documentState·canvasView·inputHandler 는 그 문서의 것이다(전역 것을 가린다).
+    const buildEditorView = (
+      container: HTMLElement, hRulerCanvas: HTMLCanvasElement, vRulerCanvas: HTMLCanvasElement,
+      wasm: WasmBridge, eventBus: EventBus, documentState: DocumentDirtyState,
+    ): SessionEngine => {
+    const rendererSession = makeRendererSession(wasm);
+    const canvasView = new CanvasView(
       container,
       wasm,
       eventBus,
       rendererSession,
     );
-    await startDevelopmentRenderRuntime();
 
     // [#3313] 외부 연결 그림(HWP3 pic_type=0)의 비동기 주입이 첫 렌더 이후에 끝나면
     // 화면이 이전 프레임(그림 없는 상태)에 머무른다. 주입 완료 시 뷰 문서를 다시
@@ -750,9 +783,9 @@ async function initialize(): Promise<void> {
     };
 
     // 눈금자 초기화
-    ruler = new Ruler(
-      document.getElementById('h-ruler') as HTMLCanvasElement,
-      document.getElementById('v-ruler') as HTMLCanvasElement,
+    const ruler = new Ruler(
+      hRulerCanvas,
+      vRulerCanvas,
       container,
       eventBus,
       wasm,
@@ -760,7 +793,7 @@ async function initialize(): Promise<void> {
       canvasView.getViewportManager(),
     );
 
-    inputHandler = new InputHandler(
+    const inputHandler = new InputHandler(
       container, wasm, eventBus,
       canvasView.getVirtualScroll(),
       canvasView.getViewportManager(),
@@ -778,8 +811,7 @@ async function initialize(): Promise<void> {
       },
     });
     inputHandler.setEditMode(editMode);
-    documentAgent?.dispose();
-    documentAgent = new DocumentAgentController({
+    const documentAgent = new DocumentAgentController({
       wasm,
       input: inputHandler,
       eventBus,
@@ -821,13 +853,10 @@ async function initialize(): Promise<void> {
       );
     };
 
-    toolbar = new Toolbar(document.getElementById('style-bar')!, wasm, eventBus, dispatcher);
-    toolbar.setEnabled(false);
-
     // InputHandler에 커맨드 디스패처 및 컨텍스트 메뉴 주입
     inputHandler.setDispatcher(dispatcher);
     inputHandler.setContextMenu(new ContextMenu(dispatcher, registry));
-    inputHandler.setCommandPalette(new CommandPalette(registry, dispatcher));
+    inputHandler.setCommandPalette(commandPalette!);
     inputHandler.setCellSelectionRenderer(
       new CellSelectionRenderer(
         container,
@@ -844,6 +873,54 @@ async function initialize(): Promise<void> {
     inputHandler.setPictureObjectRenderer(
       new TableObjectRenderer(container, canvasView.getVirtualScroll(), true),
     );
+    return { canvasView, inputHandler, documentAgent, ruler, rendererSession };
+    };
+
+    if (docHub) {
+      // 문서를 열 때마다 hub 가 부른다 — 탭 하나에 세션 하나
+      docHub.setFactory(async (frame, bus, disposers) => {
+        const sessionWasm = new WasmBridge();
+        await sessionWasm.initialize();
+        const state = new DocumentDirtyState(bus);
+        disposers.push(state.installBeforeUnload(window));
+        const autosave = createAutosaveManager(sessionWasm);
+        autosave.connect(bus);
+        bus.on('document-mutated', (reason) => state.markDirty(typeof reason === 'string' ? reason : 'document-mutated'));
+        bus.on('document-changed', (reason) => state.markDirty(typeof reason === 'string' ? reason : 'document-changed'));
+        bus.on('document-dirty-changed', () => docHub.refreshUi());
+        sessionWasm.onFileNameChanged = () => {
+          if (docHub.focused?.wasm === sessionWasm) docHub.baseWasm.onFileNameChanged?.('');
+          docHub.refreshUi();
+        };
+        const engine = buildEditorView(frame.container, frame.hRuler, frame.vRuler, sessionWasm, bus, state);
+        attachDocumentDropHandlers(frame.container, sessionWasm, () => engine.inputHandler);
+        return { wasm: sessionWasm, documentState: state, autosaveManager: autosave, engine };
+      });
+      docHub.onApply((session) => {
+        canvasView = session?.engine.canvasView ?? null;
+        inputHandler = session?.engine.inputHandler ?? null;
+        documentAgent = session?.engine.documentAgent ?? null;
+        ruler = session?.engine.ruler ?? null;
+        rendererSession = session?.engine.rendererSession ?? null;
+      });
+      docHub.onBlur((_next, prev) => {
+        if (prev) prev.vars = { totalSections, currentDocumentFonts, lastAppliedLocalFontGeneration, editMode, fontEpoch };
+      });
+      docHub.onFocus((next) => syncChromeToFocusedDocument(next));
+      mountWorkspace(docHub);
+    } else {
+      const view = buildEditorView(
+        document.getElementById('scroll-container')!,
+        document.getElementById('h-ruler') as HTMLCanvasElement,
+        document.getElementById('v-ruler') as HTMLCanvasElement,
+        wasm, eventBus, documentState,
+      );
+      ({ canvasView, inputHandler, documentAgent, ruler, rendererSession } = view);
+    }
+    await startDevelopmentRenderRuntime();
+
+    toolbar = new Toolbar(document.getElementById('style-bar')!, wasm, eventBus, dispatcher);
+    toolbar.setEnabled(false);
 
     new MenuBar(document.getElementById('menu-bar')!, eventBus, dispatcher, registry, {
       onMenuOpen: (menuName) => {
@@ -965,7 +1042,7 @@ async function initialize(): Promise<void> {
 
     // E2E 테스트용 전역 노출 (개발 모드 전용)
     if (import.meta.env.DEV) {
-      if (new URLSearchParams(window.location.search).get('scrollProbe') === '1') {
+      if (new URLSearchParams(window.location.search).get('scrollProbe') === '1' && canvasView && ruler) {
         const { installPageScrollProbe } = await import('./dev/page-scroll-probe');
         installPageScrollProbe(canvasView, ruler, wasm, eventBus, async path => {
           const response = await fetch(`/samples/${encodeURI(path)}`);
@@ -1110,8 +1187,18 @@ function setupFileInput(): void {
   document.addEventListener('drop', (e) => e.preventDefault());
 
   // 드래그 앤 드롭 지원 (scroll-container 영역)
-  const container = document.getElementById('scroll-container')!;
+  attachDocumentDropHandlers(document.getElementById('scroll-container')!, wasm, () => inputHandler);
+}
+
+/**
+ * 문서 영역 하나에 끌어 놓기(파일 열기·그림 넣기·두글 카드)를 붙인다.
+ * [doogle] 문서 탭에서는 문서마다 스크롤 영역이 따로라 영역마다 한 번씩 부른다 — wasm·inputHandler 는 그 문서의 것이다.
+ */
+function attachDocumentDropHandlers(
+  container: HTMLElement, wasm: WasmBridge, getInputHandler: () => InputHandler | null,
+): void {
   container.addEventListener('dragover', (e) => {
+    const inputHandler = getInputHandler();
     e.preventDefault();
     // [doogle] 카드 끌기: 파일 놓기 표시 대신, 놓으면 채워질 자리(표·줄)를 칠한다
     if (e.dataTransfer?.types.includes('application/x-doogle-card')) {
@@ -1129,6 +1216,7 @@ function setupFileInput(): void {
   container.addEventListener('drop', async (e) => {
     e.preventDefault();
     container.classList.remove('drag-over');
+    const inputHandler = getInputHandler();
     // 두글 카드: 놓은 자리로 캐럿을 옮기고 사이드바에 알린다 (채우기는 에이전트가 한다)
     const cardId = e.dataTransfer?.getData('application/x-doogle-card');
     if (cardId) {
@@ -1204,8 +1292,11 @@ function setupFileInput(): void {
 }
 
 function setupZoomControls(): void {
-  if (!canvasView) return;
-  const vm = canvasView.getViewportManager();
+  // [doogle] 문서 탭에서는 뷰가 문서마다 다르다 — 그때그때 지금 문서의 것을 본다
+  const vm = {
+    setZoom: (zoom: number) => canvasView?.getViewportManager().setZoom(zoom),
+    getZoom: () => canvasView?.getViewportManager().getZoom() ?? 1,
+  };
   const zoomIn = document.getElementById('sb-zoom-in') as HTMLButtonElement;
   const zoomOut = document.getElementById('sb-zoom-out') as HTMLButtonElement;
   const zoomRange = document.getElementById('sb-zoom-range') as HTMLInputElement;
@@ -1273,6 +1364,57 @@ function setupZoomControls(): void {
 let totalSections = 1;
 let currentDocumentFonts: string[] = [];
 let lastAppliedLocalFontGeneration: string | null = null;
+/** [doogle] 글꼴 환경이 바뀐 횟수 — 초점이 아니던 문서가 돌아왔을 때 다시 그릴지 가린다 */
+let fontEpoch = 0;
+/** [doogle] 문서를 여는 도중에 웹 글꼴 로딩이 끝났다 — 열기가 끝나면 글자 폭을 다시 재고 그린다 */
+let fontsLoadedWhileOpening = false;
+
+function settleFontsAfterOpen(): void {
+  if (!fontsLoadedWhileOpening) return;
+  fontsLoadedWhileOpening = false;
+  if (!canvasView || wasm.pageCount === 0) return;
+  wasm.invalidateCanvasMetricFonts();
+  eventBus.emit('document-view-changed');
+}
+
+/**
+ * [doogle] 초점 문서가 바뀌었다 — main.ts 가 문서별로 들고 있던 값과 화면(제목·도구 모음·상태 표시줄·글꼴 알림)을
+ * 새 문서의 것으로 맞춘다. 쪽·배율 같은 이벤트 상태는 hub 가 다시 내보낸다.
+ */
+function syncChromeToFocusedDocument(next: DocSession | null): void {
+  if (!docHub) return;
+  const vars = (next?.vars ?? {}) as {
+    totalSections?: number; currentDocumentFonts?: string[]; lastAppliedLocalFontGeneration?: string | null;
+    editMode?: EditorEditMode; fontEpoch?: number;
+  };
+  totalSections = vars.totalSections ?? 1;
+  currentDocumentFonts = vars.currentDocumentFonts ?? [];
+  lastAppliedLocalFontGeneration = vars.lastAppliedLocalFontGeneration ?? null;
+  docHub.baseWasm.onFileNameChanged?.('');
+  const loaded = !!next && wasm.pageCount > 0;
+  toolbar?.setEnabled(loaded);
+  const nextMode = loaded ? vars.editMode ?? 'normal' : 'normal';
+  if (nextMode !== editMode) setEditMode(nextMode);
+  if (!loaded) {
+    if (!docHub.isOpening) sbMessage().textContent = 'HWP 파일을 선택해주세요.';
+    if (!next) announceDoogleFonts([]);
+    return;
+  }
+  try {
+    const info = wasm.getDocumentInfo();
+    setDocumentFontSubstitutions(info.fontSubstitutions);
+    toolbar?.initFontDropdown(info.fontsUsed);
+    toolbar?.initStyleDropdown();
+    commandServices.refreshDocumentStatus();
+    announceDoogleFonts(wasm.getDocumentFontCandidates());
+    if (vars.fontEpoch !== undefined && vars.fontEpoch !== fontEpoch) {
+      wasm.invalidateCanvasMetricFonts();
+      eventBus.emit('document-view-changed');
+    }
+  } catch (error) {
+    console.warn('[main] 초점 문서 화면 맞추기 실패:', error);
+  }
+}
 
 function setupEventListeners(): void {
   sbPage().addEventListener('click', () => {
@@ -1329,6 +1471,8 @@ function setupEventListeners(): void {
     if (selectionStatus.textContent !== nextLabel) selectionStatus.textContent = nextLabel;
   });
 
+  // [doogle] 문서 탭에서는 세션마다 따로 건다(초점이 아닌 문서를 에이전트가 고쳐도 그 문서가 dirty 가 된다)
+  if (!docHub) {
   eventBus.on('document-mutated', (reason) => {
     documentState.markDirty(typeof reason === 'string' ? reason : 'document-mutated');
   });
@@ -1336,6 +1480,7 @@ function setupEventListeners(): void {
   eventBus.on('document-changed', (reason) => {
     documentState.markDirty(typeof reason === 'string' ? reason : 'document-changed');
   });
+  }
 
   eventBus.on('renderer-selection-changed', (payload) => {
     const diagnostics = payload as RendererSessionDiagnostics;
@@ -1348,6 +1493,7 @@ function setupEventListeners(): void {
   });
 
   onHostFontsChanged(() => {
+    fontEpoch += 1;
     if (!canvasView || wasm.pageCount === 0) return;
     wasm.invalidateCanvasMetricFonts();
     void canvasView.refreshFontResources().catch(error => {
@@ -1359,6 +1505,7 @@ function setupEventListeners(): void {
     if ((payload as { source?: string } | undefined)?.source === 'options-dialog-clear') {
       clearDeclaredLocalPrograms();
     }
+    fontEpoch += 1;
     if (!canvasView || wasm.pageCount === 0) return;
     const state = getLocalFontState();
     const generation = `${state.detectedAt ?? 'none'}:${state.source ?? 'none'}:${state.count}`;
@@ -1396,6 +1543,13 @@ function setupEventListeners(): void {
   });
 
   document.fonts.addEventListener('loadingdone', () => {
+    fontEpoch += 1;
+    // [doogle] 문서 탭: 새 탭에 문서를 여는 도중이면 미룬다 — 지금 다시 그리게 하면 진행 중인 첫 그리기 준비가
+    // 무효가 되어 쪽이 그려지지 않은 채 남는다. 열기가 끝난 뒤 한 번 다시 맞춘다(loadBytes).
+    if (docHub?.isOpening) {
+      fontsLoadedWhileOpening = true;
+      return;
+    }
     if (!canvasView || wasm.pageCount === 0) return;
     wasm.invalidateCanvasMetricFonts();
     eventBus.emit('document-view-changed');
@@ -1406,7 +1560,8 @@ function setupEventListeners(): void {
   });
 
   eventBus.on('autosave-settings-changed', () => {
-    autosaveManager.updateSchedule(autosaveScheduleFromUserSettings());
+    if (docHub) for (const s of docHub.sessions) s.autosaveManager.updateSchedule(autosaveScheduleFromUserSettings());
+    else autosaveManager.updateSchedule(autosaveScheduleFromUserSettings());
   });
 
   // 필드 정보 표시
@@ -1446,7 +1601,6 @@ function setupEventListeners(): void {
   const hfLabel = hfGroup?.querySelector('.tb-hf-label') as HTMLElement | null;
   const noteGroup = document.querySelector('.tb-note-group') as HTMLElement | null;
   const defaultTbGroups = document.querySelectorAll('#icon-toolbar .tb-scroll-track > .tb-group:not(.tb-headerfooter-group):not(.tb-note-group):not(.tb-rotate-group), #icon-toolbar .tb-scroll-track > .tb-sep');
-  const scrollContainer = document.getElementById('scroll-container');
   const styleBar = document.getElementById('style-bar');
 
   const hfLiveStatus = document.getElementById('hf-edit-status-live');
@@ -1477,6 +1631,8 @@ function setupEventListeners(): void {
     syncRotateGroup();
     // 서식 도구 모음은 머리말/꼬리말 편집 시에도 유지 (문단/글자 모양 설정 필요)
     // 본문 dimming
+    // [doogle] 문서 탭에서는 스크롤 영역이 문서마다 다르다 — 그때그때 지금 문서의 것을 찾는다
+    const scrollContainer = document.getElementById('scroll-container');
     if (scrollContainer) {
       if (isActive) {
         scrollContainer.classList.add('hf-editing');
@@ -1779,6 +1935,8 @@ async function loadDocumentForOpen(data: Uint8Array, fileName: string, pdfSource
  * 되살려, 열기 실패가 이미 열어 둔 문서를 잃는 일로 번지지 않게 한다.
  */
 function restoreViewAfterFailedOpen(): void {
+  // [doogle] 문서 탭: 열다 실패한 탭은 이미 없앴고 이전 문서는 건드리지 않았다
+  if (docHub) return;
   if (!canvasView || wasm.pageCount === 0) return;
   void canvasView.loadDocument().catch((error) => {
     console.warn('[main] 열기 실패 후 이전 문서 뷰 복구 실패:', error);
@@ -1824,12 +1982,45 @@ function prepareCanvasRendererDocument(): void {
   canvasView?.prepareDocumentLoad();
 }
 
+type LoadBytesOptions = { dataReadProgressShown?: boolean; skipRecent?: boolean; suppressDialogs?: boolean; pdfSource?: PdfInputSource; recoveryCipher?: RecoveryCipher; validateBeforeOpen?: () => Promise<void> };
+
+/**
+ * [doogle] 문서 탭: 지금 문서를 갈아 끼우지 않고 새 탭(세션)을 만들어 거기에 연다.
+ * 이미 같은 파일 손잡이로 열린 탭이 있으면 그 탭으로 간다. 비두글 모드에서는 종전 그대로다.
+ */
 async function loadBytes(
   data: Uint8Array,
   fileName: string,
   fileHandle: typeof wasm.currentFileHandle,
   startTime = performance.now(),
-  options: { dataReadProgressShown?: boolean; skipRecent?: boolean; suppressDialogs?: boolean; pdfSource?: PdfInputSource; recoveryCipher?: RecoveryCipher; validateBeforeOpen?: () => Promise<void> } = {},
+  options: LoadBytesOptions = {},
+): Promise<void> {
+  if (!docHub) return loadBytesIntoCurrent(data, fileName, fileHandle, startTime, options);
+  if (fileHandle) {
+    for (const session of docHub.sessions) {
+      const open = session.wasm.currentFileHandle as { isSameEntry?: (other: unknown) => Promise<boolean> } | null;
+      if (!open) continue;
+      const same = open === fileHandle
+        || (typeof open.isSameEntry === 'function' && await open.isSameEntry(fileHandle).catch(() => false));
+      if (same) {
+        docHub.focus(session);
+        return;
+      }
+    }
+  }
+  try {
+    await docHub.openInNewSession(() => loadBytesIntoCurrent(data, fileName, fileHandle, startTime, options));
+  } finally {
+    settleFontsAfterOpen();
+  }
+}
+
+async function loadBytesIntoCurrent(
+  data: Uint8Array,
+  fileName: string,
+  fileHandle: typeof wasm.currentFileHandle,
+  startTime = performance.now(),
+  options: LoadBytesOptions = {},
 ): Promise<void> {
   // 바이트로 여는 모든 경로(파일 열기 · ?url= · 자동저장 복구 · 호스트 API)의 공통 깔때기다.
   const pdf = Boolean(options.pdfSource) || isPdfInput(data, fileName);
@@ -2028,7 +2219,9 @@ async function offerAutosaveRecoveryIfIdle(): Promise<void> {
 
 async function restoreAutosaveDraft(draft: AutosaveDraft): Promise<void> {
   const fileName = recoveryFileName(draft.fileName);
-  const generation = wasm.documentGeneration;
+  const startGeneration = wasm.documentGeneration;
+  // [doogle] 문서 탭: 복구본은 새 탭에 열리므로 "그새 다른 문서가 열렸는가"를 세대로 가릴 수 없다(가릴 필요도 없다)
+  const generation = { valueOf: () => (docHub ? wasm.documentGeneration : startGeneration) };
   let data: Uint8Array = new Uint8Array(draft.data);
   let cipher: RecoveryCipher | undefined;
   if (draft.protection) {
@@ -2046,9 +2239,9 @@ async function restoreAutosaveDraft(draft: AutosaveDraft): Promise<void> {
   try {
     await loadBytes(data, fileName, null, performance.now(), { skipRecent: true, recoveryCipher: cipher,
       validateBeforeOpen: async () => {
-        if (wasm.documentGeneration !== generation) throw new DocumentOpenCancelledError();
+        if (wasm.documentGeneration !== generation.valueOf()) throw new DocumentOpenCancelledError();
         if (!sameRecoveryDraft(draft, await getAutosaveDraft(draft.id))) throw new Error('RECOVERY_STALE: 복구본이 삭제되거나 변경되었습니다.');
-        if (wasm.documentGeneration !== generation) throw new DocumentOpenCancelledError();
+        if (wasm.documentGeneration !== generation.valueOf()) throw new DocumentOpenCancelledError();
       },
     });
   } catch (error) { cipher?.dispose(); throw error; }
@@ -2062,7 +2255,21 @@ async function restoreAutosaveDraft(draft: AutosaveDraft): Promise<void> {
 }
 
 
+/** [doogle] 문서 탭: 새 문서도 새 탭에 만든다. */
 async function createNewDocument(): Promise<void> {
+  if (!docHub) return createNewDocumentInCurrent();
+  try {
+    await docHub.openInNewSession(() => createNewDocumentInCurrent(), { blank: true });
+    // 새 문서는 글꼴 확인을 건너뛰므로(suppressLocalFontPrompt) 앞 문서의 글꼴 알림이 남지 않게 다시 알린다
+    announceDoogleFonts(wasm.getDocumentFontCandidates());
+    settleFontsAfterOpen();
+  } catch (error) {
+    sbMessage().textContent = `새 문서 생성 실패: ${error}`;
+    console.error('[main] 새 문서 생성 실패:', error);
+  }
+}
+
+async function createNewDocumentInCurrent(): Promise<void> {
   cancelPdfImport();
   const msg = sbMessage();
   try {
@@ -2103,6 +2310,8 @@ async function openBlankDocumentIfIdle(): Promise<void> {
 }
 
 async function canReplaceCurrentDocument(skipUnsavedGuard?: boolean): Promise<boolean> {
+  // [doogle] 문서 탭: 지금 문서를 닫지 않고 새 탭에 열므로 물을 것이 없다
+  if (docHub) return true;
   return skipUnsavedGuard === true || await confirmSaveBeforeReplacingDocument(commandServices, {
     // embed: unsaved guard의 '저장'은 registry를 우회한 직접 호출이라 커맨드 필터로는
     // 닫히지 않고, 로컬 저장은 호스트 저장소에 반영되지 않은 채 dirty만 해제한다 —
