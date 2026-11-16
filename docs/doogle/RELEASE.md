@@ -55,6 +55,7 @@ upstream rhwp 의 workflow 는 저장소에서 지웠다(`.doogle-prune` 의 `.g
    - 앱의 업데이트 팝오버에 보이는 노트는 빌드 시점의 `latest.json`의 `notes`(push면 마지막 커밋 메시지,
      수동 실행이면 입력값)다. Publish 전에 릴리스 본문만 고쳐도 앱의 노트는 바뀌지 않는다. 바꾸려면
      `latest.json`의 `notes`를 고쳐 다시 올린다(서명은 설치본에 대한 것이라 노트 수정은 서명과 무관하다).
+   - 노트에 커밋 꼬리말(`Co-Authored-By: …`)은 싣지 않는다. workflow가 그 줄을 걸러 내고, 버전 커밋(`두글 x.y.z`)에도 붙이지 않는다.
 
 ## 앱이 업데이트를 확인하는 방식
 

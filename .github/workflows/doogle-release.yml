@@ -77,6 +77,9 @@ jobs:
           set -euo pipefail
           notes="${INPUT_NOTES:-${COMMIT_MESSAGE:-}}"
           [ -n "$notes" ] || notes="$(git log -1 --pretty=%B)"
+          # 커밋 꼬리말(Co-Authored-By)은 사용자에게 보이는 업데이트 안내에 싣지 않는다.
+          # $(...) 가 끝의 빈 줄도 함께 떼어 낸다.
+          notes="$(printf '%s\n' "$notes" | sed -E '/^[[:space:]]*co-authored-by:/Id')"
           delimiter="NOTES_$(date +%s%N)"
           {
             echo "notes<<${delimiter}"
