@@ -150,7 +150,7 @@ export class Ribbon {
     file.setAttribute('aria-haspopup', 'dialog');
     file.setAttribute('aria-keyshortcuts', 'Alt+V');
     file.id = 'dg-tab-file';
-    file.innerHTML = `<span>파일</span>${this.keytipHtml(FILE_KEY)}`;
+    file.innerHTML = `${iconSvg('menu', 16, 1.8)}<span>파일</span>${this.keytipHtml(FILE_KEY)}`;
     file.tabIndex = -1;
     file.addEventListener('click', () => { this.closeFlyout(); this.options.onFileTab(file); });
     this.tablist.appendChild(file);
@@ -179,7 +179,7 @@ export class Ribbon {
     this.aiButton.setAttribute('aria-pressed', 'false');
     this.aiButton.setAttribute('aria-label', 'AI 도우미 사이드바');
     this.aiButton.title = 'AI 도우미 — 오른쪽 사이드바를 열고 닫습니다';
-    this.aiButton.innerHTML = `<span>AI 도우미</span>${this.keytipHtml(AI_KEY)}`;
+    this.aiButton.innerHTML = `${iconSvg('panelRight', 16, 1.8)}<span>AI 도우미</span>${this.keytipHtml(AI_KEY)}`;
     bindActivate(this.aiButton, () => { toggleAgentPanel(); this.queueRefresh(); });
     this.collapseButton = document.createElement('button');
     this.collapseButton.type = 'button';
@@ -288,6 +288,13 @@ export class Ribbon {
         return;
       }
       this.altArmed = false;
+      // Ctrl+/ 명령 입력: upstream 은 편집 입력에 초점이 있고 문서가 열려 있을 때만 받는다.
+      // 시작 화면·사이드바·리본·메모 말풍선에서도 열리게 창 전체에서 받는다(이미 열려 있으면 무시된다).
+      if (e.key === '/' && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
+        e.preventDefault();
+        openCommandPalette();
+        return;
+      }
       if (e.key === 'F1' && e.ctrlKey && !e.shiftKey && !e.altKey) {
         e.preventDefault();
         e.stopPropagation();

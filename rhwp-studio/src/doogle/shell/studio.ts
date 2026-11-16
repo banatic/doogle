@@ -72,6 +72,9 @@ export function toggleAgentPanel(): void {
  * 팔레트 인스턴스는 InputHandler 안에 있어 직접 닿을 수 없으므로, 편집 입력 요소에 같은 키 이벤트를 보낸다.
  */
 export function openCommandPalette(): boolean {
+  // main.ts 가 내놓은 통로가 있으면 그쪽으로 — 문서가 없거나 초점이 편집 입력 밖이어도 열린다
+  const palette = (window as unknown as { rhwpStudio?: { palette?: { open?: () => boolean } } }).rhwpStudio?.palette;
+  if (typeof palette?.open === 'function' && palette.open()) return true;
   const input = document.querySelector<HTMLElement>('[aria-label="문서 편집 입력"]');
   if (!input) return false;
   input.dispatchEvent(new KeyboardEvent('keydown', {
