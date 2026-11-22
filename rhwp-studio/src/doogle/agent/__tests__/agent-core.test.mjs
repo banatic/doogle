@@ -658,3 +658,18 @@ test('edit swarm motion: speed is steady across widths, only changed pixels are 
   assert.equal(changedSpan(strip([]), 4, 0, strip([]), 0, 0, 6, 2), undefined);
   assert.equal(changedSpan(strip([]), 0, 0, { data: new Uint8ClampedArray(8), width: 6, height: 2 }, 0, 0, 6, 2), undefined);
 });
+
+test('recovery: the recovered file name carries one "복구본", however many times it is recovered', async () => {
+  const { recoveryFileName } = await import('../../../recovery/recovery-format.ts');
+  assert.equal(recoveryFileName('보고서.hwpx'), '보고서 복구본.hwp');
+  // recovering a recovered document (unsaved, so it kept the recovery name) does not stack the suffix
+  assert.equal(recoveryFileName('보고서 복구본.hwp'), '보고서 복구본.hwp');
+  assert.equal(recoveryFileName('보고서 복구본 복구본 복구본.hwp'), '보고서 복구본.hwp');
+  assert.equal(recoveryFileName(recoveryFileName(recoveryFileName('새 문서.hwp'))), '새 문서 복구본.hwp');
+  // the word inside a name is left alone; only the trailing suffix counts
+  assert.equal(recoveryFileName('복구본 정리 계획.hwp'), '복구본 정리 계획 복구본.hwp');
+  // a document that is itself called "복구본" keeps a usable name
+  assert.equal(recoveryFileName('복구본.hwp'), '복구본.hwp');
+  assert.equal(recoveryFileName(''), '문서 복구본.hwp');
+  assert.equal(recoveryFileName('메모.txt'), '메모.txt 복구본.hwp');
+});

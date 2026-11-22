@@ -13,9 +13,11 @@ function baseNameWithoutKnownExtension(fileName: string): string {
 }
 
 export function recoveryFileName(fileName: string): string {
-  const base = baseNameWithoutKnownExtension(fileName);
+  // [doogle] 복구본을 저장하지 않은 채 다시 복구하면 이름이 "X 복구본 복구본 복구본.hwp" 로 불어났다.
+  // 이미 붙어 있는 " 복구본" 은 떼고 하나만 붙인다(이름 전체가 "복구본" 이면 그대로 둔다).
+  const base = baseNameWithoutKnownExtension(fileName).replace(/(\s*복구본)+$/, '').trim();
   // autosave draft는 exportHwp() 결과이므로 모든 출처의 복구본은 HWP로 생성한다.
-  return `${base} 복구본.hwp`;
+  return base ? `${base} 복구본.hwp` : '복구본.hwp';
 }
 
 export function formatDraftSavedAt(timestamp: number): string {
