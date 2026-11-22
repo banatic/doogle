@@ -5,14 +5,14 @@
 }
 
 .dg-canvas-empty {
-  --dg-ce-accent: var(--dg-accent, #1f5fbf);
+  --dg-ce-accent: var(--dg-accent, #b5573a);
   --dg-ce-surface: var(--dg-surface, #ffffff);
-  --dg-ce-border: var(--dg-border, #dde2ea);
+  --dg-ce-border: var(--dg-border, #dedcd1);
   --dg-ce-text: var(--dg-text, #1f2937);
   --dg-ce-muted: var(--dg-muted, #4b5563);
-  --dg-ce-soft: var(--dg-soft, #eff6ff);
-  --dg-ce-soft-border: var(--dg-soft-border, #bfdbfe);
-  --dg-ce-hover: var(--dg-hover, rgba(15, 23, 42, 0.06));
+  --dg-ce-soft: var(--dg-soft, #f8ece6);
+  --dg-ce-soft-border: var(--dg-soft-border, #ebc4b3);
+  --dg-ce-hover: var(--dg-hover, rgba(31, 30, 29, 0.06));
   --dg-ce-on-accent: var(--dg-on-accent, #ffffff);
   --dg-ce-focus: var(--dg-focus, var(--dg-ce-accent));
 
@@ -34,7 +34,7 @@
   background: var(--dg-ce-surface);
   border: 1px solid var(--dg-ce-border);
   border-radius: var(--dg-r-lg, 14px);
-  box-shadow: var(--dg-shadow-pop, 0 8px 24px rgba(15, 23, 42, 0.08));
+  box-shadow: var(--dg-shadow-pop, 0 8px 24px rgba(31, 30, 29, 0.08));
   box-sizing: border-box;
 }
 

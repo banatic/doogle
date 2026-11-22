@@ -154,7 +154,7 @@
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--dg-dirty, #F5B86B);
+  background: var(--dg-dirty, #B06A12);
 }
 :root[data-doogle] .dg-doctab[data-dirty="false"] .dg-doctab-dot { display: none; }
 :root[data-doogle] .dg-doctab-close,

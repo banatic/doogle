@@ -6,27 +6,27 @@
 }
 
 .dg-panel {
-  --dg-x-accent: var(--dg-accent, #1f5fbf);
-  --dg-x-panel: var(--dg-panel, #fafbfc);
-  --dg-x-border: var(--dg-border, #dde2ea);
-  --dg-x-divider: var(--dg-divider, #e5e7eb);
-  --dg-x-text: var(--dg-text, #1f2937);
-  --dg-x-text2: var(--dg-text2, #374151);
-  --dg-x-muted: var(--dg-muted, #4b5563);
-  --dg-x-soft: var(--dg-soft, #eff6ff);
-  --dg-x-soft-border: var(--dg-soft-border, #bfdbfe);
-  --dg-x-soft-text: var(--dg-soft-text, #1e3a8a);
-  --dg-x-ins: var(--dg-ins, #1d4ed8);
+  --dg-x-accent: var(--dg-accent, #b5573a);
+  --dg-x-panel: var(--dg-panel, #faf9f5);
+  --dg-x-border: var(--dg-border, #dedcd1);
+  --dg-x-divider: var(--dg-divider, #e8e6dc);
+  --dg-x-text: var(--dg-text, #1f1e1d);
+  --dg-x-text2: var(--dg-text2, #3d3d3a);
+  --dg-x-muted: var(--dg-muted, #5e5d59);
+  --dg-x-soft: var(--dg-soft, #f8ece6);
+  --dg-x-soft-border: var(--dg-soft-border, #ebc4b3);
+  --dg-x-soft-text: var(--dg-soft-text, #8a3b20);
+  --dg-x-ins: var(--dg-ins, #1f7a55);
   --dg-x-del: var(--dg-del, #b91c1c);
-  --dg-x-bubble: var(--dg-user-bubble, #eef1f5);
+  --dg-x-bubble: var(--dg-user-bubble, #f0eee6);
   --dg-x-surface: var(--dg-surface, #ffffff);
-  --dg-x-surface2: var(--dg-surface-2, #f4f6f9);
+  --dg-x-surface2: var(--dg-surface-2, #f2f0e9);
   --dg-x-on-accent: var(--dg-on-accent, #ffffff);
-  --dg-x-hover: var(--dg-hover, rgba(15, 23, 42, 0.06));
-  --dg-x-active: var(--dg-active, rgba(15, 23, 42, 0.1));
+  --dg-x-hover: var(--dg-hover, rgba(31, 30, 29, 0.06));
+  --dg-x-active: var(--dg-active, rgba(31, 30, 29, 0.1));
   --dg-x-hint: var(--dg-hint, var(--dg-x-muted));
   --dg-x-focus: var(--dg-focus, var(--dg-x-accent));
-  --dg-x-field: var(--dg-field, #cbd5e1);
+  --dg-x-field: var(--dg-field, #c8c5b9);
   --dg-x-ok: var(--dg-ok, #15803d);
   --dg-x-ok-soft: var(--dg-ok-soft, #f0fdf4);
   --dg-x-warn: var(--dg-warn, #92400e);
@@ -35,7 +35,7 @@
   --dg-x-bad: var(--dg-bad, #b91c1c);
   --dg-x-bad-soft: var(--dg-bad-soft, #fef2f2);
   --dg-x-bad-border: var(--dg-bad-border, #fecaca);
-  --dg-x-shadow-pop: var(--dg-shadow-pop, 0 12px 32px rgba(15, 23, 42, 0.16));
+  --dg-x-shadow-pop: var(--dg-shadow-pop, 0 12px 32px rgba(31, 30, 29, 0.16));
   --dg-x-dur: var(--dg-dur, 0.18s);
   --dg-x-r-sm: var(--dg-r-sm, 4px);
   --dg-x-r-md: var(--dg-r-md, 8px);
@@ -1169,7 +1169,7 @@
   background: var(--dg-x-surface);
   border: 1px solid var(--dg-x-border);
   border-radius: var(--dg-x-r-lg);
-  box-shadow: var(--dg-shadow-page, 0 2px 10px rgba(15, 23, 42, 0.06));
+  box-shadow: var(--dg-shadow-page, 0 2px 10px rgba(31, 30, 29, 0.06));
 }
 
 .dg-composer:focus-within {

@@ -131,7 +131,7 @@
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--dg-dirty, #F5B86B);
+  background: var(--dg-dirty, #B06A12);
   flex-shrink: 0;
 }
 .dg-dirty-dot[hidden] { display: none; }
@@ -274,7 +274,7 @@
   margin-top: 10px;
   padding: 8px 12px;
   border-radius: var(--dg-r-sm, 4px);
-  background: var(--dg-surface-2, #F4F6F9);
+  background: var(--dg-surface-2, #F2F0E9);
   font-size: var(--dg-fs-kbd, 11.5px);
   color: var(--dg-muted);
   word-break: keep-all;
@@ -433,7 +433,7 @@
   background: var(--dg-surface, #FFFFFF);
   border-bottom: 1px solid var(--dg-border);
   padding: 4px 4px 0;
-  box-shadow: 0 1px 3px var(--dg-ink-06, rgba(15, 23, 42, 0.06));
+  box-shadow: 0 1px 3px var(--dg-ink-06, rgba(31, 30, 29, 0.06));
   flex-shrink: 0;
   position: relative;
   z-index: 5;
@@ -527,7 +527,7 @@
   white-space: nowrap;
 }
 .dg-btn:hover { background: var(--dg-hover); }
-.dg-btn:active { background: var(--dg-active, #DBEAFE); }
+.dg-btn:active { background: var(--dg-active, #F2DCD1); }
 /* 켜짐 — 옮겨 온 단추(.sb-btn.active)·사이드바와 같은 --dg-on-* 한 벌 */
 .dg-btn[aria-pressed="true"] {
   background: var(--dg-on-bg);
@@ -793,8 +793,8 @@
 .dg-popup-item:hover { background: var(--dg-hover); }
 /* 키보드 초점은 hover 와 다른 모양(안쪽 링) — 마우스 hover 와 동시에 두 줄이 강조되지 않게 */
 .dg-popup-item:focus-visible { background: var(--dg-hover); outline: 2px solid var(--dg-focus); outline-offset: -2px; }
-.dg-popup-item[aria-disabled="true"] { color: var(--dg-disabled-text, #9CA3AF); cursor: default; }
-.dg-popup-item[aria-disabled="true"]:hover { background: transparent; color: var(--dg-disabled-text, #9CA3AF); }
+.dg-popup-item[aria-disabled="true"] { color: var(--dg-disabled-text, #A8A69D); cursor: default; }
+.dg-popup-item[aria-disabled="true"]:hover { background: transparent; color: var(--dg-disabled-text, #A8A69D); }
 .dg-popup-label { flex: 1 1 auto; }
 .dg-popup-check { flex: none; width: 14px; height: 14px; margin-right: -6px; color: var(--dg-accent); display: inline-flex; }
 .dg-popup-shortcut { color: var(--dg-muted); font-size: var(--dg-fs-kbd, 11.5px); }
@@ -851,9 +851,9 @@
 .dg-bs-item-sc { font-size: var(--dg-fs-kbd, 11.5px); color: var(--dg-muted); }
 .dg-bs-back:hover,
 .dg-bs-item:hover { background: var(--dg-hover); }
-.dg-bs-item[aria-disabled="true"] { color: var(--dg-disabled-text, #9CA3AF); cursor: default; }
+.dg-bs-item[aria-disabled="true"] { color: var(--dg-disabled-text, #A8A69D); cursor: default; }
 .dg-bs-item[aria-disabled="true"] svg { color: inherit; }
-.dg-bs-item[aria-disabled="true"]:hover { background: transparent; color: var(--dg-disabled-text, #9CA3AF); }
+.dg-bs-item[aria-disabled="true"]:hover { background: transparent; color: var(--dg-disabled-text, #A8A69D); }
 .dg-bs-heading { padding: 10px 12px 4px; font-size: var(--dg-fs-caption, 12px); font-weight: 600; color: var(--dg-muted); }
 .dg-bs-sep { height: 1px; margin: 6px 8px; background: var(--dg-divider); }
 .dg-bs-main { flex: 1 1 auto; padding: 28px 36px; overflow-y: auto; }
@@ -1069,7 +1069,7 @@
   box-shadow: var(--dg-shadow-pop);
   font-family: var(--dg-font-ui);
   font-size: var(--dg-fs-sm, 12px);
-  color: var(--dg-text, #1f2937);
+  color: var(--dg-text, #1F1E1D);
 }
 :root[data-doogle] .dg-fontpop[hidden] { display: none; }
 :root[data-doogle] .dg-fontpop button { font: inherit; cursor: pointer; }
@@ -1092,7 +1092,7 @@
 }
 :root[data-doogle] .dg-banner-font { display: flex; gap: 8px; min-width: 0; }
 :root[data-doogle] .dg-banner-font-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
-:root[data-doogle] .dg-banner-font-note { flex-shrink: 0; color: var(--dg-muted, #4b5563); }
+:root[data-doogle] .dg-banner-font-note { flex-shrink: 0; color: var(--dg-muted, #5E5D59); }
 :root[data-doogle] .dg-banner-acts { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 :root[data-doogle] .dg-banner-btn {
   height: 26px;
@@ -1100,10 +1100,10 @@
   border: 1px solid var(--dg-border);
   border-radius: var(--dg-r-sm, 4px);
   background: var(--dg-surface, #fff);
-  color: var(--dg-text, #1f2937);
+  color: var(--dg-text, #1F1E1D);
 }
 :root[data-doogle] .dg-banner-btn:disabled { opacity: var(--dg-disabled-opacity, 0.45); cursor: default; }
-:root[data-doogle] .dg-banner-hint { color: var(--dg-muted, #4b5563); }
+:root[data-doogle] .dg-banner-hint { color: var(--dg-muted, #5E5D59); }
 
 /* ── 좁은 창 — 사이드바가 문서를 밀어 쪽이 잘리지 않게 ─────────────────
    1100px 아래: 사이드바를 340px 로 줄인다(문서는 narrow-fit.ts 가 폭에 맞춰 줄인다).
@@ -1145,7 +1145,7 @@
 :root[data-doogle] .dg-sb-agent--pending { color: var(--dg-ai-text) !important; font-weight: 500; }
 :root[data-doogle] .dg-sb-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
 :root[data-doogle] .dg-sb-dot--ok { background: var(--dg-ok, #15803D); }
-:root[data-doogle] .dg-sb-dot--warn { background: var(--dg-dirty, #F5B86B); box-shadow: inset 0 0 0 1px var(--dg-warn, #92400E); }
+:root[data-doogle] .dg-sb-dot--warn { background: var(--dg-dirty, #B06A12); box-shadow: inset 0 0 0 1px var(--dg-warn, #92400E); }
 :root[data-doogle] .dg-sb-dot--bad { background: var(--dg-bad, #B91C1C); }
 :root[data-doogle] #status-bar :is(button, input):focus-visible { outline: 2px solid var(--dg-focus, var(--dg-accent)); outline-offset: 1px; }
 
@@ -1199,7 +1199,7 @@
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: var(--dg-dirty, #F5B86B);
+  background: var(--dg-dirty, #B06A12);
   box-shadow: 0 0 0 1.5px var(--dg-title);
 }
 .dg-update-pill--busy .dg-update-dot { background: var(--dg-title-text); }

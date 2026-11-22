@@ -50,7 +50,7 @@
 .dg-memo-jump { cursor: pointer; }
 .dg-memo-jump:hover { border-color: var(--dg-memo, #15803D); }
 .dg-memo:focus-visible {
-  outline: 2px solid var(--dg-focus, #1F5FBF);
+  outline: 2px solid var(--dg-focus, #b5573a);
   outline-offset: 2px;
 }
 
@@ -110,15 +110,15 @@
 }
 
 .dg-memo-tool:hover {
-  background: var(--dg-hover, #F1F5F9);
+  background: var(--dg-hover, #f2f0e9);
   color: var(--dg-text, #1F2937);
 }
-.dg-memo-tool:active { background: var(--dg-active, #DBEAFE); }
+.dg-memo-tool:active { background: var(--dg-active, #ebc4b3); }
 
 .dg-memo-tool:focus-visible,
 .dg-memo-btn:focus-visible,
 .dg-memo-input:focus-visible {
-  outline: 2px solid var(--dg-focus, #1F5FBF);
+  outline: 2px solid var(--dg-focus, #b5573a);
   outline-offset: 1px;
 }
 
@@ -134,7 +134,7 @@
   width: 100%;
   margin: 2px 0 0;
   padding: 5px 6px;
-  border: 1px solid var(--dg-field, #CBD5E1);
+  border: 1px solid var(--dg-field, #c8c5b9);
   border-radius: var(--dg-r-sm, 4px);
   background: var(--dg-surface, #FFFFFF);
   color: var(--dg-text, #1F2937);
@@ -166,7 +166,7 @@
 .dg-memo-btn {
   height: var(--dg-ctl-h-sm, 24px);
   padding: 0 10px;
-  border: 1px solid var(--dg-field, #CBD5E1);
+  border: 1px solid var(--dg-field, #c8c5b9);
   border-radius: var(--dg-r-sm, 4px);
   background: var(--dg-surface, #FFFFFF);
   color: var(--dg-text, #1F2937);
@@ -174,15 +174,15 @@
   cursor: pointer;
 }
 
-.dg-memo-btn:hover { background: var(--dg-hover, #F1F5F9); }
+.dg-memo-btn:hover { background: var(--dg-hover, #f2f0e9); }
 
 .dg-memo-btn--primary {
-  border-color: var(--dg-accent, #1F5FBF);
-  background: var(--dg-accent, #1F5FBF);
+  border-color: var(--dg-accent, #b5573a);
+  background: var(--dg-accent, #b5573a);
   color: var(--dg-on-accent, #FFFFFF);
 }
 
-.dg-memo-btn--primary:hover { background: var(--dg-accent-hover, #1A51A3); }
+.dg-memo-btn--primary:hover { background: var(--dg-accent-hover, #9f4b30); }
 
 .dg-memo-btn--danger {
   border-color: var(--dg-bad, #B91C1C);

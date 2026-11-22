@@ -5,31 +5,31 @@
    명단(표형)은 종이가 겹친 모양에 머리 칸과 줄 선. 값은 서랍에 보이지 않는다. */
 
 .dg-panel {
-  --kc-person: #1f5fbf;
-  --kc-person-soft: #e8f0fc;
+  --kc-person: #b5573a;
+  --kc-person-soft: #f8ece6;
   --kc-list: #0f7b6c;
   --kc-list-soft: #e3f3ef;
   --kc-school: #9a5b13;
   --kc-school-soft: #faf0e2;
-  --kc-card: #4b5563;
-  --kc-card-soft: #eef1f5;
+  --kc-card: #5e5d59;
+  --kc-card-soft: #f0eee6;
   --kc-paper: var(--dg-x-surface);
   --kc-edge: var(--dg-x-border);
   --kc-rule: var(--dg-x-divider);
 }
 
 :root[data-doogle][data-theme-effective='dark'] .dg-panel {
-  --kc-person: #86aef0;
-  --kc-person-soft: rgba(134, 174, 240, 0.14);
+  --kc-person: #e08262;
+  --kc-person-soft: rgba(224, 130, 98, 0.14);
   --kc-list: #5cc6b3;
   --kc-list-soft: rgba(92, 198, 179, 0.14);
   --kc-school: #e3a95c;
   --kc-school-soft: rgba(227, 169, 92, 0.14);
-  --kc-card: #a9b4c2;
-  --kc-card-soft: rgba(169, 180, 194, 0.14);
-  --kc-paper: #232a35;
-  --kc-edge: #343d4b;
-  --kc-rule: #333b47;
+  --kc-card: #b0ada3;
+  --kc-card-soft: rgba(176, 173, 163, 0.14);
+  --kc-paper: #30302e;
+  --kc-edge: #45443f;
+  --kc-rule: #3a3a37;
 }
 
 .dg-shelf {
@@ -143,7 +143,7 @@
   color: var(--dg-x-text);
   text-align: left;
   cursor: inherit;
-  box-shadow: 0 1px 2px var(--dg-ink-12, rgba(15, 23, 42, 0.12));
+  box-shadow: 0 1px 2px var(--dg-ink-12, rgba(31, 30, 29, 0.12));
   transition: transform var(--dg-x-dur) ease, box-shadow var(--dg-x-dur) ease, border-color var(--dg-x-dur) ease;
 }
 
@@ -395,7 +395,7 @@
   color: var(--dg-x-text);
   font-size: 12px;
   line-height: 1;
-  box-shadow: 0 1px 2px var(--dg-ink-12, rgba(15, 23, 42, 0.12));
+  box-shadow: 0 1px 2px var(--dg-ink-12, rgba(31, 30, 29, 0.12));
 }
 
 .dg-card-chip .dg-file-name,
@@ -427,9 +427,9 @@
   z-index: 40;
   pointer-events: none;
   box-sizing: border-box;
-  border: 2px solid var(--dg-accent, #1f5fbf);
+  border: 2px solid var(--dg-accent, #b5573a);
   border-radius: 4px;
-  background: color-mix(in srgb, var(--dg-accent, #1f5fbf) 14%, transparent);
+  background: color-mix(in srgb, var(--dg-accent, #b5573a) 14%, transparent);
   transition: left 0.08s ease-out, top 0.08s ease-out, width 0.08s ease-out, height 0.08s ease-out;
 }
 
@@ -451,14 +451,14 @@
   height: 26px;
   padding: 0 9px;
   border-radius: 6px;
-  background: var(--dg-accent, #1f5fbf);
+  background: var(--dg-accent, #b5573a);
   color: var(--dg-on-accent, #fff);
   font-family: var(--dg-font-ui, sans-serif);
   font-size: 12px;
   font-weight: 600;
   line-height: 26px;
   white-space: nowrap;
-  box-shadow: var(--dg-shadow-pop, 0 4px 12px rgba(15, 23, 42, 0.2));
+  box-shadow: var(--dg-shadow-pop, 0 4px 12px rgba(31, 30, 29, 0.2));
 }
 
 /* 놓았다 — 한 번 진해졌다가 사라진다 */
@@ -468,15 +468,15 @@
 
 @keyframes dg-drop-flash {
   0% {
-    background: color-mix(in srgb, var(--dg-accent, #1f5fbf) 14%, transparent);
+    background: color-mix(in srgb, var(--dg-accent, #b5573a) 14%, transparent);
     opacity: 1;
   }
   25% {
-    background: color-mix(in srgb, var(--dg-accent, #1f5fbf) 38%, transparent);
+    background: color-mix(in srgb, var(--dg-accent, #b5573a) 38%, transparent);
     opacity: 1;
   }
   100% {
-    background: color-mix(in srgb, var(--dg-accent, #1f5fbf) 10%, transparent);
+    background: color-mix(in srgb, var(--dg-accent, #b5573a) 10%, transparent);
     opacity: 0;
   }
 }
