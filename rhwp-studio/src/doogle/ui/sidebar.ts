@@ -1,16 +1,18 @@
 /**
  * 두글 에이전트 사이드바 (시안 F) — 오른쪽 도킹 패널(PluginHost.ui.registerSidePanel) 본문.
  *
- * 구성: 머리(대화 제목 ▾ · 대화 기록 · 새 대화 · 닫기) · 대화(사용자 말풍선 / 에이전트 산문,
- * 턴마다 도구 칩 하나, 검토할 변경 목록, 메시지 동작) · 입력 상자(첨부 · 검토 후 적용/바로 적용 ·
- * 모델 고르기 · 보내기/중지).
+ * 구성: 머리(대화 제목 ▾ · 문서 갈래 · 대화 기록 · 새 대화 · 닫기) · 대화(사용자 말풍선 / 에이전트 산문,
+ * 턴마다 실행 카드 하나, 메시지 동작) · 입력 상자(첨부 · 모델 고르기 · 보내기/중지).
+ *
+ * 편집은 곧바로 문서에 들어간다(검토 단계 없음). 요청이 문서를 바꾸면 실행 카드 아래에 그 상태의
+ * 지점이 붙고, 머리의 "문서 갈래" 에서 git 처럼 갈래와 지점을 보고 아무 지점으로나 되돌아간다.
  *
  * 모델 응답은 upstream `message-render.ts` 로만 그린다 — 이 파일은 HTML 문자열을 다루지 않는다.
  * 검토 상태(지금 보는 변경·행 단위 결정)는 `../review/state.ts` 를 문서 위 검토 막과 함께 쓴다.
  * CSS 접두어는 `dg-`.
  */
 import { renderMarkdown } from '@/ai/ui/message-render';
-import type { PendingApi, PendingChangeEvent } from '../agent/types.ts';
+import type { CheckpointNode, HistoryApi, PendingApi, PendingChangeEvent } from '../agent/types.ts';
 import {
   newThreadId,
   type AgentEvent,
@@ -40,6 +42,7 @@ import type { DeskHubEvent } from './desk-bridge.ts';
 import { brandIcon, brandOf } from './brand.ts';
 import { icon, type IconName } from './icons.ts';
 import { SettingsSheet } from './settings-sheet.ts';
+import { BranchPanel, branchName, checkpointNumber, laneOfNode } from './branch-graph.ts';
 import {
   describeToolCall, formatToolFailure, needsUserAction, parseBatchFailures, progressText,
   type ToolCallView, type ToolCategory,
@@ -55,8 +58,8 @@ export interface SidebarDeps {
   /** 지금 열린 문서 — 대화는 문서에 딸린다. 문서가 없거나 저장 안 한 새 문서면 null */
   getDoc?(): DocIdentity | null;
   openExternal(url: string): Promise<void>;
-  /** 모드가 바뀌었을 때 (실행기가 다음 도구 호출부터 반영) */
-  onModeChange?(mode: AgentMode): void;
+  /** 문서 갈래 — 요청마다 남긴 지점과 되돌아가기. 실행기가 없으면 null */
+  history?: HistoryApi | null;
   /** 턴을 시작한다 — 문서 탭에서 이 대화의 편집을 지금 초점 문서에 묶는다 */
   onTurnStart?(threadId: string): void;
   /** 문서·선택 상황 — 빈 대화의 상황별 제안과 첫 실행 체크리스트 */
@@ -75,7 +78,6 @@ const STORE_MODEL_LEGACY = 'doogle.model';
 const STORE_MODEL_PREFIX = 'doogle.model.';
 /** 목록을 받기 전에도 버튼에 보일 마지막 모델 이름 */
 const STORE_MODEL_LABEL = 'doogle.modelLabel';
-const STORE_MODE = 'doogle.mode';
 
 /** 첫 실행 체크리스트를 끝냈다(첫 요청을 보냈다) — 다시 보이지 않는다 */
 const STORE_ONBOARDED = 'doogle.onboarded';
@@ -250,6 +252,9 @@ interface ToolEntry {
   items?: HTMLLIElement[];
   /** 실패 사유 줄 — 에이전트가 이어서 해냈으면 "다시 시도함" 을 덧붙인다 */
   reason?: HTMLElement;
+  /** 시작·끝 시각 — 실행 카드의 단계별 걸린 시간 */
+  startedAt: number;
+  endedAt?: number;
 }
 
 /** 질문 카드 (ask_user_question) — 답하면 닫힌다 */
@@ -267,6 +272,10 @@ interface TurnView {
   userText: string;
   /** 이 턴을 보낸 AI 계정 (한도 카드의 "다른 계정으로 보내기") */
   providerId: string;
+  /** 실행 카드의 모델 이름 */
+  model: string;
+  /** 문서 갈래에서 이 턴을 가리키는 열쇠 — 턴이 문서를 바꿨으면 그 상태가 지점으로 남는다 */
+  turnKey: string;
   /** 도구 칩 (턴당 하나) */
   chip: HTMLButtonElement | null;
   chipText: HTMLElement | null;
@@ -294,17 +303,26 @@ interface TurnView {
   restored?: boolean;
 }
 
-/** 진행 카드 DOM */
+/** 실행 카드 DOM */
 interface StepsView {
   root: HTMLElement;
   status: HTMLElement;
+  /** 머리의 지금 단계 아이콘 */
+  glyph: HTMLElement;
   title: HTMLElement;
   time: HTMLElement;
+  model: HTMLElement;
+  count: HTMLElement;
+  /** 단계마다 한 칸씩 — 끝난 칸은 채우고 지금 칸은 흐른다 */
+  bar: HTMLElement;
   list: HTMLOListElement;
   rows: Map<ToolCategory, HTMLLIElement>;
   /** 도구가 돌지 않는 동안(생각하는 중·답변 쓰는 중)의 맨 아래 줄 */
   now: HTMLLIElement;
-  summary: HTMLElement;
+  foot: HTMLElement;
+  stop: HTMLButtonElement;
+  /** 끝난 턴이 남긴 지점 — 갈래 이름 · 지점 번호 · "이 상태로" */
+  commit: HTMLElement;
 }
 
 /** 단계 이름 — 도구 종류를 사람이 하는 일로 */
@@ -315,6 +333,43 @@ const STEP_LABEL: Record<ToolCategory, string> = {
   reference: '참고 파일 읽기',
   other: '그 밖의 작업',
 };
+
+/** 단계 아이콘 */
+const STEP_ICON: Record<ToolCategory, IconName> = {
+  read: 'search',
+  edit: 'pen',
+  check: 'doc',
+  reference: 'file',
+  other: 'tool',
+};
+
+/** 다 걸린 시간을 말로 — "13초", "1분 5초" */
+function spokenDuration(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  return s < 60 ? `${s}초` : `${Math.floor(s / 60)}분${s % 60 ? ` ${s % 60}초` : ''}`;
+}
+
+/** 글이 바뀔 때 새 글이 아래에서 살짝 올라오며 나타난다 (움직임 줄이기 설정이면 그냥 바뀐다) */
+const lastSwap = new WeakMap<HTMLElement, number>();
+function swapIn(node: HTMLElement): void {
+  if (typeof node.animate !== 'function') return;
+  if (globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+  // 글이 잇달아 바뀌면(진행 상황이 빠르게 오가면) 매번 처음부터 다시 흐려지지 않게 — 0.4초에 한 번만
+  const now = Date.now();
+  if (now - (lastSwap.get(node) ?? 0) < 400) return;
+  lastSwap.set(node, now);
+  node.animate(
+    [{ opacity: 0.35, transform: 'translateY(4px)' }, { opacity: 1, transform: 'none' }],
+    { duration: 240, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' },
+  );
+}
+
+/** 단계 하나에 걸린 시간 — "1.9초", 1분 넘으면 "1:05" */
+function stepDuration(ms: number): string {
+  if (!(ms > 0)) return '';
+  if (ms < 60_000) return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)}초`;
+  return elapsed(ms);
+}
 
 function elapsed(ms: number): string {
   const s = Math.max(0, Math.floor(ms / 1000));
@@ -388,7 +443,8 @@ export class DoogleSidebar {
   private model = storeGet(`${STORE_MODEL_PREFIX}${storeGet(STORE_PROVIDER) ?? ''}`) ?? storeGet(STORE_MODEL_LEGACY) ?? '';
   /** models_refresh 를 보내고 새 목록을 기다리는 provider */
   private readonly refreshingModels = new Set<string>();
-  private mode: AgentMode = storeGet(STORE_MODE) === 'full' ? 'full' : 'agent';
+  /** 편집은 언제나 곧바로 적용한다 — 되돌리기는 문서 갈래가 맡는다 */
+  private readonly mode: AgentMode = 'full';
   private busy = false;
   private turn: TurnView | null = null;
   private loginPending: string | null = null;
@@ -418,6 +474,8 @@ export class DoogleSidebar {
   private titleBtn!: HTMLButtonElement;
   private titleText!: HTMLElement;
   private historyBtn!: HTMLButtonElement;
+  private branchBtn!: HTMLButtonElement;
+  private branches!: BranchPanel;
   private threadMenu!: HTMLElement;
   private conn!: HTMLElement;
   private scroller!: HTMLElement;
@@ -451,7 +509,6 @@ export class DoogleSidebar {
   private awaitingAnswer = false;
   private live!: HTMLElement;
   private input!: HTMLTextAreaElement;
-  private modeBtn!: HTMLButtonElement;
   private modelBtn!: HTMLButtonElement;
   private modelText!: HTMLElement;
   private modelBrand!: HTMLElement;
@@ -486,6 +543,10 @@ export class DoogleSidebar {
 
     root.addEventListener('keydown', (event) => this.onPanelKey(event));
     const onDocPointer = (event: PointerEvent) => {
+      if (this.branches?.isOpen) {
+        const target = event.target as Node;
+        if (!this.branches.root.contains(target) && !this.branchBtn.contains(target)) this.closeBranches(false);
+      }
       if (!this.openMenuKind) return;
       const menu = this.openMenuKind === 'threads' ? this.threadMenu : this.modelMenu;
       const target = event.target as Node;
@@ -532,11 +593,14 @@ export class DoogleSidebar {
     }
     this.offs.push(
       reviewStore.onChange(() => this.renderTurnSummaries()),
+      this.deps.history?.onChange(() => {
+        this.renderTurnSummaries();
+        this.branches?.render();
+      }) ?? (() => {}),
       reviewStore.onDecision((report) => this.onDecision(report)),
       reviewStore.onExplain((id) => this.explain(id)),
     );
     this.renderConnection(hub.state, hub.detail);
-    this.renderMode();
     this.renderModelButton();
     this.renderComposer();
   }
@@ -605,11 +669,6 @@ export class DoogleSidebar {
     return new SettingsSheet({
       hub: this.deps.hub,
       providers: () => this.providers,
-      mode: () => this.mode,
-      setMode: (mode) => {
-        this.setMode(mode);
-        this.sheet.render();
-      },
       busy: () => this.busy,
       loginPending: () => this.loginPending,
       startLogin: (id) => {
@@ -793,6 +852,18 @@ export class DoogleSidebar {
     this.threadMenu.setAttribute('aria-label', '대화 목록');
     this.threadMenu.hidden = true;
 
+    this.branches = new BranchPanel({
+      nodes: () => this.deps.history?.nodes() ?? [],
+      head: () => this.deps.history?.head() ?? null,
+      dirty: () => this.deps.history?.dirty() ?? false,
+      checkout: (id) => this.checkoutTo(id),
+      busy: () => this.busy,
+    });
+    this.branchBtn = iconButton('dg-icon-btn', 'branch', '문서 갈래', () => this.toggleBranches(), 17);
+    this.branchBtn.title = '문서 갈래 — 요청마다 남긴 지점으로 되돌아가기';
+    this.branchBtn.setAttribute('aria-expanded', 'false');
+    this.branchBtn.hidden = !this.deps.history;
+
     this.cardsBtn = iconButton('dg-icon-btn', 'cards', '내 카드', () => this.shelf.toggle(), 17);
     this.cardsBtn.setAttribute('aria-pressed', 'false');
     this.cardsBtn.title = '내 카드 — 끌어서 문서나 입력 상자에 놓기';
@@ -800,11 +871,13 @@ export class DoogleSidebar {
     head.append(
       this.titleBtn,
       el('div', 'dg-grow'),
+      this.branchBtn,
       this.cardsBtn,
       this.historyBtn,
       iconButton('dg-icon-btn', 'compose', '새 대화', () => this.newThread(), 17),
       iconButton('dg-icon-btn', 'panelRight', '사이드바 접기', () => this.closePanel(), 17),
       this.threadMenu,
+      this.branches.root,
     );
     return head;
   }
@@ -960,6 +1033,12 @@ export class DoogleSidebar {
   }
 
   private onPanelKey(event: KeyboardEvent): void {
+    if (this.branches?.isOpen && event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      this.closeBranches(true);
+      return;
+    }
     if (this.openMenuKind) {
       const menu = this.openMenuKind === 'threads' ? this.threadMenu : this.modelMenu;
       if (event.key === 'Escape') {
@@ -1802,8 +1881,6 @@ export class DoogleSidebar {
     attach.title = '참고 파일 붙이기 — 한글·PDF·Word·Excel·PowerPoint·그림·글 (끌어다 놓아도 됩니다)';
     this.attachBtn = attach;
 
-    this.modeBtn = button('dg-comp-btn dg-mode-chip', '', () => this.setMode(this.mode === 'agent' ? 'full' : 'agent'));
-
     this.modelBtn = button('dg-model-btn', '', () => this.toggleMenu('model', this.modelBtn));
     this.modelBtn.setAttribute('aria-haspopup', 'menu');
     this.modelBtn.setAttribute('aria-expanded', 'false');
@@ -1819,7 +1896,7 @@ export class DoogleSidebar {
     this.modelMenu.setAttribute('aria-label', '모델 고르기');
     this.modelMenu.hidden = true;
 
-    this.gearBtn = iconButton('dg-gear', 'gear', '설정 (AI 계정 · 적용 방식)', () => {
+    this.gearBtn = iconButton('dg-gear', 'gear', '설정 (AI 계정)', () => {
       if (this.sheet.isOpen) this.sheet.close();
       else this.openSettings();
     }, 16);
@@ -1827,7 +1904,7 @@ export class DoogleSidebar {
 
     this.sendBtn = button('dg-send', '', () => (this.busy ? this.cancel() : this.submit()));
 
-    row.append(attach, this.modeBtn, el('div', 'dg-grow'), this.modelBtn, this.gearBtn, this.sendBtn);
+    row.append(attach, el('div', 'dg-grow'), this.modelBtn, this.gearBtn, this.sendBtn);
     // 붙인 카드 줄 — 파일 칩 줄 위
     this.cardRow = el('div', 'dg-attach-row dg-card-row');
     this.cardRow.setAttribute('role', 'list');
@@ -1882,26 +1959,6 @@ export class DoogleSidebar {
     input.style.height = `${Math.min(input.scrollHeight, 180)}px`;
   }
 
-  private setMode(mode: AgentMode): void {
-    if (this.mode === mode || this.busy) return;
-    this.mode = mode;
-    storeSet(STORE_MODE, mode);
-    this.renderMode();
-    this.deps.onModeChange?.(mode);
-  }
-
-  private renderMode(): void {
-    if (!this.modeBtn) return;
-    const review = this.mode === 'agent';
-    this.modeBtn.replaceChildren(icon(review ? 'check' : 'bolt', 14, 2), el('span', '', review ? '검토 후 적용' : '바로 적용'));
-    this.modeBtn.setAttribute('aria-label', `적용 방식: ${review ? '검토 후 적용' : '바로 적용'} (눌러서 바꾸기)`);
-    this.modeBtn.title = review
-      ? '편집을 문서에 바로 보여 주고, 적용할지 검토합니다'
-      : '편집을 바로 적용합니다 (편집 1회 = 되돌리기 1단계)';
-    this.modeBtn.classList.toggle('dg-mode-full', !review);
-    this.modeBtn.disabled = this.busy;
-  }
-
   private renderComposer(): void {
     // 응답 중에는 카드를 뗄 수 없다 — 떼기 단추 상태도 함께
     this.renderThreadCards();
@@ -1924,7 +1981,6 @@ export class DoogleSidebar {
       if (ready && this.tray.busy) this.sendBtn.title = '붙인 파일을 읽는 중입니다';
       this.sendBtn.classList.remove('dg-send-stop');
     }
-    this.renderMode();
   }
 
   // ─── 보내기 / 턴 ───────────────────────────────────────
@@ -2023,7 +2079,10 @@ export class DoogleSidebar {
     const steps = this.buildSteps();
     root.append(steps.root, thinking);
     const turn: TurnView = {
-      threadId: this.thread.id, root, userText, providerId, chip: null, chipText: null, toolList: null, tools: new Map(),
+      threadId: this.thread.id, root, userText, providerId,
+      model: this.modelText?.textContent?.trim() ?? '',
+      turnKey: `turn-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+      chip: null, chipText: null, toolList: null, tools: new Map(),
       text: null, prose: [], thinking, actions: null, changeIds: new Set(), steps, startedAt: Date.now(),
       activity: '생각하는 중', actionCards: new Set(), done: false,
     };
@@ -2033,6 +2092,10 @@ export class DoogleSidebar {
     this.renderPlaceholder();
     this.busy = true;
     try { this.deps.onTurnStart?.(turn.threadId); } catch (error) { console.error('[doogle] onTurnStart 실패', error); }
+    // 문서 갈래: 지금 지점을 이 턴의 부모로 잡는다(기록에서 다시 그리는 턴은 빼고)
+    if (!this.replaying) {
+      try { this.deps.history?.beginTurn(turn.threadId, turn.turnKey, clipTitle(userText) || '요청'); } catch (error) { console.error('[doogle] 지점을 잡지 못했습니다', error); }
+    }
     reviewStore.setBusy(true);
     this.announce('응답을 작성하는 중');
     this.renderComposer();
@@ -2049,8 +2112,12 @@ export class DoogleSidebar {
       turn.thinking = null;
       turn.done = true;
       turn.endedAt = Date.now();
+      if (!turn.restored) {
+        try { this.deps.history?.endTurn(turn.turnKey); } catch (error) { console.error('[doogle] 지점을 남기지 못했습니다', error); }
+      }
       let unresolved = 0;
       for (const entry of turn.tools.values()) {
+        entry.endedAt ??= turn.endedAt;
         if (entry.li.dataset.state === 'running') entry.li.dataset.state = 'done';
         // 끝까지 다시 해내지 못한 실패만 오류로 남긴다
         if (entry.li.dataset.state === 'failed') {
@@ -2184,6 +2251,7 @@ export class DoogleSidebar {
           // 실패는 일단 "넘어간 실패"로 둔다 — 에이전트가 스스로 다시 해내는 일이 많다.
           // 턴이 끝날 때까지 같은 종류의 일을 해내지 못한 것만 오류로 올린다(endTurn).
           entry.li.dataset.state = event.ok ? 'done' : 'failed';
+          entry.endedAt = Date.now();
           // hub 요약은 "CODE: 사유" — 다시 해도 같은 결과인 실패(NOT_AVAILABLE)는 다시 시도를 권하지 않는다
           if (!event.ok) entry.li.dataset.code = /^([A-Z_]+):/.exec(event.summary ?? '')?.[1] ?? '';
           const status = entry.li.querySelector('.dg-tool-status');
@@ -2353,9 +2421,9 @@ export class DoogleSidebar {
           };
         case 'DOCUMENT_WRITER_BUSY':
           return {
-            title: '다른 대화의 변경이 검토를 기다리고 있습니다',
-            body: '그 변경을 적용하거나 거절하면 이 대화에서 문서를 고칠 수 있습니다.',
-            actions: [{ label: '문서에서 검토', primary: true, run: () => this.revealFirst() }],
+            title: '다른 대화가 이 문서를 고치는 중입니다',
+            body: '그 대화가 끝난 뒤 다시 요청하세요.',
+            actions: [],
           };
         case 'STAGING_BASELINE_LOST':
           return {
@@ -2418,7 +2486,7 @@ export class DoogleSidebar {
       li.append(ol);
     }
     turn.toolList!.append(li);
-    turn.tools.set(callId, { li, label, view, ...(itemRows ? { items: itemRows } : {}) });
+    turn.tools.set(callId, { li, label, view, startedAt: Date.now(), ...(itemRows ? { items: itemRows } : {}) });
     this.updateChip(turn);
   }
 
@@ -2439,23 +2507,44 @@ export class DoogleSidebar {
   // ─── 진행 카드 (단계 체크리스트) ─────────────────────────
 
   private buildSteps(): StepsView {
-    const root = el('section', 'dg-progress');
+    const root = el('section', 'dg-progress dg-run');
     root.setAttribute('aria-label', '진행 상황');
-    const head = el('div', 'dg-progress-head');
-    const status = el('span', 'dg-progress-status');
+    const head = el('div', 'dg-progress-head dg-run-head');
+    // 상태 자리에는 체크·돌림표 대신 이 턴을 맡은 AI 의 로고 — 일하는 동안 돌고, 끝나면 멈춘다
+    const status = el('span', 'dg-run-logo');
     status.setAttribute('aria-hidden', 'true');
-    const title = el('span', 'dg-progress-title');
+    const glyph = el('span', 'dg-run-glyph');
+    glyph.setAttribute('aria-hidden', 'true');
+    const title = el('span', 'dg-progress-title dg-run-title');
     const time = el('span', 'dg-progress-time dg-tnum');
-    head.append(status, title, time);
-    const list = el('ol', 'dg-progress-list');
+    head.append(status, glyph, title, time);
+    const meta = el('div', 'dg-run-meta');
+    const model = el('span', 'dg-run-model');
+    const count = el('span', 'dg-run-count dg-tnum');
+    meta.append(model, count);
+    const bar = el('div', 'dg-run-bar');
+    bar.setAttribute('aria-hidden', 'true');
+    const list = el('ol', 'dg-progress-list dg-run-list');
     const now = el('li', 'dg-pstep dg-pstep--now');
     now.dataset.state = 'running';
-    now.append(el('span', 'dg-pstep-icon'), el('span', 'dg-pstep-label'));
+    const nowGlyph = el('span', 'dg-pstep-glyph');
+    now.append(nowGlyph, el('span', 'dg-pstep-label'));
     list.append(now);
-    const summary = el('div', 'dg-progress-sum');
-    summary.hidden = true;
-    root.append(head, list, summary);
-    return { root, status, title, time, list, rows: new Map(), now, summary };
+    const foot = el('div', 'dg-run-foot');
+    const stop = button('dg-run-btn', '', () => this.cancel());
+    stop.append(icon('stop', 13, 2), el('span', '', '중지'));
+    stop.title = '응답 중지';
+    const commit = el('div', 'dg-run-commit');
+    commit.hidden = true;
+    foot.append(stop, commit);
+    // 머리 한 줄(알약)로 나타났다가 아래 몸통이 펼쳐진다 — 몸통은 0fr → 1fr 칸 안에 둔다
+    const body = el('div', 'dg-run-body');
+    const inner = el('div', 'dg-run-inner');
+    inner.append(meta, bar, list, foot);
+    body.append(inner);
+    root.append(head, body);
+    if (!this.replaying) root.classList.add('dg-run--enter');
+    return { root, status, glyph, title, time, model, count, bar, list, rows: new Map(), now, foot, stop, commit };
   }
 
   /** 지금 하는 일 — 진행 카드의 진행 중 단계 옆에 보인다 */
@@ -2478,104 +2567,195 @@ export class DoogleSidebar {
   }
 
   /**
-   * 진행 카드를 다시 그린다. 단계는 도구 종류(살펴보기·고치기·확인)가 처음 나온 순서대로 쌓이고,
-   * 지금 일하는 단계에만 돌림표와 "지금 하는 일" 이 붙는다. 끝나면 머리가 "완료" 로 바뀌고
-   * 맨 아래에 변경 건수와 "문서에서 검토" 가 남는다 — 무엇이 바뀌었는지는 문서 위에서 본다.
+   * 실행 카드를 다시 그린다. 단계는 도구 종류(살펴보기·고치기·확인)가 최근에 쓰인 순서대로 쌓이고,
+   * 단계마다 아이콘 · 이름 · 고친 곳 수 · 걸린 시간을 보인다. 머리는 지금 하는 일과 흐르는 시간,
+   * 그 아래 모델 이름 · 도구 횟수와 단계 칸 막대. 끝나면 머리가 "완료 · N곳 고침" 으로 바뀌고
+   * 바닥에 이 턴이 남긴 지점(갈래 · 지점 번호 · "이 상태로")이 붙는다.
    */
   private renderSteps(turn: TurnView): void {
     const steps = turn.steps;
     if (!steps) return;
     const entries = [...turn.tools.values()];
-    // 단계는 가장 최근에 한 순서대로 쌓는다 — 지금 하는 일이 늘 맨 아래, 끝난 일은 그 위
-    const lastUse = new Map<ToolCategory, number>();
-    entries.forEach((e, i) => lastUse.set(e.view.category, i));
-    const order = [...lastUse.keys()].sort((a, b) => lastUse.get(a)! - lastUse.get(b)!);
+    // 단계는 처음 나온 순서대로 쌓고 자리를 옮기지 않는다 — 줄이 위아래로 뛰지 않게(참고 시안과 같다)
+    const order: ToolCategory[] = [];
+    for (const e of entries) if (!order.includes(e.view.category)) order.push(e.view.category);
     const anyRunning = entries.some((e) => e.li.dataset.state === 'running');
     const failedAll = entries.filter((e) => e.li.dataset.state === 'error').length;
+    const nowMs = Date.now();
+    let currentCat: ToolCategory | null = null;
+    let spotsAll = 0;
     for (const cat of order) {
       let row = steps.rows.get(cat);
       if (!row) {
         row = el('li', 'dg-pstep');
-        row.append(el('span', 'dg-pstep-icon'), el('span', 'dg-pstep-label', STEP_LABEL[cat]), el('span', 'dg-pstep-note'));
+        const glyph = el('span', 'dg-pstep-glyph');
+        glyph.append(icon(STEP_ICON[cat], 15, 1.8));
+        row.append(glyph, el('span', 'dg-pstep-label', STEP_LABEL[cat]), el('span', 'dg-pstep-note'), el('span', 'dg-pstep-dur dg-tnum'));
+        if (!this.replaying && !turn.done) {
+          row.classList.add('dg-pstep--enter');
+          // 다시 붙일 때 애니메이션이 처음부터 돌지 않게 끝나면 뗀다
+          row.addEventListener('animationend', () => row!.classList.remove('dg-pstep--enter'), { once: true });
+        }
         steps.rows.set(cat, row);
       }
-      // 순서대로 다시 붙인다(이미 있으면 자리만 옮긴다). "지금" 줄은 늘 맨 끝
-      steps.list.insertBefore(row, steps.now);
+      // 새 줄만 "지금" 줄 앞에 붙인다 — 이미 있는 줄은 움직이지 않는다
+      if (!row.isConnected) steps.list.insertBefore(row, steps.now);
       const mine = entries.filter((e) => e.view.category === cat);
       const failed = mine.filter((e) => e.li.dataset.state === 'error').length;
       // 도구가 실제로 도는 단계만 진행 중 — 생각·답변 쓰기는 아래 "지금" 줄이 맡는다
       const current = !turn.done && mine.some((e) => e.li.dataset.state === 'running');
+      if (current) currentCat = cat;
       row.dataset.state = current ? 'running' : failed > 0 ? 'error' : 'done';
       const note = row.querySelector('.dg-pstep-note')!;
-      if (current) {
-        note.textContent = turn.activity;
-      } else if (failed > 0) {
-        note.textContent = `${failed}개 끝내지 못함`;
-      } else if (cat === 'edit') {
-        const spots = mine.filter((e) => e.li.dataset.state === 'done').reduce((n, e) => n + editSpots(e.view), 0);
-        note.textContent = spots > 0 ? `${spots}곳` : '';
-      } else {
-        note.textContent = '';
-      }
+      const spots = cat === 'edit' ? mine.filter((e) => e.li.dataset.state === 'done').reduce((n, e) => n + editSpots(e.view), 0) : 0;
+      spotsAll += spots;
+      if (current) note.textContent = turn.activity;
+      else if (failed > 0) note.textContent = `${failed}개 끝내지 못함`;
+      else if (spots > 0) note.textContent = `${spots}곳`;
+      else note.textContent = mine.length > 1 ? `${mine.length}회` : '';
+      const ms = mine.reduce((n, e) => n + Math.max(0, (e.endedAt ?? nowMs) - e.startedAt), 0);
+      row.querySelector('.dg-pstep-dur')!.textContent = current ? `${Math.floor(ms / 1000)}초` : stepDuration(ms);
     }
     // "지금" 줄 — 도구가 돌지 않는 동안 무엇을 하는지(생각하는 중·답변 쓰는 중). 끝나면 숨긴다
     steps.now.hidden = turn.done || anyRunning;
-    steps.list.appendChild(steps.now);
+    if (steps.list.lastElementChild !== steps.now) steps.list.appendChild(steps.now);
     steps.now.querySelector('.dg-pstep-label')!.textContent = turn.activity;
     steps.list.hidden = turn.done && order.length === 0;
     const cancelled = turn.done && turn.root.dataset.cancelled === '1';
     const interrupted = turn.done && turn.root.dataset.interrupted === '1';
     steps.root.dataset.state = !turn.done ? 'running' : cancelled || interrupted ? 'stopped' : failedAll > 0 ? 'error' : 'done';
-    steps.title.textContent = !turn.done ? '작업 중' : interrupted ? '중단됨' : cancelled ? '중지함'
-      : failedAll > 0 ? `끝냄 · ${failedAll}개 못 함` : '완료';
-    steps.time.textContent = elapsed((turn.done && turn.endedAt ? turn.endedAt : Date.now()) - turn.startedAt);
-    this.renderTurnSummary(turn);
+    const brand = brandOf(turn.providerId);
+    if (steps.status.dataset.brand !== (brand ?? 'none')) {
+      steps.status.dataset.brand = brand ?? 'none';
+      steps.status.replaceChildren(...(brand ? [brandIcon(brand, 16)] : []));
+      steps.status.hidden = !brand;
+    }
+
+    // 머리 — 일하는 동안은 지금 하는 일, 끝나면 결과 한 줄
+    // 끝나면 머리는 짧게("완료") — 걸린 시간은 오른쪽에 회색으로
+    const doneText = interrupted ? '중단됨' : cancelled ? '중지함' : failedAll > 0 ? `끝냄 · ${failedAll}개 못 함` : '완료';
+    const titleText = !turn.done ? (turn.activity || '작업 중') : doneText;
+    if (steps.title.textContent !== titleText) {
+      const had = steps.title.textContent !== '';
+      steps.title.textContent = titleText;
+      if (had && !this.replaying) swapIn(steps.title);
+    }
+    steps.glyph.replaceChildren(...(currentCat ? [icon(STEP_ICON[currentCat], 15, 1.8)] : []));
+    steps.glyph.hidden = turn.done || !currentCat;
+    const spent = (turn.done && turn.endedAt ? turn.endedAt : nowMs) - turn.startedAt;
+    steps.time.textContent = turn.done ? spokenDuration(spent) : elapsed(spent);
+
+    // 모델 · 도구 횟수
+    steps.model.textContent = turn.model;
+    const stepCount = Math.max(order.length, turn.done ? 0 : 1);
+    steps.count.textContent = !turn.done ? `단계 ${stepCount}` : order.length > 0 ? `${order.length}단계 · 도구 ${entries.length}회` : '';
+
+    // 단계 칸 막대 — 끝난 단계는 채운 칸, 지금 단계는 흐르는 칸, 못 끝낸 단계는 빨간 칸
+    const segs: string[] = order.map((cat) => steps.rows.get(cat)!.dataset.state ?? 'done');
+    if (!turn.done && !anyRunning) segs.push('running');
+    if (segs.length === 0) segs.push(turn.done ? 'done' : 'running');
+    while (steps.bar.childElementCount > segs.length) steps.bar.lastElementChild!.remove();
+    while (steps.bar.childElementCount < segs.length) steps.bar.append(el('span', 'dg-run-seg'));
+    segs.forEach((state, i) => { (steps.bar.children[i] as HTMLElement).dataset.state = state; });
+
+    this.renderRunFoot(turn);
   }
 
-  /** 끝난 턴의 변경 요약 줄 — 건수와 "문서에서 검토" 만. 전·후 내용은 문서 위 검토 막이 보인다 */
-  private renderTurnSummary(turn: TurnView): void {
+  /**
+   * 실행 카드 바닥. 일하는 동안은 "중지", 끝나면 이 턴이 남긴 지점 — 갈래 이름(누르면 문서 갈래가 열린다) ·
+   * 지점 번호 · "이 상태로"(지금 그 지점이면 "지금 여기"). 문서를 바꾸지 않은 턴은 바닥이 없다.
+   */
+  private renderRunFoot(turn: TurnView): void {
     const steps = turn.steps;
     if (!steps) return;
-    const box = steps.summary;
-    if (!turn.done) {
-      box.hidden = true;
-      return;
-    }
-    const pendingIds = this.pendingIdsOf(turn);
-    let text = '';
-    if (pendingIds.length > 0) {
-      text = `변경 ${pendingIds.length}건 · 문서에 표시함`;
-    } else if (turn.changeIds.size > 0) {
-      text = `변경 ${turn.changeIds.size}건 · 검토 끝남`;
+    steps.stop.hidden = turn.done;
+    steps.stop.disabled = this.turn !== turn;
+    const history = this.deps.history;
+    let node: CheckpointNode | null = null;
+    try { node = turn.done && history ? history.turnNode(turn.turnKey) : null; } catch { node = null; }
+    if (!node || !history) {
+      steps.commit.hidden = true;
+      steps.commit.replaceChildren();
     } else {
-      const spots = [...turn.tools.values()]
-        .filter((e) => e.view.category === 'edit' && e.li.dataset.state === 'done')
-        .reduce((n, e) => n + editSpots(e.view), 0);
-      if (spots > 0) text = turn.restored ? `${spots}곳 고침` : `${spots}곳 고침 · 문서에 바로 적용함`;
+      const nodes = history.nodes();
+      const lane = laneOfNode(nodes, node.id);
+      const here = history.head() === node.id && !history.dirty();
+      const id = node.id;
+      const chip = button('dg-run-branch', '', () => this.openBranches(id));
+      chip.append(
+        icon('branch', 13, 2),
+        el('span', `dg-run-lane dg-lane-${lane % 6}`, branchName(lane)),
+        el('span', 'dg-run-branch-sep', '·'),
+        el('span', 'dg-tnum', `지점 ${checkpointNumber(nodes, id)}`),
+      );
+      chip.title = '문서 갈래에서 보기';
+      let tail: HTMLElement;
+      if (node.lost) {
+        tail = el('span', 'dg-run-note', '되돌릴 수 없음');
+        tail.title = '너무 오래된 지점이라 스냅샷이 남아 있지 않습니다. 실행 취소(Ctrl+Z)를 쓰세요.';
+      } else if (here) {
+        tail = el('span', 'dg-run-here');
+        const dot = el('span', `dg-run-dot dg-lane-${lane % 6}`);
+        dot.setAttribute('aria-hidden', 'true');
+        tail.append(dot, el('span', '', '지금 여기'));
+      } else {
+        const go = button('dg-run-go', '', () => this.checkoutTo(id));
+        go.append(el('span', '', '이 상태로'), icon('undo', 13, 2));
+        go.title = '문서를 이 요청이 끝난 상태로 되돌립니다 (실행 취소로 다시 돌아올 수 있습니다)';
+        go.disabled = this.busy;
+        tail = go;
+      }
+      steps.commit.replaceChildren(chip, el('div', 'dg-grow'), tail);
+      steps.commit.hidden = false;
     }
-    box.hidden = !text;
-    if (!text) return;
-    const label = el('span', 'dg-progress-sum-text', text);
-    if (pendingIds.length > 0) {
-      const go = button('dg-progress-go', '문서에서 검토', () => reviewStore.focus(pendingIds[0], true));
-      box.replaceChildren(label, go);
-    } else {
-      box.replaceChildren(label);
-    }
+    steps.foot.hidden = turn.done && steps.commit.hidden;
   }
 
   private renderTurnSummaries(): void {
-    for (const t of this.thread?.turns ?? []) {
-      if (!t.done) continue;
-      this.renderTurnSummary(t);
-      this.renderTurnActions(t);
+    for (const view of this.threads?.values() ?? []) {
+      for (const t of view.turns) {
+        this.renderRunFoot(t);
+        if (t.done) this.renderTurnActions(t);
+      }
     }
   }
 
-  /** 검토 대기 첫 변경을 문서에서 보인다 */
-  private revealFirst(): void {
-    const first = reviewStore.rows()[0];
-    if (first) reviewStore.focus(first.id, true);
+  // ─── 문서 갈래 ─────────────────────────────────────────
+
+  private toggleBranches(): void {
+    if (this.branches.isOpen) this.closeBranches(true);
+    else this.openBranches();
+  }
+
+  private openBranches(focusId?: string): void {
+    this.closeMenu(false);
+    this.branches.open(focusId);
+    this.branchBtn.setAttribute('aria-expanded', 'true');
+  }
+
+  private closeBranches(restoreFocus: boolean): void {
+    if (!this.branches.isOpen) return;
+    this.branches.close();
+    this.branchBtn.setAttribute('aria-expanded', 'false');
+    if (restoreFocus) this.branchBtn.focus();
+  }
+
+  /** 지점으로 되돌아간다 — 실행기가 스냅샷으로 복원한다(실행 취소 한 단계) */
+  private checkoutTo(id: string): void {
+    const history = this.deps.history;
+    if (!history || this.busy) return;
+    try {
+      const target = history.nodes().find((n) => n.id === id);
+      const r = history.checkout(id);
+      if (!r.changed) return;
+      const name = target?.kind === 'origin' ? '처음' : `지점 ${checkpointNumber(history.nodes(), id)}`;
+      this.addNotice(
+        `${name} 상태로 되돌아갔습니다.${r.savedManual ? ' 그 전에 직접 고친 내용은 "직접 고침" 지점으로 남겼습니다.' : ''} 실행 취소(Ctrl+Z)로 다시 돌아올 수 있습니다.`,
+        'info',
+      );
+    } catch (error) {
+      this.addNotice(error instanceof Error ? error.message : String(error), 'error');
+    }
   }
 
   // ─── 메시지 동작 ───────────────────────────────────────
@@ -2591,12 +2771,7 @@ export class DoogleSidebar {
     }, 15);
     const retry = iconButton('dg-act dg-act-retry', 'retry', '다시 시도', () => this.retry(turn), 15);
     if (!turn.userText) retry.hidden = true;
-    // 검토 대기 중에는 목록 머리줄의 "모두 거절" 하나만 둔다. 이 단추는 적용한 뒤에만 보인다.
-    const revert = button('dg-act dg-act-text', '', () => this.revertApplied(turn));
-    revert.append(icon('undo', 14), el('span', 'dg-act-revert-text', '이 요청의 변경 되돌리기'));
-    revert.classList.add('dg-act-revert');
-    revert.hidden = true;
-    row.append(copy, retry, revert);
+    row.append(copy, retry);
     // 실패한 도구가 있으면 그것만 다시 해 달라고 요청한다(도구 재생은 프로토콜에 없어 같은 대화의 새 요청으로)
     const failed = [...new Set([...turn.tools.values()]
       .filter((e) => e.li.dataset.state === 'error' && !NO_RETRY_CODES.has(e.li.dataset.code ?? ''))
@@ -2613,55 +2788,9 @@ export class DoogleSidebar {
     return row;
   }
 
-  /**
-   * "이 요청의 변경 되돌리기" 는 이 턴의 변경을 적용한 뒤, 문서가 그대로인 동안만 보인다.
-   * 검토 대기 중의 되돌리기는 목록의 "모두 거절" 이 맡는다 (같은 일을 하는 단추를 둘 두지 않는다).
-   */
+  /** 끝난 턴의 동작 단추 — 응답 중에는 누를 수 없다. (되돌리기는 실행 카드의 지점 "이 상태로" 가 맡는다) */
   private renderTurnActions(turn: TurnView, row = turn.actions): void {
-    const revert = row?.querySelector<HTMLButtonElement>('.dg-act-revert');
-    if (!revert) return;
-    const info = this.appliedOf(turn);
-    revert.hidden = !info;
-    revert.disabled = this.busy;
-    if (info) {
-      const text = revert.querySelector('.dg-act-revert-text');
-      const label = info.whole ? '이 요청의 변경 되돌리기' : `적용한 변경 ${info.count}건 되돌리기`;
-      if (text) text.textContent = label;
-      revert.title = `적용한 변경 ${info.count}건을 요청 전 상태로 되돌립니다. 실행 취소(Ctrl+Z)와 같은 동작입니다.`;
-    }
     for (const b of row?.querySelectorAll<HTMLButtonElement>('.dg-act-retry, .dg-act-failed') ?? []) b.disabled = this.busy;
-  }
-
-  /**
-   * 이 턴이 "방금 적용한 묶음"의 마지막 턴이면 그 묶음. whole = 묶음이 모두 이 턴의 변경이다.
-   * 적용 뒤 문서가 바뀌었으면(직접 편집·실행 취소·새 요청) null.
-   */
-  private appliedOf(turn: TurnView): { count: number; whole: boolean } | null {
-    let info: { threadId: string; ids: string[]; count: number } | null = null;
-    try { info = this.deps.pending?.revertInfo?.() ?? null; } catch { info = null; }
-    if (!info || info.count === 0) return null;
-    const owners = info.ids.map((id) => this.changeTurn.get(id));
-    const last = [...this.thread.turns].reverse().find((t) => owners.includes(t));
-    if (last !== turn) return null;
-    return { count: info.count, whole: owners.every((t) => t === turn) };
-  }
-
-  /** 적용한 변경을 요청 전 상태로 되돌린다 — 실행기가 스냅샷으로 복원한다(되돌리기 1단계) */
-  private revertApplied(turn: TurnView): void {
-    if (this.busy) return;
-    const pending = this.deps.pending;
-    try {
-      const reverted = pending?.revertAccepted?.().reverted ?? 0;
-      if (reverted > 0) {
-        this.addNotice(`적용한 변경 ${reverted}건을 되돌렸습니다.`, 'info');
-        this.deps.hub.reviewDecision(turn.threadId, 'reject_all', `사용자가 방금 적용했던 변경 ${reverted}건을 모두 되돌렸습니다. 문서는 그 요청 전 상태입니다.`);
-      } else {
-        this.addNotice('그 뒤로 문서가 바뀌어 한 번에 되돌릴 수 없습니다. 실행 취소(Ctrl+Z)를 쓰세요.', 'info');
-      }
-    } catch (error) {
-      this.addNotice(`되돌리지 못했습니다: ${error instanceof Error ? error.message : String(error)}`, 'error');
-    }
-    for (const t of this.thread.turns) if (t.done) this.renderTurnActions(t);
   }
 
   private pendingIdsOf(turn: TurnView): string[] {

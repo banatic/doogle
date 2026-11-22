@@ -15,6 +15,7 @@ import { Engine, ENGINE_EDIT_METHODS } from './engine-adapter.ts';
 import { ENGINE_METHOD_SIGNATURES, checkEngineArgs, engineSignatureText } from './engine-signatures.ts';
 import { RevisionTracker, timeSeededRevision } from './revision.ts';
 import { PendingStaging } from './pending.ts';
+import { CheckpointTree } from './checkpoints.ts';
 import { renderPagePng, renderStackedRegions } from './render.ts';
 import {
   StructureReader, collectPageStarts, renderCompactStructure, structureParagraphLine,
@@ -110,6 +111,7 @@ export class DoogleToolExecutor {
   readonly tracker: RevisionTracker;
   readonly journal = new EditJournal();
   readonly staging: PendingStaging;
+  readonly history: CheckpointTree;
   private batch: BatchState | null = null;
   private reviewNotes = new Map<string, Record<string, unknown>>();
   /** verify_changes 증분 커서 — 스레드별 마지막으로 보고한 change set 수 */
@@ -125,6 +127,11 @@ export class DoogleToolExecutor {
     });
     this.lastInstance = deps.documentInstance?.();
     this.staging = new PendingStaging(deps, {
+      noteWrite: (revBefore) => this.tracker.noteWrite(revBefore),
+      revision: () => this.tracker.revision,
+      noteReview: (threadId, report) => this.reviewNotes.set(threadId, report),
+    });
+    this.history = new CheckpointTree(deps, {
       noteWrite: (revBefore) => this.tracker.noteWrite(revBefore),
       revision: () => this.tracker.revision,
       noteReview: (threadId, report) => this.reviewNotes.set(threadId, report),
@@ -160,6 +167,7 @@ export class DoogleToolExecutor {
   dispose(): void {
     this.tracker.dispose();
     this.staging.dispose();
+    this.history.dispose();
   }
 
   // ─── 진입점 ─────────────────────────────────────────────
@@ -193,6 +201,9 @@ export class DoogleToolExecutor {
     if (instance !== this.lastInstance) {
       this.lastInstance = instance;
       this.staging.reset();
+      // 문서 갈래는 스스로 문서 인스턴스를 따라간다(CheckpointTree.syncInstance). 여기서 지우면 안 된다 —
+      // 실행기가 문서를 다 읽기 전에(인스턴스 0) 만들어졌으면, 갈래가 이미 새 인스턴스로 잡은 첫 지점을
+      // 첫 도구 호출이 통째로 지워 버린다(새 문서의 첫 요청에서 지점이 사라지던 문제).
       this.journal.clear();
     }
   }

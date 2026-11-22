@@ -76,6 +76,16 @@ export function createDoogleAgentRuntime(deps: DoogleAgentDeps): DoogleAgentRunt
         try { return targetRects(new Engine(doc), change.targets ?? []); } catch { return []; }
       },
     },
+    history: {
+      beginTurn: (threadId, turnKey, label) => executor.history.beginTurn(threadId, turnKey, label),
+      endTurn: (turnKey) => executor.history.endTurn(turnKey),
+      turnNode: (turnKey) => executor.history.turnNode(turnKey),
+      nodes: () => executor.history.nodes(),
+      head: () => executor.history.head(),
+      dirty: () => executor.history.dirty(),
+      checkout: (id) => executor.history.checkout(id),
+      onChange: (cb) => executor.history.onChange(cb),
+    },
     revision: () => executor.revision,
     noteDocumentSwap: () => executor.syncDocumentInstance(),
     dispose: () => executor.dispose(),

@@ -80,7 +80,6 @@ export async function initDoogle(host: PluginHost): Promise<PluginSurface> {
   const runtime = await createRuntime(host);
   // e2e·개발 확인용 — 실행기를 직접 불러 본다(개발 빌드 전용)
   if (import.meta.env.DEV) (window as unknown as { __doogleRuntime?: unknown }).__doogleRuntime = runtime;
-  let mode: 'agent' | 'full' = 'agent';
 
   // eslint-disable-next-line prefer-const
   let sidebar: InstanceType<typeof DoogleSidebar>;
@@ -95,15 +94,11 @@ export async function initDoogle(host: PluginHost): Promise<PluginSurface> {
       if (!runtime) {
         return { ok: false, error: { code: 'NOT_IMPLEMENTED', message: '두글 문서 실행기가 아직 없습니다' } };
       }
-      // 외부(MCP) 쓰기도 검토 파이프라인을 지난다(PLAN §2). hub 가 mode 를 실어 보내면 그 값을 쓴다.
-      const callMode = (call as { mode?: unknown }).mode;
-      const effective = callMode === 'agent' || callMode === 'full'
-        ? callMode
-        : call.origin === 'mcp' ? 'agent' : mode;
+      // 검토 단계는 없다 — 편집은 곧바로 문서에 들어가고, 되돌리기는 문서 갈래(지점)가 맡는다.
       return runtime.executeTool(call.name, call.args, {
         origin: call.origin,
         ...(call.threadId ? { threadId: call.threadId } : {}),
-        mode: effective,
+        mode: 'full',
       });
     },
   });
@@ -120,6 +115,7 @@ export async function initDoogle(host: PluginHost): Promise<PluginSurface> {
   sidebar = new DoogleSidebar({
     hub,
     pending: runtime?.pending ?? null,
+    history: runtime?.history ?? null,
     getDocContext: () => docContext(host),
     openDocument,
     isDesk: desk.isDesk(),
@@ -143,11 +139,12 @@ export async function initDoogle(host: PluginHost): Promise<PluginSurface> {
       return { key, name: s.name };
     },
     openExternal: (url) => desk.openExternal(url),
-    onModeChange: (next) => { mode = next; },
     // 문서 탭: 이 대화의 편집을 지금 초점 문서에 묶는다 — 답을 만드는 중에 탭을 바꿔도 다른 문서로 새지 않는다
     onTurnStart: (threadId) => { (runtime as { bindThread?: (id: string) => void } | null)?.bindThread?.(threadId); },
   });
-  mode = sidebar.state.mode;
+
+  // e2e·개발 확인용 — 사이드바 화면을 가짜 이벤트로 그려 본다(개발 빌드 전용)
+  if (import.meta.env.DEV) (window as unknown as { __doogleSidebar?: unknown }).__doogleSidebar = sidebar;
 
   host.ui.registerSidePanel({
     id: DOOGLE_PANEL_ID,

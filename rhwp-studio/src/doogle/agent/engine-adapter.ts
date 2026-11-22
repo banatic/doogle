@@ -35,7 +35,7 @@ function safeRead(read: () => Record<string, unknown>): Record<string, unknown> 
 }
 
 /** 문서를 바꾸지 않는 엔진 메서드 이름 (읽기·질의·그리기·클립보드 복사·스냅샷 관리) */
-const READ_ONLY_METHOD_RE = /^(get|search|render|pageCount|logicalTo|textTo|evaluate|measure|export|copy|saveSnapshot|discardSnapshot|has[A-Z])/;
+const READ_ONLY_METHOD_RE = /^(get|search|render|pageCount|logicalTo|textTo|evaluate|measure|export|copy|saveSnapshot|importSnapshot|discardSnapshot|has[A-Z])/;
 
 function isEngineTrap(error: unknown): boolean {
   return typeof WebAssembly !== 'undefined' && error instanceof WebAssembly.RuntimeError;
@@ -572,6 +572,18 @@ export class Engine {
 
   discardSnapshot(id: number): void {
     try { this.call('discardSnapshot', id); } catch { /* 이미 축출됐다 */ }
+  }
+
+  /** 문서 바이트(HWP/HWPX)를 스냅샷으로만 넣는다 — 지금 문서는 그대로 (문서 갈래 복원) */
+  importSnapshot(bytes: Uint8Array): number {
+    return Number(this.call('importSnapshot', bytes));
+  }
+
+  /** 지금 문서를 HWP 바이트로 */
+  exportHwp(): Uint8Array {
+    const out = this.call('exportHwp');
+    if (out instanceof Uint8Array) return out;
+    throw new DoogleToolError('ENGINE_ERROR', 'exportHwp returned no bytes', { method: 'exportHwp' });
   }
 }
 

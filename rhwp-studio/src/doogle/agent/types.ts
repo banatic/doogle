@@ -150,6 +150,13 @@ export interface DoogleAgentDeps {
   refreshView?(): void;
   /** 시각 — 테스트 주입용 */
   now?(): number;
+  /**
+   * 문서 갈래를 앱 밖에 남길 때의 문서 키(경로, 없으면 `name:` + 이름 줄기). 저장 안 한 새 문서는 null —
+   * 지점은 세션 한정이다. 없으면 지점을 저장하지 않는다.
+   */
+  documentKey?(): string | null;
+  /** 문서 갈래 저장소 (agent/checkpoint-store.ts). 없으면 지점은 세션 한정 */
+  checkpointStore?: import('./checkpoint-store.ts').CheckpointStore | null;
 }
 
 /**
@@ -217,6 +224,57 @@ export interface PendingChangeEvent {
   changeSets: PendingChangeSet[];
 }
 
+/** 문서 갈래의 지점 하나 (agent/checkpoints.ts) */
+export interface CheckpointNode {
+  id: string;
+  parentId: string | null;
+  /** origin = 첫 요청 전 문서, agent = 요청 하나가 끝난 상태, manual = 사이에 사용자가 직접 고친 상태 */
+  kind: 'origin' | 'agent' | 'manual';
+  /** 요청 글(줄인 것) · "처음 상태" · "직접 고침" */
+  label: string;
+  createdAt: number;
+  threadId?: string;
+  /** 이 지점을 만든 사이드바 턴 */
+  turnKey?: string;
+  /** 스냅샷을 잃어 되돌아갈 수 없다 */
+  lost?: boolean;
+  /** 문서 바이트가 저장소에 있어 앱을 다시 열어도 되돌아갈 수 있다 */
+  stored?: boolean;
+}
+
+export type CheckpointEvent =
+  | { kind: 'added'; id: string }
+  | { kind: 'checkout'; id: string }
+  | { kind: 'changed' }
+  | { kind: 'reset' };
+
+export interface CheckoutResult {
+  changed: boolean;
+  savedManual: boolean;
+  pending?: Promise<{ changed: boolean; savedManual: boolean; error?: string }>;
+}
+
+export interface HistoryApi {
+  /** 요청 시작 — 지금 지점(없으면 뿌리)을 이 턴의 부모로 잡는다 */
+  beginTurn(threadId: string, turnKey: string, label: string): void;
+  /** 요청 끝 — 문서가 바뀌었으면 새 지점을 남기고 돌려준다 */
+  endTurn(turnKey: string): CheckpointNode | null;
+  /** 이 턴이 남긴 지점 */
+  turnNode(turnKey: string): CheckpointNode | null;
+  nodes(): CheckpointNode[];
+  /** 지금 문서가 있는 지점 */
+  head(): string | null;
+  /** 지금 지점 뒤로 문서가 바뀌었다(직접 고침) */
+  dirty(): boolean;
+  /**
+   * 그 지점의 문서로 되돌아간다. 실패하면 DoogleToolError.
+   * 저장소에서 바이트를 읽어 와야 하는 지점이면 곧바로 { changed: false, pending } 을 돌려주고
+   * 읽기가 끝나면 되돌아간다 — pending 은 그 결과(실패면 error)로 풀린다(거절하지 않는다).
+   */
+  checkout(id: string): CheckoutResult;
+  onChange(cb: (e: CheckpointEvent) => void): () => void;
+}
+
 export interface PendingApi {
   list(threadId?: string): PendingChangeSet[];
   acceptAll(threadId?: string): { accepted: number };
@@ -254,6 +312,8 @@ export interface PendingApi {
 export interface DoogleAgentRuntime {
   executeTool(name: string, args: unknown, ctx: ToolContext): Promise<ToolResult>;
   pending: PendingApi;
+  /** 문서 갈래 — 요청마다 남긴 지점과 되돌아가기 */
+  history?: HistoryApi;
   revision(): number;
   /** 문서가 교체됐다(열기·새 문서) — 이전 문서의 검토 대기 변경을 그 자리에서 버린다 */
   noteDocumentSwap?(): void;

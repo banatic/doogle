@@ -6,9 +6,11 @@
  */
 import type { PluginHost, PluginCaret } from '@/plugin/types';
 import type {
+  CheckpointEvent,
   DoogleAgentDeps,
   DoogleAgentRuntime,
   EngineDoc,
+  HistoryApi,
   PendingApi,
   PendingChangeEvent,
   SelectionInfo,
@@ -16,6 +18,9 @@ import type {
   ToolResult,
 } from '../agent/types.ts';
 import { getDocHub, type DocHub, type DocSession } from '../workspace/doc-hub.ts';
+import { checkpointDocKey, defaultCheckpointStore } from '../agent/checkpoint-store.ts';
+import { getDocState } from '../shell/doc-state.ts';
+import { isDesk } from './desk-bridge.ts';
 
 /** 초점 문서(탭)가 바뀌었다 — shell/index.ts 가 쏜다 */
 const DOC_FOCUS_EVENT = 'doogle:doc-focus';
@@ -41,40 +46,17 @@ export function isAgentEditOnFocusedDocument(): boolean {
 }
 
 /**
- * 문서 위 검토 막(유리 팝오버·하단 알약)을 실행기와 함께 올리고 내린다.
- * 진입점(index.ts)을 고치지 않으려고 여기서 붙인다 — runtime.dispose 가 막도 걷는다.
+ * 문서 교체를 실행기에 알린다. (예전에는 문서 위 검토 막도 여기서 올렸다 — 검토 단계를 없애고
+ * 편집은 곧바로 적용, 되돌리기는 문서 갈래(agent/checkpoints.ts)가 맡는다.)
  */
-async function withReviewOverlay(host: PluginHost, runtime: DoogleAgentRuntime): Promise<DoogleAgentRuntime> {
-  let overlay: { dispose(): void } | null = null;
-  try {
-    const { mountReviewOverlay } = await import('../review/overlay.ts');
-    overlay = mountReviewOverlay(host, runtime.pending);
-  } catch (error) {
-    console.error('[doogle] 문서 위 검토 막을 올리지 못했습니다', error);
-  }
-  // 문서가 바뀌면 이전 문서의 검토 대기 목록을 바로 비운다 — 다음 tool 호출까지 남겨 두면
-  // 그사이의 "모두 적용/거절" 이 새 문서에 옛 문서의 스냅샷 번호로 들어간다
+async function withDocumentSwap(host: PluginHost, runtime: DoogleAgentRuntime): Promise<DoogleAgentRuntime> {
   const offSwap = host.onDocumentSwap(() => {
-    try { runtime.noteDocumentSwap?.(); } catch (error) { console.error('[doogle] 문서 교체 뒤 검토 목록 정리 실패', error); }
+    try { runtime.noteDocumentSwap?.(); } catch (error) { console.error('[doogle] 문서 교체 뒤 정리 실패', error); }
   });
-  // 문서 탭: 막은 지금 문서의 스크롤 영역에 붙어 있다 — 초점 문서가 바뀌면 그 문서 위에 다시 올린다
-  const onFocus = () => {
-    if (!getDocHub()) return;
-    overlay?.dispose();
-    overlay = null;
-    void import('../review/overlay.ts').then(({ mountReviewOverlay }) => {
-      overlay?.dispose();
-      overlay = mountReviewOverlay(host, runtime.pending);
-    }).catch((error) => console.error('[doogle] 문서 위 검토 막을 옮기지 못했습니다', error));
-  };
-  window.addEventListener(DOC_FOCUS_EVENT, onFocus);
   return {
     ...runtime,
-    pending: runtime.pending,
     dispose: () => {
       offSwap();
-      window.removeEventListener(DOC_FOCUS_EVENT, onFocus);
-      overlay?.dispose();
       runtime.dispose();
     },
   };
@@ -91,6 +73,10 @@ function scopedDeps(host: PluginHost, hub: DocHub, session: DocSession): DoogleA
     documentInstance: () => session.wasm.documentGeneration,
     getSelection: () => (session.disposed ? null : hub.scoped(session, () => base.getSelection?.() ?? null)),
     getDocumentName: () => session.wasm.fileName || null,
+    // 문서 갈래를 앱 밖(IndexedDB)에 남기는 키 — 경로, 없으면 이름. 저장 안 한 새 문서는 null(세션 한정)
+    documentKey: () => (session.disposed ? null
+      : checkpointDocKey(session.path, session.wasm.fileName, session.wasm.isNewDocument, !isDesk())),
+    checkpointStore: defaultCheckpointStore(),
   };
 }
 
@@ -108,6 +94,8 @@ function createRoutedRuntime(
   const offs = new Map<number, () => void>();
   const listeners = new Set<(e: PendingChangeEvent) => void>();
   const threadSession = new Map<string, number>();
+  const historyListeners = new Set<(e: CheckpointEvent) => void>();
+  const turnSession = new Map<string, number>();
   let base: DoogleAgentRuntime | null = null;
 
   const notify = (e: PendingChangeEvent) => {
@@ -126,10 +114,17 @@ function createRoutedRuntime(
       return null;
     }
     runtimes.set(session.id, made);
-    offs.set(session.id, made.pending.onChange((e) => {
+    const offPending = made.pending.onChange((e) => {
       // 화면(사이드바·문서 위 막)은 초점 문서의 변경만 따른다
       if (hub.focused === session) notify(e);
-    }));
+    });
+    // 문서 갈래도 초점 문서의 것만 화면에 — 다른 문서에서 끝난 턴의 지점은 그 문서로 돌아오면 보인다
+    const offHistory = made.history?.onChange((e) => {
+      for (const cb of [...historyListeners]) {
+        try { cb(hub.focused === session ? e : { kind: 'changed' }); } catch (error) { console.error('[doogle] 문서 갈래 알림 실패', error); }
+      }
+    });
+    offs.set(session.id, () => { offPending(); offHistory?.(); });
     return made;
   };
   /** 문서가 없을 때 — 도구가 NO_DOCUMENT 로 답하게 하는 빈 실행기 */
@@ -164,7 +159,12 @@ function createRoutedRuntime(
     for (const [threadId, id] of threadSession) if (id === session.id) threadSession.delete(threadId);
   });
   // 초점 문서가 바뀌면 화면의 검토 목록도 그 문서의 것으로 — 구독자에게 한 번 알린다
-  const onFocus = () => notify({ kind: 'added', threadId: null, changeSets: [] });
+  const onFocus = () => {
+    notify({ kind: 'added', threadId: null, changeSets: [] });
+    for (const cb of [...historyListeners]) {
+      try { cb({ kind: 'changed' }); } catch (error) { console.error('[doogle] 문서 갈래 알림 실패', error); }
+    }
+  };
   window.addEventListener(DOC_FOCUS_EVENT, onFocus);
 
   const pending: PendingApi = {
@@ -187,7 +187,39 @@ function createRoutedRuntime(
     revertAccepted: () => focusedPending()?.revertAccepted?.() ?? { reverted: 0 },
   };
 
+  const focusedHistory = (): HistoryApi | null => ensure(hub.focused)?.history ?? null;
+  const history: HistoryApi = {
+    beginTurn: (threadId, turnKey, label) => {
+      const bound = threadSession.get(threadId);
+      const session = (bound !== undefined ? hub.byId(bound) : null) ?? hub.focused;
+      if (!session) return;
+      turnSession.set(turnKey, session.id);
+      ensure(session)?.history?.beginTurn(threadId, turnKey, label);
+    },
+    endTurn: (turnKey) => {
+      const id = turnSession.get(turnKey);
+      turnSession.delete(turnKey);
+      const session = id !== undefined ? hub.byId(id) : null;
+      return session ? ensure(session)?.history?.endTurn(turnKey) ?? null : null;
+    },
+    // 지점은 지금 화면의 문서 것만 — 다른 문서의 지점을 이 문서에서 고르지 않게
+    turnNode: (turnKey) => focusedHistory()?.turnNode(turnKey) ?? null,
+    nodes: () => focusedHistory()?.nodes() ?? [],
+    head: () => focusedHistory()?.head() ?? null,
+    dirty: () => focusedHistory()?.dirty() ?? false,
+    checkout: (id) => {
+      const h = focusedHistory();
+      if (!h) throw new Error('열린 문서가 없습니다');
+      return h.checkout(id);
+    },
+    onChange: (cb) => {
+      historyListeners.add(cb);
+      return () => { historyListeners.delete(cb); };
+    },
+  };
+
   return {
+    history,
     async executeTool(name, args, ctx): Promise<ToolResult> {
       let session: DocSession | null;
       const bound = ctx.threadId ? threadSession.get(ctx.threadId) : undefined;
@@ -271,6 +303,12 @@ export function depsFromHost(host: PluginHost): DoogleAgentDeps {
       const title = document.title.replace(/ - rhwp-studio$/, '');
       return title && title !== 'rhwp-studio' ? title : null;
     },
+    documentKey: () => {
+      const s = getDocState();
+      if (!s.hasDocument) return null;
+      return checkpointDocKey(s.path, s.name, /^새 문서\.(hwp|hwpx)$/i.test(s.name) && !s.path, !isDesk());
+    },
+    checkpointStore: defaultCheckpointStore(),
   };
 }
 
@@ -283,11 +321,11 @@ export async function createRuntime(host: PluginHost): Promise<DoogleAgentRuntim
         const hub = getDocHub();
         if (hub) {
           const routed = createRoutedRuntime(host, hub, factory as RuntimeFactory);
-          const wrapped = await withReviewOverlay(host, routed);
+          const wrapped = await withDocumentSwap(host, routed);
           return { ...wrapped, bindThread: routed.bindThread } as RoutedAgentRuntime;
         }
         const runtime = await (factory as RuntimeFactory)(depsFromHost(host));
-        return withReviewOverlay(host, runtime);
+        return withDocumentSwap(host, runtime);
       }
     } catch (error) {
       console.error(`[doogle] 실행기(${path})를 만들지 못했습니다`, error);

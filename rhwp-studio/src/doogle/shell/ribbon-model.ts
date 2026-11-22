@@ -373,16 +373,7 @@ export const RIBBON_TABS: RibbonTab[] = [
     label: '검토',
     key: 'ㄱ',
     groups: [
-      {
-        // 'AI 도우미' 탭을 합쳤다 — 에이전트가 만든 변경을 문서에서 탐색하고 한꺼번에 결정한다.
-        id: 'changes', caption: 'AI 변경', priority: 9,
-        items: [
-          action('review-accept-all', '모두 적용', 'checkAll', 'lg', { tone: 'ai' }),
-          action('review-reject-all', '모두 거절', 'xAll', 'lg'),
-          action('review-prev', '이전 변경', 'prev', 'sm'),
-          action('review-next', '다음 변경', 'next', 'sm'),
-        ],
-      },
+      // (AI 변경 검토 묶음은 없앴다 — 편집은 곧바로 적용되고, 되돌리기는 사이드바의 문서 갈래가 맡는다)
       {
         id: 'compare', caption: '비교·이력', priority: 8,
         items: [

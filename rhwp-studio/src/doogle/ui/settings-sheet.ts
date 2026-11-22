@@ -1,21 +1,19 @@
 /**
  * 사이드바 설정 시트 (UI_AUDIT §3.4) — 톱니로 열고, 패널 안에서 옆으로 밀려 들어온다(모달 아님).
  *
- * 구성: AI 계정 카드(Claude Code · Codex · ChatGPT · API 키) · 기본 적용 방식 · AI 서비스 상태 ·
+ * 구성: AI 계정 카드(Claude Code · Codex · ChatGPT · API 키) · AI 서비스 상태 ·
  * 데이터 안내. 모델 메뉴는 이제 모델 고르기만 하고, 계정 연결·키·로그아웃은 모두 여기서 한다.
  *
  * 정책: Claude 로그인 UI 를 만들지 않는다(CONTRACT §0). Claude Code 는 상태만 보여 주고,
  * 터미널에서 `claude` → `/login` 하라는 안내와 "터미널 명령 복사" 단추만 둔다.
  */
-import type { AgentMode, HubClient, ProviderInfo } from '../hub-client.ts';
+import type { HubClient, ProviderInfo } from '../hub-client.ts';
 import { brandIcon, brandOf } from './brand.ts';
 import { icon } from './icons.ts';
 
 export interface SettingsHost {
   hub: HubClient;
   providers(): readonly ProviderInfo[];
-  mode(): AgentMode;
-  setMode(mode: AgentMode): void;
   busy(): boolean;
   loginPending(): string | null;
   startLogin(providerId: string): void;
@@ -143,9 +141,6 @@ export class SettingsSheet {
       parts.push(el('p', 'dg-sheet-note', conn.ok ? 'AI 계정 목록을 받는 중…' : 'AI 서비스에 연결되면 AI 계정을 연결할 수 있습니다.'));
     }
     for (const provider of providers) parts.push(this.providerCard(provider));
-
-    parts.push(el('h3', 'dg-sheet-heading', '기본 적용 방식'));
-    parts.push(this.modeGroup());
 
     parts.push(el('h3', 'dg-sheet-heading', 'AI 서비스'));
     parts.push(this.serviceCard());
@@ -335,33 +330,6 @@ export class SettingsSheet {
       });
     });
     return form;
-  }
-
-  // ─── 적용 방식 ────────────────────────────────────────
-
-  private modeGroup(): HTMLElement {
-    const group = el('div', 'dg-mode-group');
-    group.setAttribute('role', 'radiogroup');
-    group.setAttribute('aria-label', '기본 적용 방식');
-    const current = this.host.mode();
-    const options: Array<{ mode: AgentMode; title: string; tag?: string; sub: string }> = [
-      { mode: 'agent', title: '검토 후 적용', tag: '권장', sub: '편집을 문서에 먼저 보여 주고, 적용할지 묻습니다.' },
-      { mode: 'full', title: '바로 적용', sub: '편집을 곧바로 문서에 반영합니다. 편집 1회 = 되돌리기 1단계.' },
-    ];
-    for (const option of options) {
-      const on = option.mode === current;
-      const card = btn(`dg-card dg-mode-option${on ? ' dg-on' : ''}`, '', () => this.host.setMode(option.mode));
-      card.setAttribute('role', 'radio');
-      card.setAttribute('aria-checked', String(on));
-      card.dataset.key = `mode:${option.mode}`;
-      card.disabled = this.host.busy();
-      const title = el('span', 'dg-card-title');
-      title.append(el('span', 'dg-radio'), el('span', 'dg-card-name', option.title));
-      if (option.tag) title.append(el('span', 'dg-card-status', `(${option.tag})`));
-      card.append(title, el('span', 'dg-card-sub', option.sub));
-      group.append(card);
-    }
-    return group;
   }
 
   private serviceCard(): HTMLElement {
