@@ -340,7 +340,7 @@ export class DoogleToolExecutor {
     if (staged) this.staging.claim(thread);
     const baseline = this.captureBaseline(pre);
     // 편집 표시가 옛 글을 제자리(옛 위치)에서 잘라 새 위치에 그리도록, 바뀔 법한 문단·표의 옛 위치를 적어 둔다
-    const oldPlaces = this.captureOldPlaces(pre, args);
+    const oldPlaces = this.captureOldPlaces(pre, tool, args);
     const revBefore = this.revision;
     this.tableOverflowBefore.clear();
     if (staged) this.staging.beginWrite(thread, pre);
@@ -576,7 +576,7 @@ export class DoogleToolExecutor {
     const target = (globalThis as { window?: Window }).window;
     if (!target || typeof CustomEvent === 'undefined') return;
     try {
-      const rects = swarmRects(engine, touches, old).slice(0, 40);
+      const rects = swarmRects(engine, touches, old).slice(0, SWARM_MAX_RECTS);
       if (rects.length > 0) target.dispatchEvent(new CustomEvent('doogle:agent-edit', { detail: { rects, tool } }));
     } catch { /* 위치를 못 얻으면 표시를 건너뛴다 */ }
   }
@@ -584,17 +584,26 @@ export class DoogleToolExecutor {
   /**
    * 쓰기 직전 — 인자에 적힌 문단(paraIdx·paras 등)과 그 뒤 몇 문단의 줄 사각형, 인자에 적힌 표의 셀 상자를
    * 적어 둔다. 쓰기 뒤에는 옛 배치를 물을 수 없어서다. 표시용이라 실패하면 null (옛 글 없이 빈 칸에 친다).
+   * replace_all 은 인자에 자리가 없다 — 바꿀 낱말을 미리 찾아 그 문단·표를 적어 둔다.
    */
-  private captureOldPlaces(engine: Engine, args: Record<string, unknown>): OldPlaces | null {
+  private captureOldPlaces(engine: Engine, tool: string, args: Record<string, unknown>): OldPlaces | null {
     try {
       const paras = new Set<string>();
       const tables = new Set<string>();
+      if (tool === 'replace_all' && typeof args['query'] === 'string' && args['query'].length > 0) {
+        for (const m of engineMatchSource(engine).exact(args['query'], args['caseSensitive'] === true).slice(0, 200)) {
+          if (m.cell) tables.add(`${m.sectionIdx}:${m.cell.paraIdx}:${m.cell.controlIdx}`);
+          else paras.add(`${m.sectionIdx}:${m.paraIdx}`);
+        }
+      }
       const walk = (value: unknown, section: number, depth: number): void => {
         if (depth > 4 || !value || typeof value !== 'object') return;
         if (Array.isArray(value)) { value.slice(0, 40).forEach((v) => walk(v, section, depth + 1)); return; }
         const o = value as Record<string, unknown>;
         const s = Number.isInteger(o['sectionIdx']) ? (o['sectionIdx'] as number) : section;
-        for (const key of ['paraIdx', 'paraStart', 'paraEnd', 'startPara', 'endPara']) {
+        // 도구들이 실제로 쓰는 이름은 paraIdx·startParaIdx·endParaIdx·toParaIdx 다 — 범위 도구(replace_range 등)의
+        // 이름이 빠져 있으면 옛 자리를 못 적어 옛 글 없이 빈 칸에 치게 된다
+        for (const key of ['paraIdx', 'startParaIdx', 'endParaIdx', 'toParaIdx', 'paraStart', 'paraEnd', 'startPara', 'endPara']) {
           if (Number.isInteger(o[key])) paras.add(`${s}:${o[key]}`);
         }
         if (Array.isArray(o['paras'])) for (const p of o['paras'].slice(0, 40)) if (Number.isInteger(p)) paras.add(`${s}:${p}`);
@@ -1430,6 +1439,12 @@ type CellBox = { pageIndex: number; x: number; y: number; w: number; h: number; 
 interface OldPlaces { paras: Map<string, SelectionRect[]>; tables: Map<string, CellBox[]> }
 /** 바뀐 자리(쪽 px) + 그 자리의 옛 위치. from 이 null 이면 새로 생긴 자리 — 옛 글 없이 빈 칸에 친다 */
 type SwarmRect = SelectionRect & { from: SelectionRect | null };
+/**
+ * 한 번에 알리는 자리 수의 상한. 화면 표시는 앞의 몇 줄만 커서가 맡고 나머지는 쓸어 주기만 한다.
+ * 문서 곳곳을 한꺼번에 바꾸는 편집(replace_all)에서 화면 한두 장 너머까지는 표시되게 두되, 자리를 묻는
+ * 값(문단마다 엔진에 줄 사각형을 묻는다)이 쓰기를 눈에 띄게 늦추지 않을 만큼만 — 넘는 자리는 표시하지 않는다.
+ */
+const SWARM_MAX_RECTS = 96;
 
 /** 줄 사각형을 위아래로 조금 — 선택 사각형보다 아래로 내려오는 글자 끝(받침·마침표)까지 덮게 */
 function padLine(r: SelectionRect): SelectionRect {
@@ -1467,7 +1482,7 @@ function swarmRects(engine: Engine, touches: Touch[], old: OldPlaces | null): Sw
     const count = engine.paragraphCount(t.sectionIdx);
     const end = Math.min(t.paraEnd, count - 1);
     const oldEnd = t.paraEnd - t.paraDelta;
-    for (let p = t.paraStart; p <= end && rects.length < 60; p++) {
+    for (let p = t.paraStart; p <= end && rects.length < SWARM_MAX_RECTS; p++) {
       const lines = engine.selectionRects(t.sectionIdx, p, 0, p, engine.length(t.sectionIdx, p));
       const was = p <= oldEnd ? old?.paras.get(`${t.sectionIdx}:${p}`) : undefined;
       lines.forEach((r, i) => {

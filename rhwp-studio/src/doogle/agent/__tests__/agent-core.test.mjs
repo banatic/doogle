@@ -581,3 +581,80 @@ test('edit swarm: cover takes the paper colour sampled from the page, not a fixe
   // ties keep the first colour seen
   assert.equal(commonColor([shade, ink]), 'rgb(217, 226, 243)');
 });
+
+test('edit swarm camera: one spring, band following, clusters', async () => {
+  const { springStep, revealTop, bandTop, panLeft, clusterLines } = await import('../../ui/swarm-motion.ts');
+  // the spring closes on its target without overshooting, even across a stalled (long) frame
+  let s = { x: -4000, v: 0 };
+  let peak = 0;
+  for (let i = 0; i < 60; i++) {
+    s = springStep(s.x, s.v, i === 10 ? 0.064 : 1 / 60, 11);
+    assert.ok(s.x <= 0.001, `overshoot at frame ${i}: ${s.x}`);
+    peak = Math.max(peak, s.v);
+  }
+  assert.ok(Math.abs(s.x) < 4, `not settled after a second: ${s.x}`);
+  assert.ok(peak > 0);
+  // retargeting mid-flight keeps the velocity (no stop-and-go): the next step keeps moving the same way
+  const mid = springStep(-1000, 0, 0.1, 11);
+  const after = springStep(mid.x + 200, mid.v, 1 / 60, 11);
+  assert.ok(after.v > 0 && after.x > mid.x + 200);
+
+  // first line: left alone when comfortably visible, otherwise placed a third of the way down
+  assert.equal(revealTop(1000, 600, { top: 1200, height: 24 }, 0.3), null);
+  assert.equal(revealTop(0, 600, { top: 4000, height: 24 }, 0.3), 4000 - 180);
+  assert.equal(revealTop(1000, 600, { top: 1010, height: 24 }, 0.3), 1010 - 180, 'inside the top margin');
+  // following: inside the band nothing moves; below it the view slides by just the overflow (one line, not a jump)
+  assert.equal(bandTop(1000, 600, { top: 1300, height: 24 }), null);
+  const next = bandTop(1000, 600, { top: 1360, height: 24 });
+  assert.ok(Math.abs(next - 1012) < 1e-6, String(next));
+  assert.ok(Math.abs(bandTop(1000, 600, { top: 1050, height: 24 }) - 942) < 1e-6);
+  // a box taller than the band is aligned by its top
+  assert.ok(Math.abs(bandTop(1000, 600, { top: 1400, height: 500 }) - 1292) < 1e-6);
+
+  // horizontal: only when the box is outside the visible width; a box wider than the view aligns left
+  assert.equal(panLeft(0, 800, { left: 100, width: 300 }), null);
+  assert.equal(panLeft(0, 800, { left: 700, width: 300 }), 700 + 300 - (800 - 24));
+  assert.equal(panLeft(400, 800, { left: 100, width: 300 }), 100 - 24);
+  assert.equal(panLeft(0, 800, { left: 500, width: 900 }), 500 - 24);
+
+  // lines a page apart are separate clusters — the camera finishes one before leaving for the next
+  const line = (top) => ({ top, height: 24 });
+  const groups = clusterLines([line(100), line(124), line(148), line(1500), line(1524), line(4000)], 300);
+  assert.deepEqual(groups.map((g) => g.map((l) => l.top)), [[100, 124, 148], [1500, 1524], [4000]]);
+  assert.deepEqual(clusterLines([], 300), []);
+});
+
+test('edit swarm motion: speed is steady across widths, only changed pixels are retyped', async () => {
+  const { flightMs, typeMs, eraseMs, changedSpan } = await import('../../ui/swarm-motion.ts');
+  // typing speed (px/ms) stays within 2x between a short segment and a full line (it used to differ 4x)
+  const speeds = [140, 280, 567].map((w) => w / typeMs(w));
+  assert.ok(Math.max(...speeds) / Math.min(...speeds) < 2, JSON.stringify(speeds));
+  assert.ok(eraseMs(567) < typeMs(567) / 2);
+  // flight time grows with distance, within bounds
+  assert.ok(flightMs(100) < flightMs(500) && flightMs(500) < flightMs(1200));
+  assert.equal(flightMs(0), 380);
+  assert.equal(flightMs(5000), 760);
+
+  // two 6x2 strips: identical → null; a change in columns 2..3 → [2, 4)
+  const strip = (cols, width = 6, height = 2) => {
+    const data = new Uint8ClampedArray(width * height * 4).fill(255);
+    for (const x of cols) for (let y = 0; y < height; y++) data.set([0, 0, 0, 255], (y * width + x) * 4);
+    return { data, width, height };
+  };
+  assert.equal(changedSpan(strip([1]), 0, 0, strip([1]), 0, 0, 6, 2), null);
+  assert.deepEqual(changedSpan(strip([1]), 0, 0, strip([1, 2, 3]), 0, 0, 6, 2), { start: 2, end: 4 });
+  // text pushed right by an insertion differs from the insertion to the end of the line
+  assert.deepEqual(changedSpan(strip([1, 3]), 0, 0, strip([1, 4, 5]), 0, 0, 6, 2), { start: 3, end: 6 });
+  // tiny differences (colour management, compression) are not a change
+  const near = strip([1]);
+  near.data[0] = 250;
+  assert.equal(changedSpan(strip([1]), 0, 0, near, 0, 0, 6, 2), null);
+  // the same line at another place in a bigger picture (the line moved): compared piece against piece
+  const before = strip([3, 5], 10, 4);
+  const after = strip([6, 8], 12, 4);
+  assert.equal(changedSpan(before, 2, 1, after, 5, 1, 4, 2), null, 'same glyph columns relative to each piece');
+  assert.deepEqual(changedSpan(before, 2, 1, after, 4, 1, 4, 2), { start: 1, end: 4 });
+  // a piece that runs outside its picture cannot be compared — reported as such, not as "unchanged"
+  assert.equal(changedSpan(strip([]), 4, 0, strip([]), 0, 0, 6, 2), undefined);
+  assert.equal(changedSpan(strip([]), 0, 0, { data: new Uint8ClampedArray(8), width: 6, height: 2 }, 0, 0, 6, 2), undefined);
+});

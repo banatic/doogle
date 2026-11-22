@@ -36,22 +36,42 @@
   100% { opacity: 0; }
 }
 
-/* 지우고 치는 덮개 — 종이색으로 토막을 가렸다가(지우기) 왼쪽부터 걷어(치기) 새 글을 드러낸다.
-   오른쪽 끝이 기준이라 지울 때 왼쪽으로 자라고, 칠 때 왼쪽부터 걷힌다 (edit-swarm.ts runSegment) */
+/* 치는 덮개 — 편집이 들어오자마자 종이색으로 토막을 가리고 있다가, 커서가 오면 왼쪽부터 걷혀 새 글을 드러낸다.
+   종이색 한 장짜리는 오른쪽 끝을 기준으로 줄어든다 (edit-swarm.ts runSegment) */
 .dg-swarm-cover {
   position: absolute;
   background: #ffffff;
   transform-origin: right center;
-  transform: scaleX(0);
   z-index: 1;
 }
 
 /* 옛 글 덮개 — 바뀐 자리만 종이색(.dg-swarm-blank)으로 덮고, 그 위에 옛 위치에서 잘라 온 옛 글(.dg-swarm-old).
-   처음부터 다 덮고 있다가 커서가 오면 옛 글이 지워진다. 바뀐 자리 밖(표 괘선)은 비치게 투명 */
+   처음부터 다 덮고 있다가 커서가 오면 옛 글이 지워진다. 바뀐 자리 밖(표 괘선)은 비치게 투명.
+   걷어 내기는 "잘라 내는 창이 옆으로 가고 안의 그림은 그만큼 되돌아온다" — 그림은 제자리에 있고 보이는 범위만
+   줄어든다. transform 만 써서 커서와 같은 합성 시계로 돈다(clip-path 는 메인 스레드에서 돌아 커서와 어긋난다).
+   치기: .dg-swarm-cover--old 가 창, .dg-swarm-inner 가 그림. 지우기: .dg-swarm-clip 이 창, .dg-swarm-old 가 그림 */
 .dg-swarm-cover--old {
   background: transparent;
-  transform: none;
   overflow: hidden;
+}
+
+.dg-swarm-inner,
+.dg-swarm-clip {
+  position: absolute;
+  inset: 0;
+}
+
+.dg-swarm-clip {
+  overflow: hidden;
+}
+
+/* 문서 쪽 캔버스 규칙(`#scroll-content canvas` — 가운데 정렬 left: 50% + translateX(-50%), 종이색 바탕, z-index 0)이
+   이 층의 캔버스에도 걸린다. 여기서 되돌린다 — transform 을 애니메이션하면 그 가운데 정렬이 풀려 그림이 튄다 */
+#scroll-content .dg-swarm canvas {
+  left: 0;
+  transform: none;
+  background: transparent;
+  box-shadow: none;
 }
 
 .dg-swarm-blank,
@@ -61,6 +81,14 @@
   display: block;
   width: 100%;
   height: 100%;
+}
+
+/* 화면이 다시 그려질 때까지 옛 화면 그대로 덮어 두는 조각 (edit-swarm.ts holdCover) — 자리는 스크립트가 준다 */
+#scroll-content .dg-swarm canvas.dg-swarm-hold {
+  position: absolute;
+  display: block;
+  left: auto;
+  z-index: 1;
 }
 
 /* 커서 무리 — 색은 --dg-swarm-color (edit-swarm.ts PALETTE) */
