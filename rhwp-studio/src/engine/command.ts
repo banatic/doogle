@@ -262,6 +262,12 @@ export interface OperationMetadata {
   dirtyScope?: DirtyScope;
   /** selection/caret 복원 정책. 현재는 문서화용 metadata로만 사용한다. */
   selection?: SelectionPolicy;
+  /**
+   * [doogle] false 면 편집 뒤 캐럿을 화면에 들이려고 스크롤하지 않는다(캐럿 표시는 그대로 갱신한다).
+   * 사용자가 친 것이 아닌 편집(플러그인·에이전트)은 캐럿 자리에서 일어나지 않는다 — 사용자가 다른 곳을
+   * 보고 있을 때 편집마다 화면이 캐럿으로 튀어 돌아가지 않게 한다. 생략하면 종전대로 스크롤한다.
+   */
+  revealCaret?: boolean;
 }
 
 /**

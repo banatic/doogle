@@ -137,6 +137,9 @@ class PluginHostFacade implements PluginHost {
       ih.executeOperation({
         kind: 'snapshot',
         operationType: `plugin:${this.pluginId}:${label}`,
+        // [doogle] 플러그인의 편집은 사용자의 캐럿 자리에서 일어나지 않는다 — 편집마다 화면이 캐럿으로
+        // 튀어 돌아가면 사용자가 보던 자리도, 에이전트 편집을 따라가던 화면도 놓친다.
+        meta: { revealCaret: false },
         operation: () => {
           result = fn(tx);
           ran = true;

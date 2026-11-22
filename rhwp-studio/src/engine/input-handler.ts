@@ -412,6 +412,8 @@ export class InputHandler {
   private pendingFocusedPagePatch: DeferredFocusedPagePatch | null = null;
   /** 쪽/단 나누기 뒤 CanvasView의 새 page offset이 준비되면 캐럿을 다시 드러낸다. */
   private readonly caretLayoutReveal = new CaretLayoutReveal();
+  /** [doogle] 지금 끝내는 작업이 `meta.revealCaret: false` 다 — updateCaret 이 캐럿으로 스크롤하지 않는다 */
+  private suppressCaretReveal = false;
 
   // 표 경계선 리사이즈 드래그 상태
   private isResizeDragging = false;
@@ -3481,7 +3483,13 @@ export class InputHandler {
           if (markPastedFieldEndOutside) {
             this.markCurrentFieldEndOutside();
           }
-          this.refreshAfterOperation(desc.meta?.refresh, 'full', desc.operationType, cursorBefore, newPos);
+          // [doogle] 플러그인(에이전트) 편집은 캐럿 자리의 편집이 아니다 — 캐럿으로 스크롤하지 않는다
+          this.suppressCaretReveal = desc.meta?.revealCaret === false;
+          try {
+            this.refreshAfterOperation(desc.meta?.refresh, 'full', desc.operationType, cursorBefore, newPos);
+          } finally {
+            this.suppressCaretReveal = false;
+          }
           break;
         }
         case 'record': {
@@ -3994,7 +4002,7 @@ export class InputHandler {
         this.caret.hideComposition();
         this.caret.update(caretRect, zoom);
       }
-      if (!skipScroll) {
+      if (!skipScroll && !this.suppressCaretReveal) {
         this.scrollCaretIntoView(caretRect);
       }
     }
