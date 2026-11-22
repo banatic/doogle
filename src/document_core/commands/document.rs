@@ -3777,12 +3777,34 @@ impl DocumentCore {
             self.document.clone(),
             self.text_reflowed_table_paths_for_snapshot(),
         ));
-        // 초과 시 가장 오래된 스냅샷 제거. 상한은 `Self::MAX_SNAPSHOTS` 하나뿐이고
-        // studio 는 `snapshotCapacity()` 로 그 값을 받아 예산을 계산한다(#7002 후속).
+        self.evict_old_snapshots();
+        id
+    }
+
+    /// 초과 시 가장 오래된 스냅샷 제거. 상한은 `Self::MAX_SNAPSHOTS` 하나뿐이고
+    /// studio 는 `snapshotCapacity()` 로 그 값을 받아 예산을 계산한다(#7002 후속).
+    fn evict_old_snapshots(&mut self) {
         while self.snapshot_store.len() > Self::MAX_SNAPSHOTS {
             self.snapshot_store.remove(0);
         }
-        id
+    }
+
+    /// 문서 바이트(HWP/HWPX)를 읽어 **스냅샷으로만** 넣는다 — 지금 문서는 그대로다.
+    ///
+    /// 두글 문서 갈래가 디스크(IndexedDB)에 남긴 지점을 되살릴 때 쓴다: 이 스냅샷을
+    /// `restore_snapshot_native` 로 복원하면 문서 세대·실행 취소 기록을 유지한 채 그
+    /// 상태로 바뀐다(문서를 새로 여는 `load_bytes` 와 다르다). 파싱에 실패하면 저장소는
+    /// 바뀌지 않는다.
+    pub fn import_snapshot_native(&mut self, data: &[u8]) -> Result<u32, HwpError> {
+        let mut parsed = Self::from_bytes(data)?;
+        parsed.flush_cell_format_vpos();
+        let reflowed = parsed.text_reflowed_table_paths_for_snapshot();
+        let id = self.next_snapshot_id;
+        self.next_snapshot_id += 1;
+        self.snapshot_store
+            .push((id, std::mem::take(&mut parsed.document), reflowed));
+        self.evict_old_snapshots();
+        Ok(id)
     }
 
     /// 그림 신원 키의 세대를 올린다 (Task #3315).
@@ -4019,6 +4041,30 @@ mod validate_linesegs_tests {
         assert_eq!(metadata.hwpml_version.as_deref(), Some("2.91"));
         assert_eq!(metadata.resource_count, 0);
         assert!(!metadata.warnings.is_empty());
+    }
+
+    /// 두글 문서 갈래: 내보낸 바이트를 스냅샷으로만 넣고, 복원하면 그 상태로 돌아간다.
+    #[test]
+    fn import_snapshot_restores_exported_bytes_without_touching_current_document() {
+        let mut core = DocumentCore::new_empty();
+        core.create_blank_document_native().expect("blank");
+        core.insert_text_native(0, 0, 0, "처음").expect("insert");
+        let saved = core.export_hwp_native().expect("export");
+        core.insert_text_native(0, 0, 0, "나중 ").expect("insert");
+        let before = core.snapshot_store.len();
+
+        let id = core.import_snapshot_native(&saved).expect("import");
+        assert_eq!(core.snapshot_store.len(), before + 1);
+        assert_eq!(
+            core.get_text_range_native(0, 0, 0, 5).unwrap(),
+            "나중 처음",
+            "import must not change the current document"
+        );
+
+        core.restore_snapshot_native(id).expect("restore");
+        assert_eq!(core.get_text_range_native(0, 0, 0, 2).unwrap(), "처음");
+        assert!(core.import_snapshot_native(b"not a document").is_err());
+        assert_eq!(core.snapshot_store.len(), before + 1, "a failed import leaves the store as is");
     }
 
     /// [Task #1620] `clear_initial_field_texts`: 같은 텍스트 범위를 가리키는 다중 ClickHere

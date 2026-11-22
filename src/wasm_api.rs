@@ -7836,6 +7836,13 @@ impl HwpDocument {
         self.restore_snapshot_native(id).map_err(|e| e.into())
     }
 
+    /// 문서 바이트(HWP/HWPX)를 스냅샷으로만 넣고 ID를 반환한다 — 지금 문서는 그대로.
+    /// `restoreSnapshot` 과 짝으로 써서 저장해 둔 문서 상태로 되돌아간다(두글 문서 갈래).
+    #[wasm_bindgen(js_name = importSnapshot)]
+    pub fn import_snapshot(&mut self, data: &[u8]) -> Result<u32, JsValue> {
+        self.import_snapshot_native(data).map_err(|e| e.into())
+    }
+
     /// 지정 ID의 스냅샷을 제거하여 메모리를 해제한다.
     #[wasm_bindgen(js_name = discardSnapshot)]
     pub fn discard_snapshot(&mut self, id: u32) {
