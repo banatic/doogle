@@ -26,6 +26,7 @@ import { installWindowControls, markDragRegion } from './window-controls';
 import { guardedSave, installCloseGuard } from './close-guard';
 import { installNativeSavePicker } from './native-file.ts';
 import { installUpdater } from './updater';
+import { askDefaultAppOnce } from './default-app-ask';
 import { getDocState, noteDocumentSwap, onDocState, refreshDocState, switchDocState, type DocState } from './doc-state';
 import { getDocHub } from '../workspace/doc-hub.ts';
 import { openPopupMenu, type PopupEntry } from './popup-menu';
@@ -213,6 +214,8 @@ function buildTitleBar(): { bar: HTMLElement; quick: HTMLButtonElement[] } {
   installWindowControls(bar);
   // 업데이트 아이콘은 창 단추 왼쪽에 들어간다(데스크탑 전용).
   installUpdater(bar);
+  // .hwp/.hwpx 기본 앱은 묻고 나서 바꾼다(처음 한 번). 첫 화면이 그려진 뒤에 묻는다.
+  window.setTimeout(() => { void askDefaultAppOnce(); }, 1500);
   return { bar, quick };
 }
 

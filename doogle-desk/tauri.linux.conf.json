@@ -1,0 +1,19 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "fileAssociations": [
+      {
+        "ext": ["hwp"],
+        "name": "HWP document",
+        "description": "한글 문서",
+        "role": "Editor"
+      },
+      {
+        "ext": ["hwpx"],
+        "name": "HWPX document",
+        "description": "한글 문서 (HWPX)",
+        "role": "Editor"
+      }
+    ]
+  }
+}

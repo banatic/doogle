@@ -44,20 +44,6 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "fileAssociations": [
-      {
-        "ext": ["hwp"],
-        "name": "HWP document",
-        "description": "한글 문서",
-        "role": "Editor"
-      },
-      {
-        "ext": ["hwpx"],
-        "name": "HWPX document",
-        "description": "한글 문서 (HWPX)",
-        "role": "Editor"
-      }
-    ],
     "windows": {
       "nsis": {
         "installerHooks": "installer-hooks.nsh",
