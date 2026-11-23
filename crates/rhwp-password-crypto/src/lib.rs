@@ -31,6 +31,15 @@ use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
 /// 한글 7.0 이후 HWP5 비밀번호 보호의 FileHeader EncryptVersion 값.
 pub const HWP5_ENCRYPT_VERSION: u32 = 4;
+/// 한글 2024가 암호 문서 FileHeader에 쓰는 EncryptVersion 값 (DES envelope 방식).
+pub const HWP5_DES_ENCRYPT_VERSION: u32 = 0;
+/// 한글 암호 문서의 DOCUMENT_PROPERTIES 레코드 앞에 붙는 채움 영역 길이.
+pub const HWP5_PASSWORD_PREFIX_BYTES: usize = 256;
+/// DES envelope 끝 8바이트 trailer의 앞 4바이트 (암호·내용과 무관한 고정값).
+const HWP5_DES_TRAILER_MAGIC: [u8; 4] = [0x38, 0xa4, 0xce, 0x59];
+const HWP5_DES_TRAILER_BYTES: usize = 8;
+/// deflate 뒤에 붙는 CRC-32(u64 LE) + 원본 길이(u64 LE).
+const HWP5_DES_FOOTER_BYTES: usize = 16;
 /// HWP3 비밀번호 암호 payload의 압축 해제 상한.
 pub const MAX_HWP3_PASSWORD_DECOMPRESSED_BYTES: usize = 512 * 1024 * 1024;
 
@@ -189,6 +198,176 @@ fn hwp5_transform(input: &[u8], password: &[u8], encrypt: bool) -> Vec<u8> {
     }
     output.truncate(input.len());
     output
+}
+
+// ---------------------------------------------------------------------------
+// HWP5 DES envelope (한글 2024 가 실제로 쓰는 암호 문서 형식)
+//
+// 한글 2024(13.0) 산출물을 평문 쌍과 대조해 확인한 구조다. 암호 대상 stream
+// (DocInfo, BodyText/*, BinData/*, Scripts/*) 하나는 다음과 같다.
+//
+//   payload = raw-deflate(원본) · 8바이트 정렬 0 채움
+//             · CRC-32(원본) u64 LE · 원본 길이 u64 LE
+//   stream  = DES-ECB(payload, HWP3 과 같은 키 유도)
+//             · 38 A4 CE 59 · CRC-32(payload) u32 LE
+//
+// trailer 는 암호화되지 않으며 그 CRC 가 암호 검증 값이다. BIN_DATA 속성이
+// NoCompress 여도 envelope 안에서는 항상 deflate 한다. FileHeader 는 flags 에
+// 0x02 를 더하고 EncryptVersion 을 0 으로 쓴다.
+// ---------------------------------------------------------------------------
+
+fn hwp5_des_key(password: &[u8]) -> Result<[u8; 8], PasswordCryptoError> {
+    let password =
+        std::str::from_utf8(password).map_err(|_| PasswordCryptoError::Hwp3PasswordEncoding)?;
+    Ok(derive_hwp3_legacy_des_key(password))
+}
+
+/// stream 이 HWP5 DES envelope 모양(8바이트 정렬 + 고정 trailer)인지 본다.
+pub fn is_hwp5_des_stream(stream: &[u8]) -> bool {
+    stream.len() >= HWP5_DES_TRAILER_BYTES + HWP5_DES_FOOTER_BYTES
+        && stream.len() % 8 == 0
+        && stream[stream.len() - HWP5_DES_TRAILER_BYTES..stream.len() - 4] == HWP5_DES_TRAILER_MAGIC
+}
+
+/// 이미 raw-deflate 된 바이트와 원본의 CRC-32·길이로 DES envelope 을 만든다.
+///
+/// `deflated` 는 deflate 종료 블록까지만 담아야 한다(뒤따르는 trailer 없음).
+pub fn seal_hwp5_des_deflated(
+    deflated: &[u8],
+    plain_crc32: u32,
+    plain_len: u64,
+    password: &[u8],
+) -> Result<Vec<u8>, PasswordCryptoError> {
+    let key = hwp5_des_key(password)?;
+    let mut payload = deflated.to_vec();
+    payload.resize((payload.len() + 7) & !7, 0);
+    payload.extend_from_slice(&u64::from(plain_crc32).to_le_bytes());
+    payload.extend_from_slice(&plain_len.to_le_bytes());
+    let payload_crc = crc32fast::hash(&payload);
+    hwp3_des_ecb(&mut payload, &key, true);
+    payload.extend_from_slice(&HWP5_DES_TRAILER_MAGIC);
+    payload.extend_from_slice(&payload_crc.to_le_bytes());
+    Ok(payload)
+}
+
+/// 원본 바이트를 deflate 한 뒤 DES envelope 으로 감싼다.
+pub fn encrypt_hwp5_des_stream(
+    plain: &[u8],
+    password: &[u8],
+) -> Result<Vec<u8>, PasswordCryptoError> {
+    let mut encoder = DeflateEncoder::new(Vec::new(), Compression::default());
+    encoder
+        .write_all(plain)
+        .map_err(|_| PasswordCryptoError::WrongPasswordOrCorruptPayload)?;
+    let deflated = encoder
+        .finish()
+        .map_err(|_| PasswordCryptoError::WrongPasswordOrCorruptPayload)?;
+    seal_hwp5_des_deflated(
+        &deflated,
+        crc32fast::hash(plain),
+        plain.len() as u64,
+        password,
+    )
+}
+
+/// 저장 형태(raw-deflate, 뒤에 gzip 식 trailer 가 있어도 된다)의 stream 을
+/// DES envelope 으로 감싼다. 원본을 메모리에 펼치지 않고 CRC·길이만 센다.
+pub fn seal_hwp5_des_stored_deflate(
+    stored: &[u8],
+    password: &[u8],
+) -> Result<Vec<u8>, PasswordCryptoError> {
+    let mut decoder = Decompress::new(false);
+    let mut checksum = Hasher::new();
+    let mut chunk = [0_u8; 64 * 1024];
+    loop {
+        let input_before = decoder.total_in();
+        let output_before = decoder.total_out();
+        let offset = usize::try_from(input_before)
+            .ok()
+            .filter(|offset| *offset <= stored.len())
+            .ok_or(PasswordCryptoError::WrongPasswordOrCorruptPayload)?;
+        let status = decoder
+            .decompress(&stored[offset..], &mut chunk, FlushDecompress::None)
+            .map_err(|_| PasswordCryptoError::WrongPasswordOrCorruptPayload)?;
+        let produced = usize::try_from(decoder.total_out() - output_before)
+            .map_err(|_| PasswordCryptoError::WrongPasswordOrCorruptPayload)?;
+        checksum.update(&chunk[..produced]);
+        if status == Status::StreamEnd {
+            let consumed = usize::try_from(decoder.total_in())
+                .ok()
+                .filter(|consumed| *consumed <= stored.len())
+                .ok_or(PasswordCryptoError::WrongPasswordOrCorruptPayload)?;
+            return seal_hwp5_des_deflated(
+                &stored[..consumed],
+                checksum.finalize(),
+                decoder.total_out(),
+                password,
+            );
+        }
+        if decoder.total_in() == input_before && decoder.total_out() == output_before {
+            return Err(PasswordCryptoError::WrongPasswordOrCorruptPayload);
+        }
+    }
+}
+
+/// DES envelope 을 풀어 저장 형태(raw-deflate + 0 채움)를 돌려준다.
+///
+/// trailer 의 CRC 가 맞지 않으면 암호가 틀린 것이다. 반환값은 암호 없는 압축
+/// 문서의 stream 과 같은 방식으로 압축 해제하면 된다.
+pub fn open_hwp5_des_stream(
+    stream: &[u8],
+    password: &[u8],
+) -> Result<Vec<u8>, PasswordCryptoError> {
+    if !is_hwp5_des_stream(stream) {
+        return Err(PasswordCryptoError::WrongPasswordOrCorruptPayload);
+    }
+    let key = hwp5_des_key(password)?;
+    let body_len = stream.len() - HWP5_DES_TRAILER_BYTES;
+    let expected = u32::from_le_bytes(
+        stream[stream.len() - 4..]
+            .try_into()
+            .expect("four-byte trailer checksum"),
+    );
+    let mut payload = stream[..body_len].to_vec();
+    hwp3_des_ecb(&mut payload, &key, false);
+    if crc32fast::hash(&payload) != expected {
+        return Err(PasswordCryptoError::WrongPasswordOrCorruptPayload);
+    }
+    payload.truncate(body_len - HWP5_DES_FOOTER_BYTES);
+    Ok(payload)
+}
+
+/// 한글이 암호 문서 DOCUMENT_PROPERTIES 앞에 두는 256바이트 채움 영역을 만든다.
+///
+/// 한글은 MSVC `rand()` 를 저장 시각으로 seed 해 (값, 반복 길이 1..=16) 쌍을
+/// 이어 붙인다. 읽을 때는 건너뛰는 영역이며 암호와 무관하다.
+pub fn hwp5_password_prefix(seed: u32) -> [u8; HWP5_PASSWORD_PREFIX_BYTES] {
+    let mut state = seed;
+    let mut rand = || {
+        state = state.wrapping_mul(214013).wrapping_add(2531011);
+        (state >> 16) & 0x7fff
+    };
+    let mut output = [0_u8; HWP5_PASSWORD_PREFIX_BYTES];
+    let (mut remaining, mut value) = (0_u32, 0_u8);
+    for byte in &mut output {
+        if remaining == 0 {
+            value = rand() as u8;
+            remaining = (rand() & 0x0f) + 1;
+        }
+        *byte = value;
+        remaining -= 1;
+    }
+    output
+}
+
+/// 무작위 seed 로 [`hwp5_password_prefix`] 를 만든다.
+pub fn hwp5_password_prefix_random() -> [u8; HWP5_PASSWORD_PREFIX_BYTES] {
+    let mut seed = [0_u8; 4];
+    // 채움 값은 보안 요소가 아니므로 난수원이 없으면 고정 seed 로 충분하다.
+    if getrandom::fill(&mut seed).is_err() {
+        seed = *b"HWP5";
+    }
+    hwp5_password_prefix(u32::from_le_bytes(seed))
 }
 
 #[derive(Clone, Copy)]
@@ -1055,6 +1234,112 @@ mod tests {
             assert_ne!(ciphertext, plaintext);
             assert_eq!(decrypt_hwp5_stream(&ciphertext, b"password"), plaintext);
         }
+    }
+
+    /// 한글 2024(13.0)가 암호 "abc123" 으로 저장한 Scripts/JScriptVersion stream.
+    const HANGUL_JSCRIPT_VERSION_ABC123: [u8; 32] = [
+        0xce, 0xe9, 0xda, 0xa1, 0x79, 0xcf, 0xe9, 0x41, 0x45, 0x4e, 0x4d, 0xe1, 0x30, 0x99, 0x8a,
+        0x38, 0xc5, 0x9f, 0xe3, 0x06, 0xd0, 0x37, 0xa7, 0xd7, 0x38, 0xa4, 0xce, 0x59, 0xd4, 0x6d,
+        0xf1, 0x76,
+    ];
+    /// 같은 stream 을 암호 "pw한글" 로 저장한 것.
+    const HANGUL_JSCRIPT_VERSION_KOREAN: [u8; 32] = [
+        0xce, 0xdb, 0xab, 0x67, 0xe4, 0xaa, 0xdb, 0x96, 0xf1, 0xc2, 0x7e, 0x9f, 0xf3, 0x44, 0x8d,
+        0x4a, 0x37, 0xdb, 0x84, 0xb1, 0xc9, 0x5d, 0x34, 0x1c, 0x38, 0xa4, 0xce, 0x59, 0xd4, 0x6d,
+        0xf1, 0x76,
+    ];
+    /// 한글이 암호 "abc123" 으로 저장한 Scripts/DefaultJScript (deflate 가 8바이트 정렬).
+    const HANGUL_DEFAULT_JSCRIPT_ABC123: [u8; 32] = [
+        0xe8, 0x37, 0x46, 0x8c, 0xa0, 0x19, 0x65, 0x38, 0xc3, 0xd8, 0x50, 0x3d, 0xb6, 0x08, 0xd9,
+        0x05, 0x22, 0x1c, 0x14, 0xb7, 0xc0, 0x93, 0xfd, 0x38, 0x38, 0xa4, 0xce, 0x59, 0x93, 0x47,
+        0x1e, 0x78,
+    ];
+    const JSCRIPT_VERSION_DEFLATED: [u8; 5] = [0x63, 0x64, 0x80, 0x00, 0x00];
+    const JSCRIPT_VERSION_PLAIN: [u8; 8] = [1, 0, 0, 0, 0, 0, 0, 0];
+    const DEFAULT_JSCRIPT_DEFLATED: [u8; 8] = [0x63, 0x60, 0x40, 0x05, 0xff, 0x81, 0x00, 0x00];
+
+    #[test]
+    fn hwp5_des_seal_matches_hangul_output() {
+        let crc = crc32fast::hash(&JSCRIPT_VERSION_PLAIN);
+        assert_eq!(
+            seal_hwp5_des_deflated(&JSCRIPT_VERSION_DEFLATED, crc, 8, b"abc123").unwrap(),
+            HANGUL_JSCRIPT_VERSION_ABC123
+        );
+        assert_eq!(
+            seal_hwp5_des_deflated(&JSCRIPT_VERSION_DEFLATED, crc, 8, "pw한글".as_bytes()).unwrap(),
+            HANGUL_JSCRIPT_VERSION_KOREAN
+        );
+        // 한글의 평문 stream 은 deflate 뒤에 CRC-32·길이 trailer 가 붙어 있다.
+        let mut stored = JSCRIPT_VERSION_DEFLATED.to_vec();
+        stored.extend_from_slice(&crc.to_le_bytes());
+        stored.extend_from_slice(&8_u32.to_le_bytes());
+        assert_eq!(
+            seal_hwp5_des_stored_deflate(&stored, b"abc123").unwrap(),
+            HANGUL_JSCRIPT_VERSION_ABC123
+        );
+        // 16 zero bytes + ff ff ff ff: deflate 길이가 이미 8의 배수라 채움이 없다.
+        let mut default_script = vec![0_u8; 16];
+        default_script.extend_from_slice(&[0xff; 4]);
+        assert_eq!(
+            seal_hwp5_des_deflated(
+                &DEFAULT_JSCRIPT_DEFLATED,
+                crc32fast::hash(&default_script),
+                20,
+                b"abc123"
+            )
+            .unwrap(),
+            HANGUL_DEFAULT_JSCRIPT_ABC123
+        );
+    }
+
+    #[test]
+    fn hwp5_des_open_reads_hangul_output_and_rejects_wrong_password() {
+        assert!(is_hwp5_des_stream(&HANGUL_JSCRIPT_VERSION_ABC123));
+        let opened = open_hwp5_des_stream(&HANGUL_JSCRIPT_VERSION_ABC123, b"abc123").unwrap();
+        assert_eq!(opened, [0x63, 0x64, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        let mut plain = Vec::new();
+        DeflateDecoder::new(opened.as_slice())
+            .read_to_end(&mut plain)
+            .unwrap();
+        assert_eq!(plain, JSCRIPT_VERSION_PLAIN);
+        assert_eq!(
+            open_hwp5_des_stream(&HANGUL_JSCRIPT_VERSION_KOREAN, "pw한글".as_bytes()).unwrap(),
+            opened
+        );
+        for wrong in [b"abc124".as_slice(), b"", b"ABC123"] {
+            assert!(matches!(
+                open_hwp5_des_stream(&HANGUL_JSCRIPT_VERSION_ABC123, wrong),
+                Err(PasswordCryptoError::WrongPasswordOrCorruptPayload)
+            ));
+        }
+        assert!(!is_hwp5_des_stream(&HANGUL_JSCRIPT_VERSION_ABC123[..24]));
+    }
+
+    #[test]
+    fn hwp5_des_stream_roundtrip() {
+        for plain in [b"".as_slice(), b"a", &[0x5a; 100_000]] {
+            let sealed = encrypt_hwp5_des_stream(plain, b"password").unwrap();
+            assert!(is_hwp5_des_stream(&sealed));
+            let opened = open_hwp5_des_stream(&sealed, b"password").unwrap();
+            let mut restored = Vec::new();
+            DeflateDecoder::new(opened.as_slice())
+                .read_to_end(&mut restored)
+                .unwrap();
+            assert_eq!(restored, plain);
+            assert!(open_hwp5_des_stream(&sealed, b"Password").is_err());
+        }
+    }
+
+    #[test]
+    fn hwp5_password_prefix_matches_hangul_output() {
+        // 한글이 time()=1795447824 에 저장한 문서의 채움 영역 앞·뒤 run.
+        let prefix = hwp5_password_prefix(1_795_447_824);
+        let mut expected_head = Vec::new();
+        for (value, count) in [(0xbd_u8, 6), (0xd3, 12), (0x4d, 11), (0x86, 4), (0x8e, 13)] {
+            expected_head.extend(std::iter::repeat_n(value, count));
+        }
+        assert_eq!(prefix[..expected_head.len()], expected_head);
+        assert_eq!(prefix[250..], [0xc3, 0xc3, 0xc3, 0xc3, 0xc3, 0x44]);
     }
 
     #[test]

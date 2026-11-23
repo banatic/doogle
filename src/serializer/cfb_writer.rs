@@ -13,7 +13,10 @@ use std::io::Write;
 use crate::model::bin_data::BinDataContent;
 use crate::model::bin_data::{BinData, BinDataType, MAX_BIN_DATA_BYTES};
 use crate::model::document::{Document, Preview};
-use crate::password_crypto::{encrypt_hwp5_stream, HWP5_ENCRYPT_VERSION};
+use crate::password_crypto::{
+    encrypt_hwp5_des_stream, hwp5_password_prefix_random, seal_hwp5_des_stored_deflate,
+    HWP5_DES_ENCRYPT_VERSION, HWP5_PASSWORD_PREFIX_BYTES,
+};
 
 use super::body_text::serialize_section_for_version;
 use super::content_loss::{
@@ -41,10 +44,13 @@ pub fn serialize_hwp_with_report(doc: &Document) -> Result<SerializedDocument, S
     serialize_hwp_inner(doc, None, ContentLossWarningMode::ReportOnly)
 }
 
-/// Document IR을 HWP5 EncryptVersion 4 비밀번호 문서로 직렬화한다.
+/// Document IR을 한글 2024 와 같은 형식의 HWP5 비밀번호 문서로 직렬화한다.
 ///
-/// 암호 적용 범위는 한글의 HWP5 contract에 맞춰 DocInfo, BodyText, BinData,
-/// Scripts 및 고아 BinData stream이다. FileHeader와 PrvImage/PrvText는 평문이다.
+/// 한글 2024 산출물과 같게 FileHeader 는 flags 에 압축(0x01)·암호(0x02)를 세우고
+/// EncryptVersion 을 0 으로 쓴다. DocInfo, BodyText, ViewText, BinData, Scripts stream 은
+/// 항상 deflate 한 뒤 DES envelope(`password_crypto::seal_hwp5_des_deflated`)으로 감싸고,
+/// DOCUMENT_PROPERTIES 앞에 256바이트 채움 영역을 둔다. 내용이 드러나는
+/// PrvText/PrvImage 는 한글처럼 쓰지 않는다.
 pub fn serialize_hwp_with_password(
     doc: &Document,
     password: &[u8],
@@ -126,16 +132,18 @@ where
         let mut header = doc.header.clone();
         header.distribution = false;
         header.encrypted = true;
-        header.flags = (header.flags | 0x02) & !0x04;
+        // 한글 암호 문서는 stream 을 항상 deflate 하므로 압축 비트도 세운다.
+        header.compressed = true;
+        header.flags = (header.flags | 0x03) & !0x04;
         if let Some(raw) = header.raw_data.as_mut() {
             if raw.len() >= 48 {
                 raw[36..40].copy_from_slice(&header.flags.to_le_bytes());
-                raw[44..48].copy_from_slice(&HWP5_ENCRYPT_VERSION.to_le_bytes());
+                raw[44..48].copy_from_slice(&HWP5_DES_ENCRYPT_VERSION.to_le_bytes());
             }
         }
         let mut bytes = serialize_file_header(&header);
         bytes[36..40].copy_from_slice(&header.flags.to_le_bytes());
-        bytes[44..48].copy_from_slice(&HWP5_ENCRYPT_VERSION.to_le_bytes());
+        bytes[44..48].copy_from_slice(&HWP5_DES_ENCRYPT_VERSION.to_le_bytes());
         bytes
     } else if doc.header.distribution || doc.header.encrypted {
         let mut header = doc.header.clone();
@@ -300,8 +308,8 @@ where
         }
     }
 
-    // 4. 압축 여부 결정
-    let compressed = doc.header.compressed;
+    // 4. 압축 여부 결정 — 암호 문서는 원본 압축 비트와 무관하게 압축한다.
+    let compressed = doc.header.compressed || password.is_some();
 
     // 5. 미리보기 텍스트 보정
     //
@@ -324,6 +332,20 @@ where
                     .map_err(|error| SerializeError::UnsupportedInput(error.to_string()))?
             {
                 *bytes = converted;
+            }
+        }
+    }
+    if password.is_some() && !doc.header.compressed {
+        // 비압축 원본의 보존 stream 은 평문 그대로다. 암호 envelope 은 저장 형태가
+        // deflate 여야 하므로 암호 대상만 여기서 압축한다. DefaultJScript 는 위에서
+        // 이미 맞췄을 수 있어 원본과 같을 때만 손댄다.
+        for (index, (path, bytes)) in extra_streams.iter_mut().enumerate() {
+            let untouched = doc
+                .extra_streams
+                .get(index)
+                .is_some_and(|(_, original)| original == bytes);
+            if untouched && is_password_protected_extra_stream(path) {
+                *bytes = compress_stream_with_storage(bytes, storage)?;
             }
         }
     }
@@ -442,6 +464,9 @@ where
                 ),
             )
             .map_err(storage_error)?;
+    }
+    if password.is_some() {
+        insert_password_prefix(&mut doc_info_bytes, &hwp5_password_prefix_random())?;
     }
     let bytes = write_hwp_cfb_with_storage(
         &header_bytes,
@@ -618,7 +643,7 @@ where
             &mut streams,
             (
                 storage.string("/DocInfo").map_err(storage_error)?,
-                encrypt_if_password(doc_info_data, password),
+                encrypt_if_password(doc_info_data, password)?,
             ),
         )
         .map_err(storage_error)?;
@@ -634,7 +659,7 @@ where
             storage.copy_slice(section_bytes).map_err(storage_error)?
         };
         storage
-            .push(&mut streams, (path, encrypt_if_password(data, password)))
+            .push(&mut streams, (path, encrypt_if_password(data, password)?))
             .map_err(storage_error)?;
     }
     for (index, bytes) in viewtext_history {
@@ -650,7 +675,7 @@ where
                     storage
                         .display(&format_args!("/ViewText/Section{index}"))
                         .map_err(storage_error)?,
-                    encrypt_if_password(data, password),
+                    encrypt_if_password(data, password)?,
                 ),
             )
             .map_err(storage_error)?;
@@ -686,7 +711,7 @@ where
             .load_raw()
             .filter(|stored| stored.compressed == should_compress)
         {
-            streams.push((path, encrypt_if_password(stored.bytes, password)));
+            streams.push((path, encrypt_if_password(stored.bytes, password)?));
             continue;
         }
 
@@ -708,7 +733,7 @@ where
                     storage
                         .push(
                             &mut streams,
-                            (path, encrypt_if_password(stored.bytes, password)),
+                            (path, encrypt_if_password(stored.bytes, password)?),
                         )
                         .map_err(storage_error)?;
                     continue;
@@ -729,7 +754,7 @@ where
                     storage
                         .push(
                             &mut streams,
-                            (path, encrypt_if_password(Vec::new(), password)),
+                            (path, encrypt_if_password(Vec::new(), password)?),
                         )
                         .map_err(storage_error)?;
                     continue;
@@ -753,7 +778,7 @@ where
                     storage
                         .push(
                             &mut streams,
-                            (path, encrypt_if_password(Vec::new(), password)),
+                            (path, encrypt_if_password(Vec::new(), password)?),
                         )
                         .map_err(storage_error)?;
                     continue;
@@ -794,12 +819,13 @@ where
             payload
         };
         storage
-            .push(&mut streams, (path, encrypt_if_password(data, password)))
+            .push(&mut streams, (path, encrypt_if_password(data, password)?))
             .map_err(storage_error)?;
     }
 
     // 5. 미리보기 데이터 (PrvImage, PrvText)
-    if let Some(ref prv) = preview {
+    // 암호 문서에는 쓰지 않는다 — 한글도 쓰지 않으며, 평문 미리보기는 본문을 드러낸다.
+    if let Some(prv) = preview.as_ref().filter(|_| password.is_none()) {
         if let Some(ref image) = prv.image {
             storage
                 .push(
@@ -830,10 +856,8 @@ where
 
     // 6. 추가 스트림 (Scripts, DocOptions 등 — 라운드트립 보존)
     for (path, data) in extra_streams {
-        let payload = if password.is_some()
-            && (path.starts_with("/Scripts/") || path.starts_with("/BinData/"))
-        {
-            encrypt_if_password(storage.copy_slice(data).map_err(storage_error)?, password)
+        let payload = if password.is_some() && is_password_protected_extra_stream(path) {
+            encrypt_if_password(storage.copy_slice(data).map_err(storage_error)?, password)?
         } else {
             storage.copy_slice(data).map_err(storage_error)?
         };
@@ -857,11 +881,51 @@ where
         .map_err(SerializeError::CfbError)
 }
 
-fn encrypt_if_password(data: Vec<u8>, password: Option<&[u8]>) -> Vec<u8> {
-    match password {
-        Some(value) => encrypt_hwp5_stream(&data, value),
-        None => data,
+/// 암호 저장이면 저장 형태 stream 을 한글 DES envelope 으로 감싼다.
+///
+/// 암호 저장은 문서 압축을 강제하므로 `data` 는 raw-deflate 다(원본에서 통과시킨
+/// stream 은 뒤에 gzip 식 trailer 나 0 채움이 있을 수 있다). 빈 placeholder 는 빈
+/// 원본으로 감싼다.
+fn encrypt_if_password(data: Vec<u8>, password: Option<&[u8]>) -> Result<Vec<u8>, SerializeError> {
+    let Some(password) = password else {
+        return Ok(data);
+    };
+    if data.is_empty() {
+        encrypt_hwp5_des_stream(&data, password)
+    } else {
+        seal_hwp5_des_stored_deflate(&data, password)
     }
+    .map_err(|error| SerializeError::UnsupportedInput(format!("HWP 암호화 실패: {error}")))
+}
+
+fn is_password_protected_extra_stream(path: &str) -> bool {
+    path.starts_with("/Scripts/") || path.starts_with("/BinData/")
+}
+
+/// DocInfo 첫 레코드(DOCUMENT_PROPERTIES) 본문 앞에 한글 암호 문서의 채움 영역을 끼운다.
+fn insert_password_prefix(
+    doc_info: &mut Vec<u8>,
+    prefix: &[u8; HWP5_PASSWORD_PREFIX_BYTES],
+) -> Result<(), SerializeError> {
+    let unsupported = || {
+        SerializeError::UnsupportedInput(
+            "DocInfo 가 DOCUMENT_PROPERTIES 로 시작하지 않습니다".to_string(),
+        )
+    };
+    let header = doc_info
+        .get(..4)
+        .map(|bytes| u32::from_le_bytes(bytes.try_into().expect("record header")))
+        .ok_or_else(unsupported)?;
+    let size = (header >> 20) as usize;
+    if (header & 0x3ff) as u16 != crate::parser::tags::HWPTAG_DOCUMENT_PROPERTIES
+        || size + HWP5_PASSWORD_PREFIX_BYTES >= 0xfff
+    {
+        return Err(unsupported());
+    }
+    let header = (header & 0x000f_ffff) | (((size + HWP5_PASSWORD_PREFIX_BYTES) as u32) << 20);
+    doc_info[..4].copy_from_slice(&header.to_le_bytes());
+    doc_info.splice(4..4, prefix.iter().copied());
+    Ok(())
 }
 
 /// BinDataContent에 대응하는 BinData 정보(storage_id, extension, should_compress) 찾기

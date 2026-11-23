@@ -3,6 +3,7 @@ import type { WasmBridge } from '@/core/wasm-bridge';
 import type { EventBus } from '@/core/event-bus';
 import type { CommandServices } from '@/command/types';
 import { applyThroughRouter } from './dialog-apply';
+import type { DocumentPosition } from '@/core/types';
 
 import { t } from '../i18n/index.ts';
 const HWPUNIT_PER_MM = 7200 / 25.4;
@@ -17,6 +18,14 @@ function mmToHwpunit(mm: number): number {
 
 const LABEL_MIN_W = '80px';
 
+/** 적용 범위 — 한/글 [다단 설정]의 "적용 범위". 값은 엔진 `applyColumnDef` 의 scope. */
+export const COLUMN_APPLY_SCOPES = [
+  { value: 0, key: 'dialog.columnSettings.scope.current' },
+  { value: 1, key: 'dialog.columnSettings.scope.new' },
+  { value: 2, key: 'dialog.columnSettings.scope.section' },
+  { value: 3, key: 'dialog.columnSettings.scope.document' },
+] as const;
+
 export class ColumnSettingsDialog extends ModalDialog {
   private wasm: WasmBridge;
   private eventBus: EventBus;
@@ -26,12 +35,25 @@ export class ColumnSettingsDialog extends ModalDialog {
   private typeSelect!: HTMLSelectElement;
   private sameWidthCheck!: HTMLInputElement;
   private spacingInput!: HTMLInputElement;
+  private scopeSelect!: HTMLSelectElement;
+  /** 캐럿 자리(본문 좌표). 표 안이면 표를 지닌 본문 문단의 처음으로 본다. */
+  private paraIdx: number;
+  private charOffset: number;
 
-  constructor(wasm: WasmBridge, eventBus: EventBus, sectionIdx: number, private services?: CommandServices) {
+  constructor(
+    wasm: WasmBridge,
+    eventBus: EventBus,
+    sectionIdx: number,
+    private services?: CommandServices,
+    position?: Pick<DocumentPosition, 'paragraphIndex' | 'charOffset' | 'parentParaIndex'>,
+  ) {
     super(t('dialog.columnSettings.mmToHwpunit.title'), 360);
     this.wasm = wasm;
     this.eventBus = eventBus;
     this.sectionIdx = sectionIdx;
+    const inCell = position?.parentParaIndex !== undefined;
+    this.paraIdx = (inCell ? position?.parentParaIndex : position?.paragraphIndex) ?? 0;
+    this.charOffset = inCell ? 0 : (position?.charOffset ?? 0);
   }
 
   show(): void {
@@ -89,12 +111,24 @@ export class ColumnSettingsDialog extends ModalDialog {
     this.spacingInput.style.cssText = 'width:80px;padding:4px 6px;font-size:13px;';
     spacingRow.appendChild(this.spacingInput);
 
+    // 적용 범위
+    const scopeRow = addRow(t('dialog.columnSettings.scope.label'));
+    this.scopeSelect = document.createElement('select');
+    this.scopeSelect.style.cssText = 'width:120px;padding:4px;font-size:13px;';
+    for (const scope of COLUMN_APPLY_SCOPES) {
+      const opt = document.createElement('option');
+      opt.value = String(scope.value);
+      opt.textContent = t(scope.key);
+      this.scopeSelect.appendChild(opt);
+    }
+    scopeRow.appendChild(this.scopeSelect);
+
     return body;
   }
 
   private populateFields(): void {
     try {
-      const def = this.wasm.getColumnDef(this.sectionIdx);
+      const def = this.wasm.getColumnDefAt(this.sectionIdx, this.paraIdx);
       this.countInput.value = String(Math.max(def.columnCount, 1));
       this.typeSelect.value = String(def.columnType);
       this.sameWidthCheck.checked = def.sameWidth;
@@ -105,6 +139,7 @@ export class ColumnSettingsDialog extends ModalDialog {
       this.sameWidthCheck.checked = true;
       this.spacingInput.value = '8';
     }
+    this.scopeSelect.value = '0';
   }
 
   protected onConfirm(): boolean {
@@ -112,13 +147,32 @@ export class ColumnSettingsDialog extends ModalDialog {
     const type = Math.max(0, Math.min(2, parseInt(this.typeSelect.value, 10) || 0));
     const sameWidth = this.sameWidthCheck.checked ? 1 : 0;
     const spacingHu = Math.max(0, Math.min(32767, mmToHwpunit(parseFloat(this.spacingInput.value) || 0)));
+    const scope = Math.max(0, Math.min(3, parseInt(this.scopeSelect.value, 10) || 0));
     // [다단 설정 이관] snapshot 으로 라우팅(#2077 동형). services 미주입 시 직접 적용 fallback.
-    const apply = () => this.wasm.setColumnDef(this.sectionIdx, count, type, sameWidth, spacingHu);
+    const apply = (): { section: number; para: number; charOffset: number } | null => {
+      const raw = this.wasm.applyColumnDef(
+        this.sectionIdx, this.paraIdx, this.charOffset, scope, count, type, sameWidth, spacingHu,
+      );
+      try {
+        const res = JSON.parse(raw);
+        if (res && typeof res.para === 'number') {
+          return { section: res.section ?? this.sectionIdx, para: res.para, charOffset: res.charOffset ?? 0 };
+        }
+      } catch { /* 옛 엔진 응답 */ }
+      return null;
+    };
     return applyThroughRouter({
       services: this.services,
       label: 'ColumnSettingsDialog',
       operationType: 'columnSettings',
-      operation: (ih) => { apply(); return ih.getCursorPosition(); },
+      operation: (ih) => {
+        const caret = apply();
+        // 새 다단으로는 문단을 나눌 수 있다 — 캐럿을 새 다단의 처음으로 옮긴다.
+        if (scope === 1 && caret) {
+          return { sectionIndex: caret.section, paragraphIndex: caret.para, charOffset: caret.charOffset };
+        }
+        return ih.getCursorPosition();
+      },
       fallback: () => { apply(); this.eventBus.emit('document-changed'); },
     });
   }

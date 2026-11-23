@@ -1627,6 +1627,40 @@ export class WasmBridge {
     return (this.doc as any).setColumnDef(sec, columnCount, columnType, sameWidth, spacingHu);
   }
 
+  /** 캐럿 문단에 걸린 단 정의. `zoneStart` 는 그 단 정의를 지닌 문단(없으면 -1). */
+  getColumnDefAt(sec: number, para: number): {
+    columnCount: number; columnType: number; sameWidth: boolean; spacing: number;
+    zoneStart?: number; zoneCount?: number;
+  } {
+    if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
+    const doc = this.doc as any;
+    // 옛 엔진(pkg 재빌드 전)에는 없다 — 구역 첫 단 정의로 대신한다.
+    if (typeof doc.getColumnDefAt !== 'function') return JSON.parse(doc.getColumnDef(sec));
+    return JSON.parse(doc.getColumnDefAt(sec, para));
+  }
+
+  /**
+   * 적용 범위를 두고 다단 설정을 바꾼다.
+   * scope: 0=현재 다단, 1=새 다단으로(캐럿 자리에 다단 나누기), 2=현재 구역, 3=문서 전체.
+   * 반환: `{"ok":true,"section":N,"para":N,"charOffset":N}` — 바꾼 뒤 캐럿 자리.
+   */
+  applyColumnDef(
+    sec: number, para: number, charOffset: number, scope: number,
+    columnCount: number, columnType: number, sameWidth: number, spacingHu: number,
+  ): string {
+    if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
+    const doc = this.doc as any;
+    if (typeof doc.applyColumnDef !== 'function') {
+      // 옛 엔진: 구역 첫 단 정의만 고칠 수 있다.
+      if (scope === 0 || scope === 2) {
+        doc.setColumnDef(sec, columnCount, columnType, sameWidth, spacingHu);
+        return JSON.stringify({ ok: true, section: sec, para, charOffset });
+      }
+      throw new Error('이 엔진 빌드는 다단 적용 범위를 지원하지 않습니다 (WASM 재빌드 필요)');
+    }
+    return doc.applyColumnDef(sec, para, charOffset, scope, columnCount, columnType, sameWidth, spacingHu);
+  }
+
   mergeParagraph(sec: number, para: number): string {
     if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
     return this.doc.mergeParagraph(sec, para);

@@ -7,6 +7,9 @@ mod border_paint_structure;
 mod bullet_create;
 mod clipboard;
 mod clone_identity;
+// 다단 설정 적용 범위 — 현재 다단/새 다단으로/현재 구역/문서 전체.
+mod column_ops;
+pub use column_ops::{ColumnApplyScope, ColumnSettings};
 // 덧말·글자 겹침 넣기와 고치기.
 mod compose_controls;
 pub use compose_controls::ComposeHost;
@@ -36,6 +39,8 @@ mod table_formula;
 // 구역 나누기·합치기 — 한/글 [쪽-구역 나누기]와 구역 경계 지우기.
 mod section_ops;
 mod table_ops;
+// 셀 경로로 가리키는 중첩 표·머리말/꼬리말 안 표의 구조·속성 편집.
+mod table_path_ops;
 mod text_editing;
 // [#5769] Stage 4 — 구역 raw 저널. SectionRawCapture 타입이 DocumentCore 필드로
 // 쓰이므로 pub(crate).

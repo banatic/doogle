@@ -774,7 +774,7 @@ impl HwpDocument {
 
     /// 비밀번호로 보호된 HWP/HWPX 파일을 비밀번호와 함께 로드한다.
     ///
-    /// HWP5 EncryptVersion 4, 압축 HWP3와 ODF AES-256-CBC HWPX를 지원한다.
+    /// HWP5(한글 2024 의 EncryptVersion 0 과 예전 두글의 4), 압축 HWP3와 ODF AES-256-CBC HWPX를 지원한다.
     /// 구버전/비압축 HWP3 암호화와 DRM은 지원하지 않는다.
     /// 비밀번호가 틀린 경우 JS 측에서 잡을 수 있도록 에러 메시지에
     /// "비밀번호가 일치하지 않"이 포함된 `JsValue` 를 반환한다.
@@ -2971,6 +2971,50 @@ impl HwpDocument {
         .map_err(|e| e.into())
     }
 
+    /// 적용 범위를 두고 다단 설정을 바꾼다 (한/글 [다단 설정]의 "적용 범위").
+    /// scope: 0=현재 다단, 1=새 다단으로(캐럿 자리에 다단 나누기 + 새 단 정의),
+    ///        2=현재 구역, 3=문서 전체
+    /// column_type: 0=일반, 1=배분, 2=평행 / same_width: 0=다른 너비, 1=같은 너비
+    /// 반환값: JSON `{"ok":true,"section":N,"para":N,"charOffset":N}` — 바꾼 뒤 캐럿 자리.
+    #[wasm_bindgen(js_name = applyColumnDef)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn apply_column_def(
+        &mut self,
+        section_idx: u32,
+        para_idx: u32,
+        char_offset: u32,
+        scope: u32,
+        column_count: u32,
+        column_type: u32,
+        same_width: u32,
+        spacing_hu: i32,
+    ) -> Result<String, JsValue> {
+        let scope = crate::document_core::ColumnApplyScope::from_u8(scope.min(255) as u8)
+            .map_err(|e| -> JsValue { e.into() })?;
+        let settings = crate::document_core::ColumnSettings {
+            column_count: column_count.clamp(1, 255) as u16,
+            column_type: column_type.min(2) as u8,
+            same_width: same_width != 0,
+            spacing: spacing_hu.clamp(0, i16::MAX as i32) as i16,
+        };
+        self.apply_column_def_native(
+            section_idx as usize,
+            para_idx as usize,
+            char_offset as usize,
+            scope,
+            settings,
+        )
+        .map_err(|e| e.into())
+    }
+
+    /// 캐럿 문단에 적용되는 다단 설정을 JSON으로 반환한다.
+    /// `getColumnDef` 필드에 `zoneStart`(단 정의 문단, 없으면 -1)·`zoneCount`를 더한다.
+    #[wasm_bindgen(js_name = getColumnDefAt)]
+    pub fn get_column_def_at(&self, section_idx: u32, para_idx: u32) -> Result<String, JsValue> {
+        self.get_column_def_at_native(section_idx as usize, para_idx as usize)
+            .map_err(|e| e.into())
+    }
+
     /// 현재 문단을 이전 문단에 병합한다 (Backspace at start).
     ///
     /// para_idx의 텍스트가 para_idx-1에 결합되고 para_idx는 삭제된다.
@@ -3994,6 +4038,247 @@ impl HwpDocument {
             json,
         )
         .map_err(|e| e.into())
+    }
+
+    // ─── 셀 경로 표(중첩 표·머리말/꼬리말 안 표)의 구조·속성 편집 ───
+    //
+    // `cell_path_json` 은 `resizeTableCellsByPath` 와 같다 — 마지막 항목의 controlIndex 가 대상 표.
+    // 깊이 1 이면 평면 API 와 같은 경로로 처리한다. 반환 JSON 도 평면 API 와 같다.
+
+    /// 경로 표에 행을 넣는다. 반환: `{"ok":true,"rowCount":N,"colCount":M}`
+    #[wasm_bindgen(js_name = insertTableRowByPath)]
+    pub fn insert_table_row_by_path(
+        &mut self,
+        section_idx: u32,
+        parent_para_idx: u32,
+        cell_path_json: &str,
+        row_idx: u32,
+        below: bool,
+    ) -> Result<String, JsValue> {
+        let path = parse_cell_path_arg(cell_path_json)?;
+        self.insert_table_row_by_cell_path_native(
+            section_idx as usize,
+            parent_para_idx as usize,
+            &path,
+            row_idx as u16,
+            below,
+        )
+        .map_err(|e| e.into())
+    }
+
+    /// 경로 표에 열을 넣는다. 반환: `{"ok":true,"rowCount":N,"colCount":M}`
+    #[wasm_bindgen(js_name = insertTableColumnByPath)]
+    pub fn insert_table_column_by_path(
+        &mut self,
+        section_idx: u32,
+        parent_para_idx: u32,
+        cell_path_json: &str,
+        col_idx: u32,
+        right: bool,
+    ) -> Result<String, JsValue> {
+        let path = parse_cell_path_arg(cell_path_json)?;
+        self.insert_table_column_by_cell_path_native(
+            section_idx as usize,
+            parent_para_idx as usize,
+            &path,
+            col_idx as u16,
+            right,
+        )
+        .map_err(|e| e.into())
+    }
+
+    /// 경로 표에서 행을 지운다.
+    #[wasm_bindgen(js_name = deleteTableRowByPath)]
+    pub fn delete_table_row_by_path(
+        &mut self,
+        section_idx: u32,
+        parent_para_idx: u32,
+        cell_path_json: &str,
+        row_idx: u32,
+    ) -> Result<String, JsValue> {
+        let path = parse_cell_path_arg(cell_path_json)?;
+        self.delete_table_row_by_cell_path_native(
+            section_idx as usize,
+            parent_para_idx as usize,
+            &path,
+            row_idx as u16,
+        )
+        .map_err(|e| e.into())
+    }
+
+    /// 경로 표에서 열을 지운다.
+    #[wasm_bindgen(js_name = deleteTableColumnByPath)]
+    pub fn delete_table_column_by_path(
+        &mut self,
+        section_idx: u32,
+        parent_para_idx: u32,
+        cell_path_json: &str,
+        col_idx: u32,
+    ) -> Result<String, JsValue> {
+        let path = parse_cell_path_arg(cell_path_json)?;
+        self.delete_table_column_by_cell_path_native(
+            section_idx as usize,
+            parent_para_idx as usize,
+            &path,
+            col_idx as u16,
+        )
+        .map_err(|e| e.into())
+    }
+
+    /// 경로 표의 셀을 합친다. 반환: `{"ok":true,"cellCount":N}`
+    #[wasm_bindgen(js_name = mergeTableCellsByPath)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn merge_table_cells_by_path(
+        &mut self,
+        section_idx: u32,
+        parent_para_idx: u32,
+        cell_path_json: &str,
+        start_row: u32,
+        start_col: u32,
+        end_row: u32,
+        end_col: u32,
+    ) -> Result<String, JsValue> {
+        let path = parse_cell_path_arg(cell_path_json)?;
+        self.merge_table_cells_by_cell_path_native(
+            section_idx as usize,
+            parent_para_idx as usize,
+            &path,
+            start_row as u16,
+            start_col as u16,
+            end_row as u16,
+            end_col as u16,
+        )
+        .map_err(|e| e.into())
+    }
+
+    /// 경로 표의 셀을 N줄 × M칸으로 나눈다. 반환: `{"ok":true,"cellCount":N}`
+    #[wasm_bindgen(js_name = splitTableCellIntoByPath)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn split_table_cell_into_by_path(
+        &mut self,
+        section_idx: u32,
+        parent_para_idx: u32,
+        cell_path_json: &str,
+        row: u32,
+        col: u32,
+        n_rows: u32,
+        m_cols: u32,
+        equal_row_height: bool,
+        merge_first: bool,
+    ) -> Result<String, JsValue> {
+        let path = parse_cell_path_arg(cell_path_json)?;
+        self.split_table_cell_into_by_cell_path_native(
+            section_idx as usize,
+            parent_para_idx as usize,
+            &path,
+            row as u16,
+            col as u16,
+            n_rows as u16,
+            m_cols as u16,
+            equal_row_height,
+            merge_first,
+        )
+        .map_err(|e| e.into())
+    }
+
+    /// 경로 표의 셀 속성을 바꾼다 (JSON 은 `setCellProperties` 와 같다).
+    #[wasm_bindgen(js_name = setCellPropertiesByPath)]
+    pub fn set_cell_properties_by_path(
+        &mut self,
+        section_idx: u32,
+        parent_para_idx: u32,
+        cell_path_json: &str,
+        cell_idx: u32,
+        json: &str,
+    ) -> Result<String, JsValue> {
+        let path = parse_cell_path_arg(cell_path_json)?;
+        self.set_cell_properties_by_cell_path_native(
+            section_idx as usize,
+            parent_para_idx as usize,
+            &path,
+            cell_idx as usize,
+            json,
+        )
+        .map_err(|e| e.into())
+    }
+
+    /// 경로 표의 셀 영역(cellzone) 테두리·채우기를 바꾼다 (`setCellZoneProperties` 와 같다).
+    #[wasm_bindgen(js_name = setCellZonePropertiesByPath)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn set_cell_zone_properties_by_path(
+        &mut self,
+        section_idx: u32,
+        parent_para_idx: u32,
+        cell_path_json: &str,
+        start_row: u32,
+        start_col: u32,
+        end_row: u32,
+        end_col: u32,
+        json: &str,
+    ) -> Result<String, JsValue> {
+        let path = parse_cell_path_arg(cell_path_json)?;
+        self.set_cell_zone_properties_by_cell_path_native(
+            section_idx as usize,
+            parent_para_idx as usize,
+            &path,
+            start_row as u16,
+            start_col as u16,
+            end_row as u16,
+            end_col as u16,
+            json,
+        )
+        .map_err(|e| e.into())
+    }
+
+    /// 경로 표의 표 속성을 바꾼다 (`setTableProperties` 와 같다. 중첩 표 캡션은 거절).
+    #[wasm_bindgen(js_name = setTablePropertiesByPath)]
+    pub fn set_table_properties_by_path(
+        &mut self,
+        section_idx: u32,
+        parent_para_idx: u32,
+        cell_path_json: &str,
+        json: &str,
+    ) -> Result<String, JsValue> {
+        let path = parse_cell_path_arg(cell_path_json)?;
+        self.set_table_properties_by_cell_path_native(
+            section_idx as usize,
+            parent_para_idx as usize,
+            &path,
+            json,
+        )
+        .map_err(|e| e.into())
+    }
+
+    /// 경로 표의 열 폭(HWPUNIT)을 절대값으로 정한다. 반환: `{"ok":true,"colCount":N,"tableWidth":W}`
+    #[wasm_bindgen(js_name = setTableColumnWidthsByPath)]
+    pub fn set_table_column_widths_by_path(
+        &mut self,
+        section_idx: u32,
+        parent_para_idx: u32,
+        cell_path_json: &str,
+        widths: Vec<u32>,
+    ) -> Result<String, JsValue> {
+        let path = parse_cell_path_arg(cell_path_json)?;
+        self.set_table_column_widths_by_cell_path_native(
+            section_idx as usize,
+            parent_para_idx as usize,
+            &path,
+            widths,
+        )
+        .map_err(|e| e.into())
+    }
+
+    /// 경로 표를 지운다. 깊이 1 은 `deleteTableControl`, 깊이 2 이상은 표를 품은 셀(또는 머리말·꼬리말) 문단에서 걷어낸다.
+    #[wasm_bindgen(js_name = deleteTableByPath)]
+    pub fn delete_table_by_path(
+        &mut self,
+        section_idx: u32,
+        parent_para_idx: u32,
+        cell_path_json: &str,
+    ) -> Result<String, JsValue> {
+        let path = parse_cell_path_arg(cell_path_json)?;
+        self.delete_table_by_cell_path_native(section_idx as usize, parent_para_idx as usize, &path)
+            .map_err(|e| e.into())
     }
 
     /// 표의 위치 오프셋(vertical_offset, horizontal_offset)을 이동한다.
@@ -7583,7 +7868,7 @@ impl HwpDocument {
             .map_err(JsValue::from)
     }
 
-    /// 문서를 HWP5 EncryptVersion 4 비밀번호 문서로 내보낸다.
+    /// 문서를 한글 2024 형식(EncryptVersion 0)의 HWP5 비밀번호 문서로 내보낸다.
     ///
     /// browser UI는 암호를 저장하지 않고 저장 시점에만 전달한다. HWPX 출처 문서는 일반
     /// HWP 저장과 동일하게 HWPX-to-HWP adapter를 먼저 적용한다.

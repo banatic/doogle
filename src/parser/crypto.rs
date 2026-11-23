@@ -1,5 +1,10 @@
 //! HWP 배포용 문서 복호화와 HWP5 비밀번호 stream 어댑터.
 //!
+//! HWP5 암호 문서는 두 형식을 읽는다. 한글 2024 가 쓰는 DES envelope
+//! (FileHeader EncryptVersion 0, `password_crypto::open_hwp5_des_stream`)과 예전
+//! 두글·rhwp 가 쓰던 길이 보존 AES-128 CFB-1(EncryptVersion 4)이다. stream 끝의
+//! 고정 trailer 로 형식을 구분하므로 호출자는 형식을 넘기지 않는다.
+//!
 //! HWP3/HWP5/HWPX 비밀번호 암호 알고리즘은 `crate::password_crypto`가 단일
 //! 소유한다. 이 파일은 배포용 ViewText의 별도 계약과 parser 오류형만 유지한다.
 
@@ -10,8 +15,16 @@ use super::cfb_reader::{decompress_stream, decompress_stream_limited, CfbError};
 use super::record::Record;
 use super::tags;
 
-/// 현재 지원하는 HWP5 비밀번호 암호화 방식(FileHeader EncryptVersion).
+/// 한글 2024 가 쓰는 DES envelope 암호 문서의 FileHeader EncryptVersion.
+pub use crate::password_crypto::HWP5_DES_ENCRYPT_VERSION as HANGUL_PASSWORD_ENCRYPT_VERSION;
+/// 길이 보존 AES-128 CFB-1 암호 문서의 FileHeader EncryptVersion.
 pub use crate::password_crypto::HWP5_ENCRYPT_VERSION as SUPPORTED_PASSWORD_ENCRYPT_VERSION;
+
+/// 읽을 수 있는 암호 문서 EncryptVersion 인지 본다.
+pub fn is_supported_password_encrypt_version(encrypt_version: u32) -> bool {
+    encrypt_version == HANGUL_PASSWORD_ENCRYPT_VERSION
+        || encrypt_version == SUPPORTED_PASSWORD_ENCRYPT_VERSION
+}
 
 /// 기존 crypto 호출자가 명시적으로 선택할 수 있도록 남긴 호환 상한값.
 ///
@@ -56,7 +69,7 @@ impl std::fmt::Display for CryptoError {
             }
             Self::UnsupportedScheme { encrypt_version } => write!(
                 f,
-                "지원하지 않는 암호화 방식: EncryptVersion {encrypt_version} (지원: {SUPPORTED_PASSWORD_ENCRYPT_VERSION})"
+                "지원하지 않는 암호화 방식: EncryptVersion {encrypt_version} (지원: {HANGUL_PASSWORD_ENCRYPT_VERSION}, {SUPPORTED_PASSWORD_ENCRYPT_VERSION})"
             ),
         }
     }
@@ -125,9 +138,23 @@ fn decrypt_aes_ecb(data: &[u8], key: &[u8; 16]) -> Vec<u8> {
     output
 }
 
-/// HWP5 EncryptVersion 4 raw stream을 복호화한다.
+/// 한글 DES envelope 을 풀 수 있으면 저장 형태(raw-deflate)를 돌려준다.
+///
+/// envelope 모양이 아니거나 trailer CRC 가 맞지 않으면(틀린 암호) `None` 이다.
+fn open_des_envelope(raw: &[u8], password: &[u8]) -> Option<Vec<u8>> {
+    if !crate::password_crypto::is_hwp5_des_stream(raw) {
+        return None;
+    }
+    crate::password_crypto::open_hwp5_des_stream(raw, password).ok()
+}
+
+/// HWP5 암호 raw stream 을 암호 없는 문서의 저장 형태로 복호화한다.
+///
+/// 한글 DES envelope 은 raw-deflate(뒤에 0 채움)로, AES CFB-1 stream 은 같은 길이의
+/// 평문으로 돌아온다. 암호가 틀리면 뜻 없는 바이트가 나오며 판정은 호출자가 한다.
 pub fn decrypt_password_stream(raw: &[u8], password: &[u8]) -> Vec<u8> {
-    crate::password_crypto::decrypt_hwp5_stream(raw, password)
+    open_des_envelope(raw, password)
+        .unwrap_or_else(|| crate::password_crypto::decrypt_hwp5_stream(raw, password))
 }
 
 pub fn decrypt_password_protected(
@@ -135,12 +162,7 @@ pub fn decrypt_password_protected(
     password: &[u8],
     compressed: bool,
 ) -> Result<Vec<u8>, CryptoError> {
-    let decrypted = decrypt_password_stream(raw, password);
-    if compressed {
-        decompress_stream(&decrypted).map_err(|_| CryptoError::WrongPassword)
-    } else {
-        Ok(decrypted)
-    }
+    decrypt_password_protected_limited(raw, password, compressed, usize::MAX)
 }
 
 pub fn decrypt_password_protected_limited(
@@ -149,7 +171,14 @@ pub fn decrypt_password_protected_limited(
     compressed: bool,
     max_bytes: usize,
 ) -> Result<Vec<u8>, CryptoError> {
-    let decrypted = decrypt_password_stream(raw, password);
+    // DES envelope 은 문서·BinData 압축 속성과 무관하게 항상 deflate 를 담는다.
+    let (decrypted, compressed) = match open_des_envelope(raw, password) {
+        Some(deflated) => (deflated, true),
+        None => (
+            crate::password_crypto::decrypt_hwp5_stream(raw, password),
+            compressed,
+        ),
+    };
     if compressed {
         decompress_stream_limited(&decrypted, max_bytes).map_err(|error| match error {
             CfbError::LimitExceeded(_) => {
@@ -162,6 +191,27 @@ pub fn decrypt_password_protected_limited(
     } else {
         Ok(decrypted)
     }
+}
+
+/// 한글 암호 문서의 DOCUMENT_PROPERTIES 앞 256바이트 채움 영역을 걷어낸다.
+///
+/// 한글은 DES envelope 암호 문서에서 DocInfo 첫 레코드(DOCUMENT_PROPERTIES)의 본문
+/// 앞에 뜻 없는 256바이트를 끼운다. `raw_stream` 은 복호화 전 DocInfo stream 이다.
+pub fn strip_password_prefix(raw_stream: &[u8], mut doc_info: Vec<u8>) -> Vec<u8> {
+    const PREFIX: usize = crate::password_crypto::HWP5_PASSWORD_PREFIX_BYTES;
+    if !crate::password_crypto::is_hwp5_des_stream(raw_stream) || doc_info.len() < 4 + PREFIX {
+        return doc_info;
+    }
+    let header = u32::from_le_bytes(doc_info[..4].try_into().expect("record header"));
+    let tag_id = (header & 0x3ff) as u16;
+    let size = (header >> 20) as usize;
+    if tag_id != tags::HWPTAG_DOCUMENT_PROPERTIES || size == 0xfff || size <= PREFIX {
+        return doc_info;
+    }
+    let header = (header & 0x000f_ffff) | (((size - PREFIX) as u32) << 20);
+    doc_info[..4].copy_from_slice(&header.to_le_bytes());
+    doc_info.drain(4..4 + PREFIX);
+    doc_info
 }
 
 #[cfg(test)]

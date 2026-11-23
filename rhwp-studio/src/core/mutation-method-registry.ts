@@ -21,6 +21,7 @@
 export const MUTATING_METHODS: readonly string[] = [
   // 쪽/구역/다단
   'setPageDef', 'setPageMargin', 'setSectionDef', 'setSectionDefAll', 'setPageBorderFill', 'setColumnDef',
+  'applyColumnDef', // 다단 설정 적용 범위(현재 다단/새 다단으로/현재 구역/문서 전체)
   // 본문 텍스트/문단
   'insertText', 'insertTextLogical', 'replaceBodyTextLocal', 'deleteText', 'deleteRange', 'splitParagraph', 'mergeParagraph',
   'insertPageBreak', 'insertColumnBreak', 'insertNewNumber', 'setNumberingRestart',

@@ -20,6 +20,13 @@ tests
 # lib 이 include_bytes! 로 읽는 시험용 글꼴(라이선스 고지 포함)은 남긴다.
 !tests/fixtures/fonts
 !tests/fixtures/native_font_family_names
+# lib 단위 시험이 include! 하는 시험 지원 파일(없으면 cargo test -p rhwp --lib 가 컴파일되지 않는다)
+!tests/common/svg_image_frames.rs
+!tests/support
+!tests/fixtures/deferred_document_regressions.txt
+!tests/fixtures/deferred_regression_documents.txt
+# 한글 2024 암호 HWP 시험 파일(parser/hangul_password_tests.rs)
+!tests/fixtures/hwp_password
 
 # samples: lib 이 include_bytes! 로 읽는 파일만 남긴다.
 samples

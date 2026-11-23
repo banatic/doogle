@@ -184,7 +184,7 @@ impl DocumentCore {
 
     /// 비밀번호로 보호된 HWP/HWPX 파일을 비밀번호와 함께 로드한다.
     ///
-    /// HWP5 EncryptVersion 4, 압축 HWP3 및 ODF AES-256-CBC HWPX 비밀번호 암호 문서를 연다.
+    /// HWP5 비밀번호 문서(한글 2024 의 EncryptVersion 0 DES 방식과 예전 EncryptVersion 4), 압축 HWP3 및 ODF AES-256-CBC HWPX 비밀번호 암호 문서를 연다.
     /// 비밀번호가 틀리면 `HwpError::InvalidFile`로 래핑된 암호 불일치/손상 오류가
     /// 반환된다. 암호화되지 않은 HWPX는 기존 파서 경로로 열린다.
     pub fn from_bytes_with_password(
@@ -3080,7 +3080,7 @@ impl DocumentCore {
             })
     }
 
-    /// HWPX 출처 어댑터를 적용한 뒤 HWP5 EncryptVersion 4 비밀번호 문서로 저장한다.
+    /// HWPX 출처 어댑터를 적용한 뒤 한글 2024 와 같은 HWP5 비밀번호 문서(EncryptVersion 0, DES)로 저장한다.
     ///
     /// 일반 HWP 저장과 마찬가지로 HWPX 출처는 반드시 adapter를 먼저 통과한다. 암호화만
     /// 별도 serializer로 우회하면 차트·그림 HWPX IR이 HWP5 계약으로 정규화되지 않는다.

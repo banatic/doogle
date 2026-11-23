@@ -618,7 +618,7 @@ export const pageCommands: CommandDef[] = [
       const ih = services.getInputHandler();
       if (!ih) return;
       const pos = ih.getPosition();
-      const dlg = new ColumnSettingsDialog(services.wasm, services.eventBus, pos.sectionIndex, services);
+      const dlg = new ColumnSettingsDialog(services.wasm, services.eventBus, pos.sectionIndex, services, pos);
       dlg.show();
     },
   },

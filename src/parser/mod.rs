@@ -338,7 +338,8 @@ pub fn parse_hwp(data: &[u8]) -> Result<Document, ParseError> {
 
 /// 비밀번호로 보호된 HWP 파일을 비밀번호와 함께 파싱한다.
 ///
-/// `encrypted` 플래그와 EncryptVersion 4가 설정된 문서를 연다. 비밀번호가 틀리면
+/// `encrypted` 플래그가 설정된 문서(한글 2024 의 EncryptVersion 0 DES envelope,
+/// 예전 두글의 EncryptVersion 4)를 연다. 비밀번호가 틀리면
 /// `ParseError::CryptoError(CryptoError::WrongPassword)` 가 반환된다. 비밀번호가
 /// 필요 없는 일반/배포용 문서에 비밀번호를 전달해도 결과는 동일하다(무시됨).
 pub fn parse_hwp_with_password(data: &[u8], password: &[u8]) -> Result<Document, ParseError> {
@@ -347,7 +348,7 @@ pub fn parse_hwp_with_password(data: &[u8], password: &[u8]) -> Result<Document,
 
 fn validate_password_encryption(file_header: &header::FileHeader) -> Result<(), ParseError> {
     if file_header.flags.encrypted
-        && file_header.encrypt_version != crypto::SUPPORTED_PASSWORD_ENCRYPT_VERSION
+        && !crypto::is_supported_password_encrypt_version(file_header.encrypt_version)
     {
         return Err(ParseError::CryptoError(
             crypto::CryptoError::UnsupportedScheme {
@@ -447,7 +448,7 @@ fn parse_hwp_with_cfb(
 
     // 3. DocInfo 파싱 (비밀번호 암호 문서: raw 읽기 → 복호화)
     //
-    // EncryptVersion 4(한글 7.0 이후)만 지원한다. 구버전 1~3을 같은 알고리즘으로
+    // EncryptVersion 0(한글 2024 DES envelope)과 4 만 지원한다. 1~3을 같은 알고리즘으로
     // 해석하면 WrongPassword로 오진하므로 FileHeader 단계에서 명시적으로 거부한다.
     let doc_info_output_limit = decompression_budget.stream_limit();
     let doc_info_raw_limit = decompression_budget.raw_stream_limit();
@@ -455,13 +456,14 @@ fn parse_hwp_with_cfb(
         let raw = cfb
             .read_stream_raw_limited("/DocInfo", doc_info_raw_limit)
             .map_err(ParseError::CfbError)?;
-        crypto::decrypt_password_protected_limited(
+        let data = crypto::decrypt_password_protected_limited(
             &raw,
             password.unwrap(),
             compressed,
             doc_info_output_limit,
         )
-        .map_err(ParseError::CryptoError)?
+        .map_err(ParseError::CryptoError)?;
+        crypto::strip_password_prefix(&raw, data)
     } else {
         let raw = cfb
             .read_stream_raw_limited("/DocInfo", doc_info_raw_limit)
@@ -940,13 +942,14 @@ fn parse_hwp_with_lenient(
         let raw = lenient
             .read_stream_raw_limited("DocInfo", doc_info_raw_limit)
             .map_err(ParseError::CfbError)?;
-        crypto::decrypt_password_protected_limited(
+        let data = crypto::decrypt_password_protected_limited(
             &raw,
             password.unwrap(),
             compressed,
             doc_info_output_limit,
         )
-        .map_err(ParseError::CryptoError)?
+        .map_err(ParseError::CryptoError)?;
+        crypto::strip_password_prefix(&raw, data)
     } else {
         let raw = lenient
             .read_stream_raw_limited("DocInfo", doc_info_raw_limit)
@@ -1979,7 +1982,7 @@ impl crate::model::bin_data::BinDataResolver for Hwp5BinResolver {
         };
         let bytes = if self.encrypted {
             let password = self.password.as_deref().unwrap_or(&[]);
-            // `decrypt_hwp5_stream` 은 입력 길이로 truncate 하므로 크기가 보존된다.
+            // 복호화 결과는 저장 형태(압축 상태 그대로)이며 입력보다 길어지지 않는다.
             crypto::decrypt_password_stream(&raw, password)
         } else {
             raw
@@ -2209,6 +2212,9 @@ fn load_bin_data_content(
 
     contents
 }
+
+#[cfg(test)]
+mod hangul_password_tests;
 
 #[cfg(test)]
 mod tests {
