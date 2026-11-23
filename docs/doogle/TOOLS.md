@@ -61,13 +61,15 @@ MIT이므로 저작권 표시(LICENSE 3줄)만 유지하면 코드 그대로 가
 | `apply_para_format` | 정렬, 간격, 줄간격, 들여쓰기, 탭, 테두리 … |
 | `apply_style` / `apply_list` | 스타일, 번호/글머리 |
 | `insert_paragraphs` / `delete_paragraphs` / `move_paragraphs` | **두글 추가.** 문단을 통째로 넣고·지우고·옮긴다 (표 뒤·문서 끝 삽입, `formatFrom` 서식 복사, 이동 시 서식·표 유지). 글자 좌표로 문단을 잇고 끊는 방식은 표를 지우는 사고를 냈다 — [AGENT_EVAL.md](AGENT_EVAL.md) |
-| `create_table` / `edit_table` / `set_table_props` / `set_cell_props` / `set_zone_borders` / `delete_table` | `edit_table`에 행/열 삽입삭제, 병합/분할, `fit_to_page`, `set_column_widths` |
+| `create_table` / `edit_table` / `set_table_props` / `set_cell_props` / `set_zone_borders` / `delete_table` | `edit_table`에 행/열 삽입삭제, 병합/분할, `fit_to_page`, `set_column_widths`, `set_row_heights`. 중첩 표·머리말/꼬리말 안 표는 `cellPath` (아래 "두글에서 바꾼 점") |
 | `set_field_value` | 누름틀 채우기 |
-| `insert_page_break` / `set_page_layout` / `edit_header_footer` | |
+| `insert_page_break` / `set_page_layout` / `edit_header_footer` | `edit_header_footer` 는 머리말·꼬리말을 지우고 새로 만든다 — 안에 표가 있으면 `discardObjects:true` 없이는 거절 |
+| `set_columns` | **두글 추가.** 다단을 문서 일부에만 건다. `paraIdx`(+`charOffset`), `count`, `scope`: `zone`(기본, 그 문단이 든 다단) · `from_here`(그 자리부터 새 다단 — 앞 문단은 그대로) · `section` · `document`, `type`: `normal` · `distribute` · `parallel`, `sameWidth`(기본 true), `gapMm`(기본: 지금 다단 간격, 0 이면 8mm). "표지 1단 · 본문 2단" = 본문 첫 문단에서 `{count:2, scope:"from_here"}`. 엔진 `applyColumnDef`/`getColumnDefAt` — 그 export 가 없는 엔진 빌드에서는 `ENGINE_UNSUPPORTED`(엔진을 다시 빌드하라는 안내). `set_page_layout` 의 `columns` 는 구역의 첫 다단만 바꾼다 |
 | `insert_footnote` / `edit_footnote` / `set_bookmark` | |
 | `insert_image` / `insert_equation` / `preview_equation` / `insert_shape` / `edit_object` | image는 비동기라 배치 불가. `insert_chart`는 엔진 경로가 없어 뺐다 |
 | `apply_edits` | `edits[{tool, …인자}]` ≤32, 원자적 |
 | `apply_engine_edits` / `prepare_engine_edit_session` | escape hatch |
+| `undo` | **두글 추가.** `count?`(기본 1, 최대 20) — 에이전트가 자기 마지막 쓰기 N 개를 되돌린다(사용자가 Ctrl+Z 를 누르지 않아도 된다). 에이전트 모드: 이 대화의 검토 대기 행 중 마지막 N 개를 거절과 같은 기구(`PendingStaging.rejectFrom`, 그 행 직전 스냅샷)로 되돌리고 목록에서 뺀다 — "사용자가 거절" 보고는 붙지 않는다. 사용자가 ✓ 로 적용한 행은 되돌리지 않는다. 전체 모드: 쓰기마다 남긴 직전 스냅샷(최근 5개)으로 돌아간다 — 그 복원도 transaction 이라 사용자는 Ctrl+Z 로 되살릴 수 있다. 그 사이 사용자가 문서를 고쳤으면 `UNDO_BLOCKED`(아무것도 바꾸지 않음), 되돌릴 것이 없으면 `NOTHING_TO_UNDO`. apply_edits 에 넣을 수 없다 |
 
 ### 대화 제어
 | tool | 인자 | 비고 |
@@ -100,6 +102,10 @@ hub·사이드바에 응답 화면이 없어 부르면 반드시 실패했다(`N
 - 글 범위 도구(`delete_range`, `replace_range`)는 표·그림·수식이 걸린 범위를 `RANGE_HAS_OBJECTS` 로 거절한다.
 - `apply_char_format` / `apply_para_format` 의 `cells:{paraIdx,controlIdx,cellIdxs}`, `set_cell_props` 의 `cellIdxs` — 여러 셀을 한 번에.
 - `edit_table` 의 `insert_row` / `insert_col` 은 새 셀 번호(`newRow` / `newCol`)를 돌려준다. `set_caption` 은 엔진 경로가 없어 뺐다.
+- **머리말·꼬리말**: `get_structure` 끝에 `footer s0 (both) · cell {paraIdx,controlIdx,cellIdx:0}` 줄, 그 문단 `  p<n> (<길이>) 글`, 그 안 표 `  table in footer p<n> RxC · cell {…} + cellPath […]` 와 셀 그리드가 붙는다(range·sinceRevision 읽기에는 없다). 주소는 중첩 표와 같다 — 머리말·꼬리말 컨트롤을 셀 0 하나짜리 칸으로 보고, 그 안 표 셀은 `cell + cellPath [{controlIndex:머리말, cellIndex:0, cellParaIndex:머리말 문단}, {표…}]`. 엔진 `*ByPath` API 가 머리말·꼬리말 마디를 안다. 머리말·꼬리말 문단 자체(표 밖)의 쓰기는 `insertTextInHeaderFooter` · `replaceRangeInHeaderFooter` · `deleteTextInHeaderFooter` · `applyCharFormatInHeaderFooter` 로 보낸다(엔진의 한 단계 셀 경로 쓰기는 표만 안다). `find_text` 와 `find` 앵커도 머리말·꼬리말을 찾는다(엔진 `searchAllText` 는 찾지 않아 실행기가 따로 훑는다).
+- **중첩 표·머리말/꼬리말 안 표**: `edit_table` · `set_table_props` · `set_cell_props` · `set_zone_borders` · `delete_table` · `get_table_properties` 가 `cellPath`(구조 줄의 경로, 마지막 `cellIndex` 는 `n` 그대로도 된다)를 받는다. 행·열 넣기/지우기, 병합·나누기, 셀 속성(채우기·세로 정렬·안 여백·크기 …), 영역 테두리·채우기, 표 속성, 표 지우기가 엔진 `*ByPath` API(`insertTableRowByPath` · `insertTableColumnByPath` · `deleteTableRowByPath` · `deleteTableColumnByPath` · `mergeTableCellsByPath` · `splitTableCellIntoByPath` · `setCellPropertiesByPath` · `setCellZonePropertiesByPath` · `setTablePropertiesByPath` · `setTableColumnWidthsByPath` · `deleteTableByPath`)로 간다. `fit_to_page` 는 품은 셀 안쪽 폭 / 머리말·꼬리말이면 본문 폭에 맞춰 줄이기만 한다. 안 되는 것: `apply_formula`, 표 캡션(`set_table_props` 의 `caption*`) — `ENGINE_UNSUPPORTED`. 그 export 가 없는 낡은 엔진 빌드(pkg/)에서는 크기 조절(`resizeTableCellsByPath`)과 표 지우기(`deleteCellTableControlByPath`)만 되고, 나머지는 어느 메서드가 없는지와 "엔진을 다시 빌드" 안내를 담은 `ENGINE_UNSUPPORTED` 로 거절한다.
+- **빈 줄 글자 크기**: `apply_char_format` 이 빈 문단(글자 0개)도 바꾼다(`paras`·`cells`·단일 `paraIdx` 모두) — 엔진은 0..0 범위를 그 문단 끝 모양으로 받아 줄 높이를 다시 잰다. 결과의 `emptyParagraphs` 가 그런 문단 수다(전에는 `skippedEmpty` 로 건너뛰었다).
+- **낡은 문단 번호(STALE_INDEX)**: 문단을 넣거나 지우거나 옮긴 쓰기의 `after.indexShift` = `[{sectionIdx, fromParaIdx, delta} | {sectionIdx, reordered:[a,b]}]`(지금 `fromParaIdx` 이후 문단은 이 쓰기 전 `번호 − delta` 였다). 실행기는 스레드별 마지막 번호 읽기(get_structure · find_text · get_text_range · get_selection 등)의 revision 을 기억하고, 그 뒤 이 실행기의 쓰기가 번호를 민 자리를 좌표 쓰기가 가리키면(expectedRevision 은 최신이어도) 편집 저널(`EditJournal.shiftSince`)로 알아채 `STALE_INDEX` 로 한 번 멈춘다 — 지금 그 번호의 문단 글과, 읽을 때의 번호가 지금 어디로 갔는지(`data.nowAt`)를 보여 준다. 같은 호출을 다시 보내거나 다시 읽으면 통과한다. 넣은 문단 자체(쓰기 결과로 알려진 문단)와 바뀐 자리 앞쪽은 걸리지 않고, apply_edits 묶음 안의 항목 순서 규칙(뒤 항목은 앞 항목이 남긴 문서 기준)도 그대로다. 문단 번호로 범위를 좁힌 `find` 앵커도 같은 검사를 거친다. 에이전트 `undo` 가 문단 수를 바꾼 편집을 되돌리면 다음 좌표 쓰기 전에 다시 읽게 한다.
 - 쓰기 결과의 쪽 넘김은 `after.reflow`(참고), 이번 쓰기가 만든 문제만 `after.warnings`.
 - `get_engine_edit_capabilities` 는 시그니처를 주고, `apply_engine_edits` 는 인자를 시그니처와 대조한 뒤 부른다(틀린 인자는 엔진을 죽인다).
 

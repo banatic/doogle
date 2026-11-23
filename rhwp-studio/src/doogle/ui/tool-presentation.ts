@@ -67,6 +67,9 @@ function sectionPrefix(a: Args): string {
   return section !== null && section > 0 ? `${section + 1}구역` : '';
 }
 
+/** set_columns 적용 범위 */
+const COLUMN_SCOPE: Record<string, string> = { zone: '현재 다단', from_here: '여기부터', section: '구역 전체', document: '문서 전체' };
+
 /** “3문단”, 다른 구역이면 “2구역 3문단”, 셀 안이면 “표 안 3문단”. */
 function para(a: Args, key = 'paraIdx'): string {
   const p = num(a[key]);
@@ -320,6 +323,7 @@ const SPECS: Record<string, ToolSpec> = {
     category: 'edit', label: '문단 삽입',
     summary: (a) => join([para(a), Array.isArray(a['paragraphs']) ? quote(str(a['paragraphs'].find((t: unknown) => typeof t === 'string' && t) ?? ''), 32) : '']),
   },
+  undo: { category: 'edit', label: '되돌리기', summary: (a) => { const n = num(a['count']); return n !== null && n > 1 ? `최근 편집 ${n}번` : '최근 편집'; } },
   delete_paragraphs: { category: 'edit', label: '문단 삭제', summary: (a) => paraRange(a, 'startParaIdx', 'endParaIdx') },
   move_paragraphs: {
     category: 'edit', label: '문단 이동',
@@ -342,6 +346,14 @@ const SPECS: Record<string, ToolSpec> = {
       a['marginsMm'] !== undefined ? '여백' : '',
       a['columns'] !== undefined ? '단' : '',
     ]),
+  },
+  set_columns: {
+    category: 'edit', label: '다단 설정',
+    summary: (a) => {
+      const n = num(a['count']);
+      const scope = COLUMN_SCOPE[str(a['scope']) || 'zone'] ?? '';
+      return join([scope === '여기부터' ? `${para(a)}부터` : scope, n !== null ? `${n}단` : '']);
+    },
   },
   edit_header_footer: {
     category: 'edit',

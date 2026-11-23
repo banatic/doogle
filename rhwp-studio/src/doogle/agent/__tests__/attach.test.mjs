@@ -509,3 +509,119 @@ test('attach: a date-styled cell that cannot be a date keeps its number', () => 
   assert.equal(excelDate(Number.NaN), 'NaN');
   assert.equal(excelDate(2958465), '9999-12-31');
 });
+
+// ─── 한글 문서: 서식 요약 ("이 양식대로") ────────────────
+
+/** 서식을 묻는 엔진 질의만 흉내 내는 문서 — 문단마다 글·글자 모양 구간·문단 모양, 표 하나 */
+class FormatDoc {
+  constructor() {
+    const char = (id, fontFamily, pt, extra = {}) => ({ charShapeId: id, fontFamily, fontSize: pt * 100, bold: false, italic: false, underline: false, textColor: '#000000', shadeColor: '#ffffff', ratios: [100], spacings: [0], ...extra });
+    const para = (id, alignment, extra = {}) => ({ paraShapeId: id, alignment, lineSpacing: 160, lineSpacingType: 'Percent', marginLeft: 0, marginRight: 0, indent: 0, spacingBefore: 0, spacingAfter: 0, headType: 'None', paraLevel: 0, ...extra });
+    this.chars = { 1: char(1, '함초롬바탕', 20, { bold: true }), 2: char(2, '함초롬바탕', 10), 3: char(3, '함초롬바탕', 10, { bold: true }), 4: char(4, '맑은 고딕', 9) };
+    // 여백·간격은 px 로 온다 (getParaPropertiesAt) — 20px = 15pt, 8px = 6pt
+    this.paraShapes = { 10: para(10, 'center'), 11: para(11, 'justify', { indent: 20, spacingAfter: 8 }), 12: para(12, 'center', { lineSpacing: 130 }) };
+    this.paras = [
+      { text: '교원 연수 계획서', para: 10, runs: [[0, 9, 1]], style: '제목' },
+      { text: '', para: 11, runs: [] },
+      { text: '연수 목적은 교원의 역량을 높이는 것이다.', para: 11, runs: [[0, 6, 3], [6, 23, 2]], style: '바탕글' },
+      { text: '연수 기간은 한 학기이다.', para: 11, runs: [[0, 14, 2]], style: '바탕글' },
+      { text: '', para: 11, runs: [] }, // 표가 놓인 문단
+    ];
+    this.cells = [['구분'], ['내용'], ['기간'], ['한 학기']];
+  }
+  getSectionCount() { return 1; }
+  getParagraphCount() { return this.paras.length; }
+  pageCount() { return 1; }
+  getPageDef() { return JSON.stringify({ width: 59528, height: 84188, marginLeft: 5669, marginRight: 5669, marginTop: 2834, marginBottom: 2834, marginHeader: 4252, marginFooter: 4252, marginGutter: 0, landscape: false }); }
+  getColumnDef() { return JSON.stringify({ columnCount: 2, spacing: 2268 }); }
+  getHeaderFooterList() { return JSON.stringify({ ok: true, items: [{ sectionIdx: 0, isHeader: true, applyTo: 0, label: '머리말(양 쪽)' }] }); }
+  getHeaderFooter() { return JSON.stringify({ ok: true, exists: true, text: '○○고등학교' }); }
+  getParagraphLength(_s, p) { return [...this.paras[p].text].length; }
+  getTextRange(_s, p, off, n) { return [...this.paras[p].text].slice(off, off + n).join(''); }
+  getCharShapeRuns(_s, p) { return JSON.stringify(this.paras[p].runs.map(([startOffset, endOffset, charShapeId]) => ({ startOffset, endOffset, charShapeId }))); }
+  getCharPropertiesAt(_s, p, off) { const r = this.paras[p].runs.find(([a, b]) => off >= a && off < b) ?? this.paras[p].runs[0]; return JSON.stringify(this.chars[r?.[2] ?? 2]); }
+  getParaPropertiesAt(_s, p) { return JSON.stringify(this.paraShapes[this.paras[p].para]); }
+  getStyleAt(_s, p) { return JSON.stringify({ id: 0, name: this.paras[p].style ?? '바탕글' }); }
+  getObjects() { return JSON.stringify([{ para: this.paras.length - 1, controlIndex: 0, kind: 'table' }]); }
+  getPageOfPosition() { return JSON.stringify({ ok: true, page: 0 }); }
+  getTableDimensions() { return JSON.stringify({ rowCount: 2, colCount: 2, cellCount: 4 }); }
+  getTableProperties() { return JSON.stringify({ tableWidth: 48189, treatAsChar: true, repeatHeader: true, borderTop: { type: 1, width: 1, color: '#000000' } }); }
+  getCellInfo(_s, _p, _c, i) { return JSON.stringify({ row: Math.floor(i / 2), col: i % 2, rowSpan: 1, colSpan: 1 }); }
+  getCellProperties(_s, _p, _c, i) {
+    const side = { type: 1, width: 1, color: '#000000' };
+    return JSON.stringify({ width: i % 2 === 0 ? 8504 : 39685, height: 2835, paddingLeft: 510, paddingRight: 510, paddingTop: 141, paddingBottom: 141, verticalAlign: 1, isHeader: i < 2, borderLeft: side, borderRight: side, borderTop: side, borderBottom: side, fillType: i < 2 ? 'solid' : 'none', fillColor: i < 2 ? '#D9D9D9' : '#ffffff' });
+  }
+  #cell(path) { const e = JSON.parse(path); return { i: e[0].cellIndex, p: e[e.length - 1].cellParaIndex }; }
+  getCellParagraphCountByPath(_s, _para, path) { return this.cells[this.#cell(path).i].length; }
+  getCellParagraphLengthByPath(_s, _para, path) { const { i, p } = this.#cell(path); return [...this.cells[i][p]].length; }
+  getTextInCellByPath(_s, _para, path, off, n) { const { i, p } = this.#cell(path); return [...this.cells[i][p]].slice(off, off + n).join(''); }
+  getCharShapeRunsInCellByPath(_s, _para, path) { const { i, p } = this.#cell(path); return JSON.stringify([{ startOffset: 0, endOffset: [...this.cells[i][p]].length, charShapeId: 4 }]); }
+  getCellCharPropertiesAtByPath() { return JSON.stringify(this.chars[4]); }
+  getCellParaPropertiesAtByPath() { return JSON.stringify(this.paraShapes[12]); }
+}
+
+test('attach: hwp format summary — page setup, grouped paragraph formats with samples, partial runs, tables', async () => {
+  const { engineFormatSummary } = await import('../../attach/doc-format.ts');
+  const s = engineFormatSummary(new Engine(new FormatDoc()));
+  // 쪽 모양: 용지 이름, mm, 단, 머리말
+  assert.ok(s.startsWith('쪽 모양 (mm):\n'), s);
+  assert.match(s, /- A4 210×297mm 세로 · 여백 위 10 · 아래 10 · 왼쪽 20 · 오른쪽 20 · 머리말 15 · 꼬리말 15 · 본문 너비 170 · 2단 \(단 간격 8\) · 머리말\(양 쪽\) "○○고등학교"/);
+  // 문단 서식: 같은 모양의 문단은 한 줄 (두 본문 문단 → 2문단), 빈 문단은 세지 않는다, 문서 순서
+  assert.match(s, /- \[제목\] 함초롬바탕 20pt 굵게 · 가운데 정렬 · 줄 간격 160% — 1문단 7자, 예: "교원 연수 계획서"/);
+  assert.match(s, /- \[바탕글\] 함초롬바탕 10pt · 양쪽 정렬 · 줄 간격 160% · 들여쓰기 15pt · 문단 아래 6pt — 2문단 \d+자, 예: "연수 목적은 교원의 역량을 높…" \/ "연수 기간은 한 학기이다\."/);
+  assert.ok(s.indexOf('[제목]') < s.indexOf('[바탕글]'), '문서 순서');
+  // 표 칸 안 문단은 따로
+  assert.match(s, /문단 서식 \(표 칸 안\):\n- 맑은 고딕 9pt · 가운데 정렬 · 줄 간격 130% — 4문단/);
+  // 부분 글자 모양: 주된 모양과 다른 구간
+  assert.match(s, /부분 글자 모양 \(문단 안 일부에만\):\n- 함초롬바탕 10pt 굵게 — 1곳, 예: "연수 목적은"/);
+  // 표: 크기·너비·열 너비·테두리(번호)·칸 여백·배경·머리 행
+  assert.match(s, /- 표 1 \(1쪽, 첫 칸 "구분"\): 2행×2열 · 너비 170mm · 열 너비 30\/140mm · 행 높이 10mm · 칸 테두리 실선\(1\) 0\.12mm · 칸 여백\(왼\/오\/위\/아래\) 1\.8\/1\.8\/0\.5\/0\.5mm · 세로 가운데 정렬 · 배경 #d9d9d9 \(1행\) · 머리 행 반복/);
+  // 열린 문서용 주소가 없다
+  assert.doesNotMatch(s, /\bs0 p\d|cellIdx|paraIdx/);
+});
+
+test('attach: hwp format summary — stays under its size cap by trimming the longest lists, and survives a bare engine', async () => {
+  const { engineFormatSummary } = await import('../../attach/doc-format.ts');
+  const doc = new FormatDoc();
+  // 서로 다른 문단 모양 60가지 (표가 놓인 마지막 문단 앞에)
+  for (let i = 0; i < 60; i++) {
+    doc.paraShapes[100 + i] = { ...doc.paraShapes[11], paraShapeId: 100 + i, indent: i + 1 };
+    doc.paras.splice(doc.paras.length - 1, 0, { text: `${i + 1}번째 서로 다른 모양의 문단입니다`, para: 100 + i, runs: [[0, 19, 2]] });
+  }
+  const s = engineFormatSummary(new Engine(doc), 1500);
+  assert.ok(s.length <= 1500, `${s.length}`);
+  assert.match(s, /그 밖에 \d+가지/);
+  assert.match(s, /쪽 모양/);
+  assert.match(s, /- 표 1/, '표는 바닥 수까지 남는다');
+  // 서식 질의가 하나도 없는 엔진 — 던지지 않는다
+  const bare = { getSectionCount: () => 1, getParagraphCount: () => 0 };
+  assert.equal(engineFormatSummary(new Engine(bare)), '');
+});
+
+test('attach: hwp format summary from the real engine on a sample (skipped when pkg/ is not built)', async (t) => {
+  const root = new URL('../../../../../', import.meta.url);
+  let mod;
+  let wasm;
+  let bytes;
+  try {
+    wasm = readFileSync(new URL('pkg/rhwp_bg.wasm', root));
+    bytes = readFileSync(new URL('rhwp-studio/public/samples/biz_plan.hwp', root));
+    mod = await import(new URL('pkg/rhwp.js', root).href);
+  } catch {
+    t.skip('pkg/ or the sample is missing');
+    return;
+  }
+  mod.initSync({ module: wasm });
+  const doc = new mod.HwpDocument(new Uint8Array(bytes));
+  try {
+    const { engineFormatSummary, FORMAT_SUMMARY_CHARS } = await import('../../attach/doc-format.ts');
+    const s = engineFormatSummary(new Engine(doc));
+    assert.ok(s.length > 200 && s.length <= FORMAT_SUMMARY_CHARS, `${s.length}`);
+    assert.match(s, /^쪽 모양 \(mm\):\n- A4 210×297mm 세로 · 여백 위 20 · 아래 15 · 왼쪽 18 · 오른쪽 18 · 머리말 15 · 꼬리말 15/);
+    assert.match(s, /\[개요 2\] 함초롬바탕 14pt/);
+    assert.match(s, /표 8개 \(mm\):\n- 표 1 /);
+    assert.match(s, /배경 #cccccc \(1행\)/);
+  } finally {
+    doc.free();
+  }
+});

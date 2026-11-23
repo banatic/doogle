@@ -430,6 +430,7 @@ const EDIT_TABLE_REQUIRED_PARAMS = {
   merge_cells: ['startRow', 'startCol', 'endRow', 'endCol'],
   split_cell: ['rowIdx', 'colIdx', 'splitRows', 'splitCols'],
   set_column_widths: ['columnWidthsMm'],
+  set_row_heights: ['rowHeightsMm'],
   fit_to_page: [],
   apply_formula: ['row', 'col', 'formula'],
 };

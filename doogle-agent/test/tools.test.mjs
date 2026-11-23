@@ -41,11 +41,22 @@ test('tool list: unique names, v1 only, every tool has kind/label/description', 
     assert.equal(getTool(t.name), t);
   }
   const count = (kind) => TOOLS.filter((t) => t.kind === kind).length;
-  assert.deepEqual({ read: count('read'), write: count('write'), control: count('control'), hub: count('hub') }, { read: 21, write: 31, control: 1, hub: 4 });
+  assert.deepEqual({ read: count('read'), write: count('write'), control: count('control'), hub: count('hub') }, { read: 21, write: 33, control: 1, hub: 4 });
   for (const n of ['get_structure', 'find_text', 'render_page', 'read_batch', 'insert_text', 'replace_range', 'apply_edits',
-    'apply_engine_edits', 'insert_image', 'insert_paragraphs', 'delete_paragraphs', 'move_paragraphs']) {
+    'apply_engine_edits', 'insert_image', 'insert_paragraphs', 'delete_paragraphs', 'move_paragraphs', 'undo']) {
     assert.ok(getTool(n), `missing ${n}`);
   }
+});
+
+test('set_columns: 다단 적용 범위(지금 다단·여기부터·구역·문서), 단 수 1..255', () => {
+  const base = { expectedRevision: 1, sectionIdx: 0, paraIdx: 3, count: 2 };
+  ok('set_columns', base);
+  ok('set_columns', { ...base, scope: 'from_here', charOffset: 4, type: 'distribute', sameWidth: false, gapMm: 6 });
+  bad('set_columns', { ...base, scope: 'page' });
+  bad('set_columns', { ...base, count: 0 });
+  bad('set_columns', { expectedRevision: 1, sectionIdx: 0, count: 2 }, /paraIdx/);
+  assert.ok(BATCHABLE_EDIT_TOOL_NAMES.includes('set_columns'));
+  assert.match(getTool('set_columns').description, /from_here/);
 });
 
 test('실행기가 없는 도구는 싣지 않는다 (모델이 부르면 반드시 실패한다)', () => {
@@ -299,4 +310,21 @@ test('toToolContent maps image results to MCP image blocks', () => {
   assert.deepEqual(content[0], { type: 'image', data: 'iVBORw0KGgo=', mimeType: 'image/png' });
   assert.deepEqual(JSON.parse(content[1].text), { revision: 3, pageIndex: 0 });
   assert.deepEqual(toToolContent({ a: 1 }), [{ type: 'text', text: '{"a":1}' }]);
+});
+
+test('undo · 중첩/머리말 표 크기 · 머리말 표 보호 인자', () => {
+  ok('undo', { expectedRevision: 5 });
+  ok('undo', { expectedRevision: 5, count: 3 });
+  bad('undo', { count: 1 }, /expectedRevision/);
+  bad('undo', { expectedRevision: 5, count: 0 });
+  assert.equal(BATCHABLE_EDIT_TOOL_NAMES.includes('undo'), false, 'undo is not an apply_edits item');
+  const path = [{ controlIndex: 0, cellIndex: 3, cellParaIndex: 0 }, { controlIndex: 0, cellIndex: 'n', cellParaIndex: 0 }];
+  ok('edit_table', { expectedRevision: 1, sectionIdx: 0, paraIdx: 5, controlIdx: 0, cellPath: path, op: 'set_column_widths', columnWidthsMm: [20, 30] });
+  ok('edit_table', { expectedRevision: 1, sectionIdx: 0, paraIdx: 5, controlIdx: 0, op: 'set_row_heights', rowHeightsMm: [8, null, 12] });
+  bad('edit_table', { expectedRevision: 1, sectionIdx: 0, paraIdx: 5, controlIdx: 0, op: 'set_row_heights' }, /rowHeightsMm/);
+  ok('set_cell_props', { expectedRevision: 1, sectionIdx: 0, paraIdx: 5, controlIdx: 0, cellPath: path, cellIdx: 1, cellProps: { heightMm: 9 } });
+  ok('get_table_properties', { sectionIdx: 0, paraIdx: 5, controlIdx: 0, cellPath: path });
+  ok('edit_header_footer', { expectedRevision: 1, sectionIdx: 0, which: 'footer', lines: ['x'], discardObjects: true });
+  assert.match(TOOL_RULES, /STALE_INDEX/);
+  assert.match(TOOL_RULES, /footer s<sec>/);
 });

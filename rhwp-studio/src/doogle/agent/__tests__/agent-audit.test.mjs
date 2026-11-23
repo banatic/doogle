@@ -351,7 +351,10 @@ test('write failure: 호스트가 noChange 를 알면 던지지 않고 스스로
   const ok = await rt.executeTool('replace_range', { expectedRevision: rt.revision(), find: 'alpha', text: 'ALPHA' }, full);
   assert.ok(ok.ok, JSON.stringify(ok));
   assert.deepEqual(log, { thrown: 0, noChange: 1, committed: 1 });
-  assert.equal(doc.snaps.size, 0);
+  // 성공한 쓰기는 undo 도구가 돌아갈 직전 지점 하나만 남긴다(실패 복원용 스냅샷은 남기지 않는다)
+  assert.equal(doc.snaps.size, 1);
+  rt.dispose();
+  assert.equal(doc.snaps.size, 0, 'dispose 가 되돌리기 지점을 버린다');
 });
 
 test('write failure: 엔진 트랩은 감싸지 않고 그대로 올린다 (호스트가 문서를 잠가야 한다)', async () => {

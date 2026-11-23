@@ -14,12 +14,15 @@
  *   함께 되돌아갈 행을 목록에서 강조한다.
  * - 뒤 행·직접 고친 내용이 함께 되돌아가는 되돌리기는 행 아래 인라인 확인을 거친다.
  * - 행 사이에 사용자가 직접 고친 자리를 표시한다.
+ * - 일부만 처리하면 머리줄이 "남은 변경 3 / 7" 이 되고, 처리한 행은 목록 아래 "처리한 변경" 접힘에
+ *   적용함/거절함 표시로 모인다. 한꺼번에 처리 단추는 "남은 N건 적용/거절" 이 된다.
+ * - 행 하나를 처리하면 다음 남은 행으로 넘어가 문서에서 그 자리를 보이고 그 행에 초점을 둔다.
  * 상태는 reviewStore 하나를 본다 — 문서 위 막(overlay)과 같은 "지금 보는 변경"을 공유한다.
  */
 import type { PendingChangeSet } from '../agent/types.ts';
 import { describeChange, type ChangeLine, type Chip } from './describe.ts';
-import { REVIEW_KEYS, chainSentence, impactSentence, rejectLabel } from './keys.ts';
-import { reviewStore } from './state.ts';
+import { REVIEW_KEYS, bulkLabel, chainSentence, impactSentence, rejectLabel, remainingText } from './keys.ts';
+import { reviewStore, type HandledChange } from './state.ts';
 import './list.css';
 
 export interface ReviewListDeps {
@@ -92,6 +95,8 @@ export function mountReviewList(container: HTMLElement, deps: ReviewListDeps = {
   let confirming: string | null = null;
   /** 되돌리기 단추에 손이 간 행 — 함께 되돌아갈 행을 강조한다 */
   let rippleId: string | null = null;
+  /** "처리한 변경" 접힘을 펼쳐 두었는가 (다시 그려도 유지) */
+  let doneOpen = false;
   let disposed = false;
 
   function find<T extends HTMLElement>(selector: string): T | null {
@@ -114,12 +119,21 @@ export function mountReviewList(container: HTMLElement, deps: ReviewListDeps = {
     }
     confirming = null;
     rippleId = null;
+    const fromList = !!document.activeElement?.closest?.('.dg-rl');
     try {
       reviewStore.decide(kind, id);
     } catch (error) {
       fail(error);
     }
     render();
+    if (!id) return;
+    // 다음 남은 행으로 — 문서에서 그 자리를 보이고, 목록에서 쓰던 중이면 초점도 그 행으로 옮긴다
+    const next = reviewStore.currentId;
+    if (!next) return;
+    reviewStore.focus(next, true);
+    const go = find<HTMLElement>(`.dg-rl-row[data-id="${CSS.escape(next)}"] .dg-rl-go`);
+    go?.scrollIntoView?.({ block: 'nearest' });
+    if (fromList) go?.focus();
   }
 
   function cancelConfirm(): void {
@@ -218,11 +232,18 @@ export function mountReviewList(container: HTMLElement, deps: ReviewListDeps = {
     // ─── 머리 ───
     const head = el('div', 'dg-rl-head');
     const title = deps.title?.(rows) ?? '검토 대기';
-    const count = el('span', 'dg-rl-count dg-tnum', `${rows.length}건`);
-    const rejectAll = button('dg-rl-btn dg-rl-quiet dg-rl-reject-all', '모두 거절', () => decide('reject'));
+    const handled = reviewStore.handled();
+    const countText = remainingText(rows.length, handled.length);
+    const count = el('span', 'dg-rl-count dg-tnum', countText);
+    const rejectAll = button('dg-rl-btn dg-rl-quiet dg-rl-reject-all', bulkLabel('reject', rows.length, handled.length), () => decide('reject'));
     rejectAll.dataset['focusKey'] = 'reject-all';
-    rejectAll.title = '검토 대기 중인 변경을 모두 되돌립니다';
-    const acceptAll = button('dg-rl-btn dg-rl-primary', '모두 적용', () => decide('accept'));
+    rejectAll.title = handled.length > 0
+      ? `남은 변경 ${rows.length}건을 모두 되돌립니다 — 이미 처리한 변경은 그대로 둡니다`
+      : '검토 대기 중인 변경을 모두 되돌립니다';
+    const acceptAll = button('dg-rl-btn dg-rl-primary', bulkLabel('accept', rows.length, handled.length), () => decide('accept'));
+    acceptAll.title = handled.length > 0
+      ? `남은 변경 ${rows.length}건을 모두 적용합니다 — 이미 처리한 변경은 그대로 둡니다`
+      : '검토 대기 중인 변경을 모두 적용합니다';
     acceptAll.dataset['focusKey'] = 'accept-all';
     acceptAll.append(kbd('Ctrl ↵'));
     acceptAll.setAttribute('aria-keyshortcuts', 'Control+Enter');
@@ -233,7 +254,8 @@ export function mountReviewList(container: HTMLElement, deps: ReviewListDeps = {
     if (busy) headParts.push(el('p', 'dg-rl-wait', '응답이 끝나면 적용하거나 거절할 수 있습니다.'));
     if (confirming === 'all') {
       const impact = reviewStore.rejectImpact();
-      headParts.push(confirmBlock(impactSentence(impact, true), `모두 거절 (${impact.count}건)`, () => decide('reject', undefined, true)));
+      const label = impact.kept > 0 ? `함께 되돌리기 (${impact.count}건)` : `${bulkLabel('reject', rows.length, handled.length)} (${impact.count}건)`;
+      headParts.push(confirmBlock(impactSentence(impact, true), label, () => decide('reject', undefined, true)));
     }
 
     // ─── 행 ───
@@ -298,20 +320,47 @@ export function mountReviewList(container: HTMLElement, deps: ReviewListDeps = {
     }
     if (reviewStore.trailingUserEdits()) list.append(gap('마지막 변경 뒤에 직접 고친 내용이 있습니다'));
     list.addEventListener('keydown', onListKey);
+    const done = handled.length > 0 ? doneSection(handled) : null;
+    const tail = done ? [list, done] : [list];
 
     if (headRoot) {
       headRoot.replaceChildren(...headParts);
       const caption = el('div', 'dg-rl-caption');
-      caption.append(el('span', 'dg-rl-title', title), el('span', 'dg-rl-count dg-tnum', `${rows.length}건`));
-      root.replaceChildren(caption, list);
+      caption.append(el('span', 'dg-rl-title', title), el('span', 'dg-rl-count dg-tnum', countText));
+      root.replaceChildren(caption, ...tail);
     } else {
-      root.replaceChildren(...headParts, list);
+      root.replaceChildren(...headParts, ...tail);
     }
     applyRipple();
 
     if (focusKey) find<HTMLElement>(`[data-focus-key="${CSS.escape(focusKey)}"]`)?.focus();
     if (confirming) find<HTMLButtonElement>('.dg-rl-confirm .dg-rl-danger')?.focus();
     deps.onRender?.(rows.length);
+  }
+
+  /** 처리한 변경 — 남은 목록 아래 접힘. 흐린 줄에 적용함/거절함 표시 */
+  function doneSection(handled: HandledChange[]): HTMLElement {
+    const box = el('details', 'dg-rl-done');
+    box.open = doneOpen;
+    box.addEventListener('toggle', () => { doneOpen = box.open; });
+    const accepted = handled.filter((h) => h.kind === 'accept').length;
+    const rejected = handled.length - accepted;
+    const parts = [accepted > 0 ? `적용 ${accepted}` : '', rejected > 0 ? `거절 ${rejected}` : ''].filter(Boolean).join(' · ');
+    const summary = el('summary', 'dg-rl-done-sum');
+    summary.dataset['focusKey'] = 'done';
+    summary.append(el('span', '', `처리한 변경 ${handled.length}건`), el('span', 'dg-rl-count dg-tnum', parts));
+    const list = el('ul', 'dg-rl-list dg-rl-done-list');
+    for (const h of handled) {
+      const li = el('li', 'dg-rl-handled');
+      li.dataset['kind'] = h.kind;
+      const body = el('div', 'dg-rl-handled-body');
+      for (const line of describeChange(h.change).lines) body.append(lineNode(line));
+      const tag = el('span', `dg-rl-tag dg-rl-tag-${h.kind}`, h.kind === 'accept' ? '적용함' : '거절함');
+      li.append(body, tag);
+      list.append(li);
+    }
+    box.append(summary, list);
+    return box;
   }
 
   function ripple(id: string | null): void {

@@ -22,6 +22,33 @@ export interface TableDims { rowCount: number; colCount: number; cellCount: numb
 export interface CellInfo { row: number; col: number; rowSpan: number; colSpan: number }
 export interface CharShapeRun { startOffset: number; endOffset: number; charShapeId: number }
 
+/**
+ * 머리말·꼬리말 하나. 그 컨트롤은 본문 문단(paraIdx)의 controlIdx 번째에 있다 — 도구는 이것을
+ * "셀 0 하나짜리 칸"으로 다룬다: cell {paraIdx, controlIdx, cellIdx:0} 의 문단 = 머리말·꼬리말 문단,
+ * 그 안 표는 cellPath [{controlIndex:hf, cellIndex:0, cellParaIndex:머리말 문단}, {표…}] 로 닿는다
+ * (엔진 *ByPath API 가 머리말·꼬리말 마디를 안다).
+ */
+export interface HeaderFooterRef {
+  sectionIdx: number;
+  isHeader: boolean;
+  /** 0 both, 1 even, 2 odd */
+  applyTo: number;
+  paraIdx: number;
+  controlIdx: number;
+  paraCount: number;
+}
+
+/**
+ * 표 주소 — 최상위 표는 (paraIdx, controlIdx), 중첩 표·머리말/꼬리말 안 표는 path 도 있다.
+ * path 는 그 표까지의 경로이고 마지막 항목의 controlIndex 가 그 표다(cellIndex 는 셀마다 바꿔 쓴다).
+ */
+export interface TableRef {
+  sectionIdx: number;
+  paraIdx: number;
+  controlIdx: number;
+  path?: CellPathEntry[];
+}
+
 /** 서식 diff 를 남기는 최대 곳 수 (한 쓰기당) */
 const FORMAT_LOG_LIMIT = 4;
 
@@ -50,6 +77,7 @@ function engineMessage(error: unknown): string {
 export class Engine {
   readonly doc: EngineDoc;
   private objectsMemo: ObjectRef[] | null = null;
+  private headerFootersMemo: HeaderFooterRef[] | null = null;
   /**
    * (검토) 켜 두면 applyCharFormat/applyParaFormat 이 바뀐 속성의 전·후를 남긴다 — 스테이징 행이
    * 서식 diff 를 그린다. 읽기에 실패해도 쓰기는 그대로 진행한다.
@@ -109,6 +137,54 @@ export class Engine {
   /** 문서를 바꿨다 — 객체 목록 캐시를 버린다. */
   invalidate(): void {
     this.objectsMemo = null;
+    this.headerFootersMemo = null;
+  }
+
+  // ─── 머리말·꼬리말 ─────────────────────────────────────
+
+  /** 문서의 머리말·꼬리말 (구역 순). 엔진에 질의가 없으면 빈 배열. */
+  headerFooters(): HeaderFooterRef[] {
+    if (this.headerFootersMemo) return this.headerFootersMemo;
+    const out: HeaderFooterRef[] = [];
+    if (this.has('getHeaderFooterList') && this.has('getHeaderFooter')) {
+      try {
+        const list = this.json<{ items?: Array<{ sectionIdx: number; isHeader: boolean; applyTo: number }> }>('getHeaderFooterList', 0, true, 0);
+        const seen = new Set<string>();
+        for (const item of list?.items ?? []) {
+          try {
+            const info = this.json<{ exists?: boolean; paraIndex?: number; controlIndex?: number; paraCount?: number }>(
+              'getHeaderFooter', item.sectionIdx, item.isHeader, item.applyTo);
+            if (!info?.exists || typeof info.paraIndex !== 'number' || typeof info.controlIndex !== 'number') continue;
+            const key = `${item.sectionIdx}:${info.paraIndex}:${info.controlIndex}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            out.push({
+              sectionIdx: item.sectionIdx, isHeader: item.isHeader, applyTo: item.applyTo,
+              paraIdx: info.paraIndex, controlIdx: info.controlIndex, paraCount: info.paraCount ?? 0,
+            });
+          } catch { /* 그 항목은 건너뛴다 */ }
+        }
+      } catch { /* 목록 없음 */ }
+    }
+    this.headerFootersMemo = out;
+    return out;
+  }
+
+  /**
+   * 셀 주소가 머리말·꼬리말 문단 자체(그 안 표가 아니라)를 가리키면 그 머리말·꼬리말.
+   * 그 문단의 쓰기는 머리말·꼬리말 API 로 보낸다 — 엔진의 한 단계 셀 경로 쓰기는 표만 안다.
+   */
+  headerFooterOf(sectionIdx: number, cell: CellAddr): HeaderFooterRef | null {
+    if (cell.path && cell.path.length > 1) return null;
+    if (cell.cellIdx !== 0) return null;
+    return this.headerFooters().find((h) => h.sectionIdx === sectionIdx && h.paraIdx === cell.paraIdx && h.controlIdx === cell.controlIdx) ?? null;
+  }
+
+  /** 이 표 주소가 머리말·꼬리말 안에 있는가 */
+  inHeaderFooter(t: TableRef): boolean {
+    if (!t.path || t.path.length < 2) return false;
+    const top = t.path[0];
+    return this.headerFooters().some((h) => h.sectionIdx === t.sectionIdx && h.paraIdx === t.paraIdx && h.controlIdx === top.controlIndex);
   }
 
   // ─── 문서 골격 ─────────────────────────────────────────
@@ -186,6 +262,7 @@ export class Engine {
     endPara: number; endOffset: number; newParagraphs: number;
   } {
     const parts = text.replace(/\r\n?/g, '\n').split('\n');
+    const hf = cell ? this.headerFooterOf(sectionIdx, cell) : null;
     let para = paraIdx;
     let at = offset;
     parts.forEach((part, index) => {
@@ -195,7 +272,9 @@ export class Engine {
         at = 0;
       }
       if (part.length > 0) {
-        if (cell) {
+        if (hf) {
+          this.json('insertTextInHeaderFooter', sectionIdx, hf.isHeader, hf.applyTo, para, at, part);
+        } else if (cell) {
           this.json('insertTextInCellByPath', sectionIdx, cell.paraIdx, this.pathJson(cell, para), at, part);
         } else {
           this.json('insertText', sectionIdx, para, at, part);
@@ -207,7 +286,10 @@ export class Engine {
   }
 
   splitParagraph(sectionIdx: number, paraIdx: number, offset: number, cell?: CellAddr): void {
-    if (cell) {
+    const hf = cell ? this.headerFooterOf(sectionIdx, cell) : null;
+    if (hf) {
+      this.json('splitParagraphInHeaderFooter', sectionIdx, hf.isHeader, hf.applyTo, paraIdx, offset, undefined);
+    } else if (cell) {
       this.json('splitParagraphInCellByPath', sectionIdx, cell.paraIdx, this.pathJson(cell, paraIdx), offset, undefined);
     } else {
       this.json('splitParagraph', sectionIdx, paraIdx, offset, undefined);
@@ -217,6 +299,15 @@ export class Engine {
   /** 범위 삭제 (여러 문단 가능). 끝 오프셋은 포함하지 않는다. */
   deleteRange(sectionIdx: number, startPara: number, startOffset: number, endPara: number, endOffset: number, cell?: CellAddr): void {
     if (startPara === endPara && startOffset === endOffset) return;
+    const hf = cell ? this.headerFooterOf(sectionIdx, cell) : null;
+    if (hf) {
+      if (startPara === endPara) {
+        this.json('deleteTextInHeaderFooter', sectionIdx, hf.isHeader, hf.applyTo, startPara, startOffset, endOffset - startOffset);
+      } else {
+        this.json('replaceRangeInHeaderFooter', sectionIdx, hf.isHeader, hf.applyTo, startPara, startOffset, endPara, endOffset, '');
+      }
+      return;
+    }
     if (cell) {
       this.json('deleteRangeInCellByPath', sectionIdx, cell.paraIdx, this.pathJson(cell, startPara),
         startPara, startOffset, endPara, endOffset);
@@ -236,6 +327,11 @@ export class Engine {
   replaceInParagraph(sectionIdx: number, paraIdx: number, offset: number, length: number, text: string, cell?: CellAddr): void {
     if (!cell && this.has('replaceText') && !text.includes('\n')) {
       this.json('replaceText', sectionIdx, paraIdx, offset, length, text);
+      return;
+    }
+    const hf = cell ? this.headerFooterOf(sectionIdx, cell) : null;
+    if (hf && !text.includes('\n')) {
+      this.json('replaceRangeInHeaderFooter', sectionIdx, hf.isHeader, hf.applyTo, paraIdx, offset, paraIdx, offset + length, text);
       return;
     }
     let shapeId: number | null = null;
@@ -278,6 +374,10 @@ export class Engine {
   }
 
   charPropsAt(sectionIdx: number, paraIdx: number, offset: number, cell?: CellAddr): Record<string, unknown> {
+    const hf = cell ? this.headerFooterOf(sectionIdx, cell) : null;
+    if (hf && this.has('getCharPropertiesInHeaderFooter')) {
+      return this.json('getCharPropertiesInHeaderFooter', sectionIdx, hf.isHeader, hf.applyTo, paraIdx, offset);
+    }
     if (cell) {
       return this.json('getCellCharPropertiesAtByPath', sectionIdx, cell.paraIdx, this.pathJson(cell, paraIdx), offset);
     }
@@ -291,8 +391,14 @@ export class Engine {
     return this.json('getParaPropertiesAt', sectionIdx, paraIdx);
   }
 
+  /**
+   * 글자 서식. 빈 문단(글자 0개)은 0..0 으로 부른다 — 엔진은 그 문단 끝 모양(이어 칠 글자의 모양)을
+   * 바꾸고 줄 높이를 다시 잰다. 그래야 빈 줄의 글자 크기를 바꾸면 빈 줄 높이가 실제로 바뀐다.
+   * 글자가 있는 문단의 빈 범위는 바꿀 것이 없으니 부르지 않는다.
+   */
   applyCharFormat(sectionIdx: number, paraIdx: number, start: number, end: number, props: Record<string, unknown>, cell?: CellAddr): void {
-    if (end <= start) return;
+    if (end < start) return;
+    if (end === start && (start !== 0 || this.length(sectionIdx, paraIdx, cell) !== 0)) return;
     const read = this.formatLog && this.formatLog.length < FORMAT_LOG_LIMIT
       ? () => this.charPropsAt(sectionIdx, paraIdx, start, cell) : null;
     const before = read ? safeRead(read) : null;
@@ -302,7 +408,10 @@ export class Engine {
 
   private applyCharFormatRaw(sectionIdx: number, paraIdx: number, start: number, end: number, props: Record<string, unknown>, cell?: CellAddr): void {
     const json = JSON.stringify(props);
-    if (cell) {
+    const hf = cell ? this.headerFooterOf(sectionIdx, cell) : null;
+    if (hf) {
+      this.json('applyCharFormatInHeaderFooter', sectionIdx, hf.isHeader, hf.applyTo, paraIdx, start, paraIdx, end, json);
+    } else if (cell) {
       this.json('applyCharFormatInCellByPath', sectionIdx, cell.paraIdx, this.pathJson(cell, paraIdx), start, end, json);
     } else {
       this.json('applyCharFormat', sectionIdx, paraIdx, start, end, json);
@@ -397,6 +506,74 @@ export class Engine {
   /** 중첩 셀 정보 — path 의 마지막 항목이 그 셀이다. */
   cellInfoByPath(sectionIdx: number, paraIdx: number, path: CellPathEntry[]): CellInfo {
     return this.json<CellInfo>('getCellInfoByPath', sectionIdx, paraIdx, JSON.stringify(path));
+  }
+
+  // ─── 표 주소(최상위·경로) 공통 ───────────────────────────
+
+  /** 표 주소의 셀 경로 — 마지막 항목의 cellIndex 를 cellIdx 로 (셀 문단 0) */
+  tableCellPath(t: TableRef, cellIdx: number): CellPathEntry[] {
+    const base = t.path && t.path.length > 0
+      ? t.path.map((e) => ({ ...e }))
+      : [{ controlIndex: t.controlIdx, cellIndex: 0, cellParaIndex: 0 }];
+    base[base.length - 1] = { ...base[base.length - 1], cellIndex: cellIdx, cellParaIndex: 0 };
+    return base;
+  }
+
+  tableDimsOf(t: TableRef): TableDims {
+    return t.path && t.path.length > 1
+      ? this.tableDimsByPath(t.sectionIdx, t.paraIdx, t.path)
+      : this.tableDims(t.sectionIdx, t.paraIdx, t.controlIdx);
+  }
+
+  cellInfoOf(t: TableRef, cellIdx: number): CellInfo {
+    return t.path && t.path.length > 1
+      ? this.cellInfoByPath(t.sectionIdx, t.paraIdx, this.tableCellPath(t, cellIdx))
+      : this.cellInfo(t.sectionIdx, t.paraIdx, t.controlIdx, cellIdx);
+  }
+
+  /** 셀 속성(HWPUNIT) — getCellProperties(ByPath) */
+  cellPropsOf(t: TableRef, cellIdx: number): Record<string, unknown> {
+    return t.path && t.path.length > 1
+      ? this.json('getCellPropertiesByPath', t.sectionIdx, t.paraIdx, JSON.stringify(this.tableCellPath(t, cellIdx)), cellIdx)
+      : this.json('getCellProperties', t.sectionIdx, t.paraIdx, t.controlIdx, cellIdx);
+  }
+
+  /** 경로 표인가 (중첩 표·머리말/꼬리말 안 표) */
+  isPathTable(t: TableRef): boolean {
+    return !!t.path && t.path.length > 1;
+  }
+
+  /**
+   * 표 쓰기 — 최상위 표는 평면 메서드 `flat(sec, para, ctrl, ...args)`, 경로 표는
+   * `byPath(sec, para, pathJson, ...args)`. 엔진 빌드(pkg/)가 낡아 경로 메서드가 없으면
+   * 무엇이 필요한지 알리는 ENGINE_UNSUPPORTED 로 거절한다.
+   */
+  tableWrite<T = Record<string, unknown>>(t: TableRef, flat: string, byPath: string, ...args: unknown[]): T {
+    if (!this.isPathTable(t)) return this.json<T>(flat, t.sectionIdx, t.paraIdx, t.controlIdx, ...args);
+    this.requirePathMethod(byPath);
+    return this.json<T>(byPath, t.sectionIdx, t.paraIdx, JSON.stringify(this.tableCellPath(t, 0)), ...args);
+  }
+
+  /** 경로 표 메서드가 이 엔진 빌드에 있는지 — 없으면 ENGINE_UNSUPPORTED */
+  requirePathMethod(method: string): void {
+    if (this.has(method)) return;
+    throw new DoogleToolError(
+      'ENGINE_UNSUPPORTED',
+      `This engine build has no ${method}() — this edit on a nested or header/footer table needs the document engine rebuilt from the current source (wasm-pack). `
+        + 'Available on such tables in this build: edit_table set_column_widths / set_row_heights / fit_to_page, set_cell_props widthMm/heightMm, get_table_properties, and text/char/para tools with cell + cellPath.',
+      { method },
+    );
+  }
+
+  /** 셀 크기 증감(HWPUNIT) — 경로 표는 resizeTableCellsByPath (중첩 표도 그 표에 적용된다) */
+  resizeCells(t: TableRef, updates: Array<{ cellIdx: number; widthDelta?: number; heightDelta?: number }>): void {
+    if (updates.length === 0) return;
+    const json = JSON.stringify(updates);
+    if (t.path && t.path.length > 1) {
+      this.json('resizeTableCellsByPath', t.sectionIdx, t.paraIdx, JSON.stringify(this.tableCellPath(t, 0)), json);
+    } else {
+      this.json('resizeTableCells', t.sectionIdx, t.paraIdx, t.controlIdx, json);
+    }
   }
 
   /**
@@ -502,6 +679,24 @@ export class Engine {
 
   /** 셀 주소가 가리키는 셀이 실제로 있는지 확인한다. */
   validateCell(sectionIdx: number, cell: CellAddr): void {
+    if (cell.path && cell.path.length > 1) {
+      // 중첩 표·머리말/꼬리말 안 표 — 경로 끝의 표와 셀까지 확인한다(바깥 셀만 보면 틀린 경로가 엔진 깊숙이 간다)
+      let inner: TableDims;
+      try {
+        inner = this.tableDimsByPath(sectionIdx, cell.paraIdx, cell.path);
+      } catch {
+        throw new DoogleToolError(
+          'INVALID_ARGS',
+          `cellPath ${JSON.stringify(cell.path)} from cell {paraIdx:${cell.paraIdx}, controlIdx:${cell.controlIdx}} does not reach a table in section ${sectionIdx} — copy cell + cellPath from a get_structure "nested table" / header-footer table line or a find_text match`,
+        );
+      }
+      const last = cell.path[cell.path.length - 1];
+      if (last.cellIndex >= inner.cellCount) {
+        throw new DoogleToolError('INVALID_ARGS', `cellPath last cellIndex ${last.cellIndex} is out of range (that table has ${inner.cellCount} cells)`);
+      }
+      return;
+    }
+    if (this.headerFooterOf(sectionIdx, cell)) return;
     let dims: TableDims;
     try {
       dims = this.tableDims(sectionIdx, cell.paraIdx, cell.controlIdx);

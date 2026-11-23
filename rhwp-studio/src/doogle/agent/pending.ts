@@ -185,7 +185,11 @@ export class PendingStaging implements PendingApi {
     return { accepted: accepted.length };
   }
 
-  rejectAll(threadId?: string): { rejected: number; userEditsReverted: boolean } {
+  /**
+   * opts.byAgent — 에이전트가 undo 도구로 자기 편집을 되돌렸다. 문서·목록 처리는 같고, 다음 도구 결과에
+   * "사용자가 거절했다"는 검토 보고(editReport)를 싣지 않는다 (undo 결과가 이미 알렸다).
+   */
+  rejectAll(threadId?: string, opts?: { byAgent?: boolean }): { rejected: number; userEditsReverted: boolean } {
     if (!this.hasPending(threadId) || !this.covers(threadId)) return { rejected: 0, userEditsReverted: false };
     const rejected = this.entries;
     const baseline = this.baseline;
@@ -212,7 +216,7 @@ export class PendingStaging implements PendingApi {
     const thread = threadId ?? this.owner ?? rejected[0]?.threadId ?? null;
     this.owner = null;
     this.finishBatch(thread);
-    if (thread) {
+    if (thread && !opts?.byAgent) {
       this.hooks.noteReview(thread, {
         decision: 'rejected',
         changeSets: rejected.length,
@@ -239,10 +243,10 @@ export class PendingStaging implements PendingApi {
   }
 
   /** 이 행과 그 뒤 행을 거절 — 이 행 직전 스냅샷으로 복원한다 */
-  rejectFrom(id: string): { rejected: number; userEditsReverted: boolean } {
+  rejectFrom(id: string, opts?: { byAgent?: boolean }): { rejected: number; userEditsReverted: boolean } {
     const index = this.entries.findIndex((e) => e.id === id);
     if (index < 0) return { rejected: 0, userEditsReverted: false };
-    if (index === 0) return this.rejectAll();
+    if (index === 0) return this.rejectAll(undefined, opts);
     const snapshot = this.befores.get(id);
     if (snapshot === undefined) {
       throw new DoogleToolError('STAGING_BASELINE_LOST', 'The snapshot before this edit is missing; use undo to revert it.');
@@ -269,7 +273,7 @@ export class PendingStaging implements PendingApi {
       if (doc && snap !== undefined && snap !== this.baseline && snap !== this.origin) new Engine(doc).discardSnapshot(snap);
     }
     const thread = rejected[0].threadId;
-    this.hooks.noteReview(thread, {
+    if (!opts?.byAgent) this.hooks.noteReview(thread, {
       decision: 'partially_rejected',
       changeSets: rejected.length,
       remaining: this.entries.length,

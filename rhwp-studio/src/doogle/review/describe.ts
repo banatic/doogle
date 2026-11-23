@@ -95,6 +95,7 @@ export function locationOf(
   const sec = target.sectionIdx > 0 ? `${target.sectionIdx + 1}구역` : '';
   if (target.wholeSection) {
     if (tool === 'set_page_layout') return '쪽 설정';
+    if (tool === 'set_columns') return sec ? `${sec} 다단` : '다단 설정';
     if (tool === 'edit_header_footer') return '머리말·꼬리말';
     return sec || '문서 전체';
   }

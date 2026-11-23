@@ -15,7 +15,7 @@ import type { PluginHost, PluginTextRange } from '@/plugin/types';
 import type { PendingApi, PendingChangeSet } from '../agent/types.ts';
 import { icon } from '../ui/icons.ts';
 import { describeChange, describeItem } from './describe.ts';
-import { REVIEW_KEYS, gutterPositions, impactSentence, matchReviewKey, rejectLabel, type ReviewKeyAction } from './keys.ts';
+import { REVIEW_KEYS, bulkLabel, gutterPositions, impactSentence, matchReviewKey, rejectLabel, type ReviewKeyAction } from './keys.ts';
 import { chipNode } from './list.ts';
 import { reviewStore } from './state.ts';
 import './overlay.css';
@@ -591,7 +591,10 @@ export function mountReviewOverlay(host: PluginHost, pending: PendingApi): Revie
   function render(): void {
     const count = reviewStore.count;
     const index = reviewStore.currentIndex();
+    const handled = reviewStore.handled().length;
     counter.textContent = count > 0 ? `변경 ${index + 1} / ${count}` : '';
+    // 일부를 처리했으면 숫자는 남은 변경 기준임을 밝힌다
+    counter.title = handled > 0 ? `남은 변경 ${count}건 중 ${index + 1}번째 · 처리한 변경 ${handled}건` : '';
     prev.disabled = count < 2;
     next.disabled = count < 2;
     const userEdits = count > 0 && reviewStore.hasUserEdits();
@@ -601,8 +604,21 @@ export function mountReviewOverlay(host: PluginHost, pending: PendingApi): Revie
     working.hidden = !busy;
     rejectAll.hidden = busy;
     acceptAll.hidden = busy;
-    acceptAll.textContent = count > 1 ? `모두 적용 (${count}건)` : '적용';
-    rejectAll.textContent = count > 1 ? '모두 거절' : '거절';
+    if (handled > 0) {
+      // 일부를 처리했으면 한꺼번에 처리는 남은 변경에만 작용한다
+      acceptAll.textContent = bulkLabel('accept', count, handled);
+      rejectAll.textContent = bulkLabel('reject', count, handled);
+      acceptAll.title = `남은 변경 ${count}건을 모두 적용합니다 — 이미 처리한 변경은 그대로 둡니다`;
+      const kept = reviewStore.rejectImpact().kept;
+      rejectAll.title = kept > 0
+        ? `남은 변경 ${count}건을 되돌립니다 — 그 사이에 적용 표시한 ${kept}건도 함께 되돌아갑니다`
+        : `남은 변경 ${count}건을 모두 되돌립니다 — 이미 처리한 변경은 그대로 둡니다`;
+    } else {
+      acceptAll.textContent = count > 1 ? `모두 적용 (${count}건)` : '적용';
+      rejectAll.textContent = count > 1 ? '모두 거절' : '거절';
+      acceptAll.title = '검토 대기 중인 변경을 모두 적용합니다';
+      rejectAll.title = '검토 대기 중인 변경을 모두 되돌립니다';
+    }
     if (confirming && revealedId !== reviewStore.currentId) confirming = false;
     renderPop();
     renderGutter();

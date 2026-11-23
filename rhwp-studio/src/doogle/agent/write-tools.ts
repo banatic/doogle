@@ -4,14 +4,14 @@
  * 에이전트 모드 = 스테이징 한 묶음), 던지면 문서는 호출 전으로 돌아간다. 좌표 검사·리베이스·앵커
  * 해석은 WriteScope 가 실행기에서 받아 온다.
  */
-import { Engine } from './engine-adapter.ts';
+import { Engine, type TableRef } from './engine-adapter.ts';
 import {
   anchorEcho, buildAnchorScope, matchFromSearchHit, parseAnchorArgs, resolveAnchor,
   type MatchSource, type ResolvedAnchor, type SourceParagraph, type TextMatch,
 } from './anchor.ts';
 import { charFormatProps, paraFormatProps, parseCellProps, parseTableProps } from './format-args.ts';
 import {
-  DoogleToolError, HEX_COLOR_RE, asRecord, colorRef, invalidArgs, mmToHu, scalarLength,
+  DoogleToolError, HEX_COLOR_RE, asRecord, colorRef, huToMm, invalidArgs, mmToHu, scalarLength,
   type CellAddr, type CellPathEntry,
 } from './types.ts';
 
@@ -35,6 +35,10 @@ export interface Touch {
   tableCells?: CellAddr[];
   /** 구역 전체 (쪽 설정·머리말 등) — 저널에 정밀 기록하지 않는다 */
   wholeSection?: boolean;
+  /** 문단 수는 그대로지만 [paraStart, paraEnd] 안의 문단 순서가 바뀌었다 (move_paragraphs) */
+  reorders?: boolean;
+  /** (after.indexShift) 번호가 바뀐 첫 문단 — 없으면 paraEnd + 1. 문단을 통째로 지우면 그 자리(paraStart)부터다 */
+  shiftFrom?: number;
   /** apply_edits 묶음에서 이 자리를 만든 항목 번호 (검토 목록이 항목별로 묶어 보인다) */
   item?: number;
 }
@@ -160,21 +164,75 @@ function textTouch(sectionIdx: number, paraStart: number, paraEnd: number, paraD
 
 // ─── 매치 원천 ─────────────────────────────────────────
 
-/** 엔진 위의 앵커 검색 원천 — 정확 일치는 searchAllText(중첩 셀 포함), 재검색은 본문+최상위 셀 */
+/** 머리말·꼬리말 안을 살필 표 깊이·셀 수 한도 */
+const HF_TABLE_MAX_DEPTH = 3;
+const HF_CELL_LIMIT = 400;
+
+/**
+ * 머리말·꼬리말의 글 문단 — 그 문단 자체(cell = 머리말·꼬리말, 경로 없음)와 그 안 표 셀(cell + 경로).
+ * 엔진 searchAllText 는 머리말·꼬리말을 찾지 않으므로 앵커·find_text 가 여기서 따로 찾는다.
+ */
+export function headerFooterParagraphs(engine: Engine): SourceParagraph[] {
+  const out: SourceParagraph[] = [];
+  let budget = HF_CELL_LIMIT;
+  const walkCell = (sectionIdx: number, cell: CellAddr, depth: number): void => {
+    if (budget-- <= 0) return;
+    let count = 0;
+    try { count = engine.cellParagraphCount(sectionIdx, cell); } catch { return; }
+    for (let p = 0; p < count; p++) {
+      let text = '';
+      try { text = engine.text(sectionIdx, p, cell); } catch { text = ''; }
+      if (text) out.push({ sectionIdx, paraIdx: p, text, cell });
+    }
+    if (depth >= HF_TABLE_MAX_DEPTH) return;
+    for (const tablePath of engine.nestedTables(sectionIdx, cell)) {
+      let dims;
+      try { dims = engine.tableDimsByPath(sectionIdx, cell.paraIdx, tablePath); } catch { continue; }
+      for (let c = 0; c < dims.cellCount; c++) {
+        const path = tablePath.map((e) => ({ ...e }));
+        path[path.length - 1] = { ...path[path.length - 1], cellIndex: c, cellParaIndex: 0 };
+        walkCell(sectionIdx, { paraIdx: cell.paraIdx, controlIdx: path[0].controlIndex, cellIdx: path[0].cellIndex, path }, depth + 1);
+      }
+    }
+  };
+  for (const hf of engine.headerFooters()) {
+    walkCell(hf.sectionIdx, { paraIdx: hf.paraIdx, controlIdx: hf.controlIdx, cellIdx: 0 }, 0);
+  }
+  return out;
+}
+
+/** 엔진 위의 앵커 검색 원천 — 정확 일치는 searchAllText(중첩 셀 포함) + 머리말·꼬리말, 재검색은 본문+최상위 셀+머리말·꼬리말 */
 export function engineMatchSource(engine: Engine): MatchSource {
   const textOf = (m: TextMatch): string => {
     try { return engine.text(m.sectionIdx, m.paraIdx, m.cell); } catch { return ''; }
   };
+  let hfMemo: SourceParagraph[] | null = null;
+  const hfParagraphs = (): SourceParagraph[] => (hfMemo ??= headerFooterParagraphs(engine));
   return {
     exact(query, caseSensitive) {
       const hits = engine.json<Array<Parameters<typeof matchFromSearchHit>[0]>>('searchAllText', query, caseSensitive, true) ?? [];
-      return hits.map((hit) => {
+      const out = hits.map((hit) => {
         const m = matchFromSearchHit(hit, '');
         const text = textOf(m);
         const chars = [...text];
         m.context = chars.slice(Math.max(0, m.charOffset - 30), m.charOffset + m.length + 30).join('');
         return m;
       });
+      const needle = caseSensitive ? query : query.toLowerCase();
+      for (const p of hfParagraphs()) {
+        const hay = caseSensitive ? p.text : p.text.toLowerCase();
+        for (let i = hay.indexOf(needle); i >= 0; i = hay.indexOf(needle, i + Math.max(1, needle.length))) {
+          const charOffset = scalarLength(p.text.slice(0, i));
+          const length = scalarLength(query);
+          const chars = [...p.text];
+          out.push({
+            sectionIdx: p.sectionIdx, paraIdx: p.paraIdx, charOffset, length,
+            context: chars.slice(Math.max(0, charOffset - 30), charOffset + length + 30).join(''),
+            ...(p.cell ? { cell: p.cell, ...(p.cell.path ? { cellPath: p.cell.path } : {}) } : {}),
+          });
+        }
+      }
+      return out;
     },
     *paragraphs(): Iterable<SourceParagraph> {
       const sections = engine.sectionCount();
@@ -198,6 +256,7 @@ export function engineMatchSource(engine: Engine): MatchSource {
           }
         }
       }
+      yield* hfParagraphs();
     },
   };
 }
@@ -548,9 +607,8 @@ const applyCharFormat: WriteHandler = (w, args) => {
     for (const cell of many.cells) {
       const n = engine.cellParagraphCount(many.sectionIdx, cell);
       for (let p = 0; p < n; p++) {
-        const len = engine.length(many.sectionIdx, p, cell);
-        if (len === 0) continue;
-        engine.applyCharFormat(many.sectionIdx, p, 0, len, props, cell);
+        // 빈 셀 문단도 — 그 문단 끝 모양이 빈 줄의 높이와 이어 칠 글자의 모양이다
+        engine.applyCharFormat(many.sectionIdx, p, 0, engine.length(many.sectionIdx, p, cell), props, cell);
         paragraphs++;
       }
     }
@@ -559,14 +617,15 @@ const applyCharFormat: WriteHandler = (w, args) => {
   }
   const targets = parasTargets(w, args, 'apply_char_format');
   if (targets) {
-    let skippedEmpty = 0;
+    let empty = 0;
     for (const p of targets.paras) {
       const len = engine.length(targets.sectionIdx, p, targets.cell);
-      if (len === 0) { skippedEmpty++; continue; }
+      // 빈 문단(빈 줄)은 문단 끝 모양을 바꾼다 — 글자 크기를 바꾸면 빈 줄 높이도 따라 바뀐다
+      if (len === 0) empty++;
       engine.applyCharFormat(targets.sectionIdx, p, 0, len, props, targets.cell);
     }
     touchParas(w, targets.sectionIdx, targets.paras, targets.cell);
-    return { paragraphs: targets.paras.length - skippedEmpty, ...(skippedEmpty ? { skippedEmpty } : {}) };
+    return { paragraphs: targets.paras.length, ...(empty ? { emptyParagraphs: empty } : {}) };
   }
   const anchor = optAnchor(w, args);
   if (anchor) {
@@ -840,7 +899,22 @@ const editHeaderFooter: WriteHandler = (w, args) => {
   const applyTo = APPLY_TO[applyToName];
   const lines = Array.isArray(args['lines']) ? (args['lines'] as unknown[]).map(String) : [];
   const pageNumber = given(args['pageNumber']) ? asRecord(args['pageNumber']) : null;
-  const current = engine.json<{ exists?: boolean }>('getHeaderFooter', sectionIdx, isHeader, applyTo);
+  const current = engine.json<{ exists?: boolean; paraIndex?: number; controlIndex?: number }>('getHeaderFooter', sectionIdx, isHeader, applyTo);
+  if (current?.exists && args['discardObjects'] !== true && typeof current.paraIndex === 'number' && typeof current.controlIndex === 'number') {
+    // 이 도구는 머리말·꼬리말을 지우고 새로 만든다 — 안에 든 표(쪽 번호 옆 칸 등)까지 사라진다.
+    const hfCell: CellAddr = { paraIdx: current.paraIndex, controlIdx: current.controlIndex, cellIdx: 0 };
+    const tables = engine.nestedTables(sectionIdx, hfCell);
+    if (tables.length > 0) {
+      const which = isHeader ? 'header' : 'footer';
+      throw new DoogleToolError(
+        'RANGE_HAS_OBJECTS',
+        `This ${which} holds ${tables.length} table(s); edit_header_footer rebuilds the whole ${which} from lines and would delete them. `
+          + `Edit the text in place instead: get_structure lists the ${which} and each table in it with a cell + cellPath you pass to replace_range / insert_text / apply_char_format `
+          + `(e.g. cell {paraIdx:${hfCell.paraIdx}, controlIdx:${hfCell.controlIdx}, cellIdx:0} + cellPath ${JSON.stringify(tables[0])} with the last cellIndex set to the cell). `
+          + 'Resend with discardObjects:true only if the user wants the tables gone.',
+      );
+    }
+  }
   if (current?.exists) engine.json('deleteHeaderFooter', sectionIdx, isHeader, applyTo);
   engine.json('createHeaderFooter', sectionIdx, isHeader, applyTo);
   const paragraphs: Array<{ text: string; pageNumber?: { template: string; align: string } }> = lines.map((text) => ({ text }));
@@ -924,6 +998,72 @@ const setPageLayout: WriteHandler = (w, args) => {
   }
   w.touches.push({ sectionIdx, paraStart: 0, paraEnd: 0, paraDelta: 0, wholeSection: true });
   return { sectionIdx };
+};
+
+const COLUMN_SCOPES = { zone: 0, from_here: 1, section: 2, document: 3 } as const;
+const COLUMN_TYPES = ['normal', 'distribute', 'parallel'] as const;
+
+interface ColumnDefAt { columnCount: number; columnType: number; sameWidth: boolean; spacing: number; zoneStart: number; zoneCount: number }
+
+/**
+ * 다단 — 엔진 applyColumnDef 의 적용 범위(현재 다단 / 여기부터 새 다단 / 구역 / 문서).
+ * "표지는 1단, 본문은 2단" 은 본문 첫 문단에서 from_here 로 만든다.
+ */
+const setColumns: WriteHandler = (w, args) => {
+  const { engine } = w;
+  const sectionIdx = sectionOf(engine, args, 'set_columns');
+  const raw = reqInt(args, 'paraIdx');
+  const shift = w.requireRevision(args, sectionIdx, raw, raw);
+  const paraIdx = raw + shift;
+  const scopeName = (args['scope'] ?? 'zone') as string;
+  if (!Object.prototype.hasOwnProperty.call(COLUMN_SCOPES, scopeName)) throw invalidArgs('scope must be zone|from_here|section|document');
+  const scope = COLUMN_SCOPES[scopeName as keyof typeof COLUMN_SCOPES];
+  const charOffset = optInt(args, 'charOffset') ?? 0;
+  if (charOffset !== 0 && scopeName !== 'from_here') throw invalidArgs('charOffset only applies to scope "from_here" (where the new column zone starts)');
+  validateAddress(engine, sectionIdx, paraIdx, charOffset);
+  const count = reqInt(args, 'count');
+  if (count < 1 || count > 255) throw invalidArgs('count must be 1..255');
+  const typeArg = args['type'];
+  if (given(typeArg) && !(COLUMN_TYPES as readonly unknown[]).includes(typeArg)) throw invalidArgs('type must be normal|distribute|parallel');
+  const sameWidth = args['sameWidth'];
+  if (given(sameWidth) && typeof sameWidth !== 'boolean') throw invalidArgs('sameWidth must be a boolean');
+  const gap = args['gapMm'];
+  if (given(gap) && (typeof gap !== 'number' || !Number.isFinite(gap) || gap < 0 || gap > 100)) throw invalidArgs('gapMm must be 0..100');
+  if (!engine.has('applyColumnDef') || !engine.has('getColumnDefAt')) {
+    throw new DoogleToolError(
+      'ENGINE_UNSUPPORTED',
+      'This engine build has no applyColumnDef()/getColumnDefAt() — set_columns needs the document engine rebuilt from the current source (wasm-pack). '
+        + 'Until then set_page_layout columns changes only the first column zone of a section.',
+      { method: 'applyColumnDef' },
+    );
+  }
+  // 종류·간격은 지금 다단을 잇는다. 1단 다단은 간격이 0 일 수 있어 단을 늘릴 때는 8mm 로 둔다.
+  const current = engine.json<ColumnDefAt>('getColumnDefAt', sectionIdx, paraIdx);
+  const type = given(typeArg) ? COLUMN_TYPES.indexOf(typeArg as typeof COLUMN_TYPES[number]) : (current.columnType ?? 0);
+  const spacing = typeof gap === 'number' ? mmToHu(gap) : current.spacing > 0 ? current.spacing : mmToHu(8);
+  const before = engine.paragraphCount(sectionIdx);
+  const r = engine.json<{ section: number; para: number; charOffset: number }>(
+    'applyColumnDef', sectionIdx, paraIdx, charOffset, scope, count, type, sameWidth === false ? 0 : 1, spacing,
+  );
+  engine.invalidate();
+  const delta = engine.paragraphCount(sectionIdx) - before;
+  if (scopeName === 'document') {
+    for (let s = 0; s < engine.sectionCount(); s++) w.touches.push({ sectionIdx: s, paraStart: 0, paraEnd: 0, paraDelta: 0, wholeSection: true });
+  } else if (scopeName === 'section') {
+    w.touches.push({ sectionIdx, paraStart: 0, paraEnd: 0, paraDelta: 0, wholeSection: true });
+  } else {
+    // from_here 가 문단 가운데면 문단을 나눈다 — 뒤 문단 번호가 하나씩 밀린다
+    w.touches.push(bodyTouch(sectionIdx, paraIdx, paraIdx + delta, delta, charOffset));
+  }
+  const now = engine.json<ColumnDefAt>('getColumnDefAt', sectionIdx, r.para);
+  return {
+    scope: scopeName,
+    zoneStartParaIdx: now.zoneStart >= 0 ? now.zoneStart : 0,
+    columns: { count: now.columnCount, type: COLUMN_TYPES[now.columnType] ?? 'normal', sameWidth: now.sameWidth, gapMm: huToMm(now.spacing) },
+    zonesInSection: now.zoneCount,
+    ...(delta !== 0 ? { splitParagraph: { paraIdx, charOffset, newParaIdx: r.para } } : {}),
+    ...(shift ? { rebasedParaShift: shift } : {}),
+  };
 };
 
 // ─── 표 ───────────────────────────────────────────────
@@ -1024,65 +1164,154 @@ function tableOverflow(engine: Engine, sectionIdx: number, table: { paraIdx: num
   }
 }
 
-function tableTarget(w: WriteScope, args: Record<string, unknown>, tool: string): { sectionIdx: number; paraIdx: number; controlIdx: number } {
+/**
+ * 표 도구의 대상 표. 최상위 표는 (paraIdx, controlIdx), 중첩 표·머리말/꼬리말 안 표는 그 위에
+ * cellPath — get_structure 의 "nested table …"/머리말·꼬리말 표 줄이 주는 경로(마지막 cellIndex 는 아무 값).
+ */
+function tableTarget(w: WriteScope, args: Record<string, unknown>, tool: string): TableRef {
   const sectionIdx = sectionOf(w.engine, args, tool);
   const raw = reqInt(args, 'paraIdx');
   const shift = w.requireRevision(args, sectionIdx, raw, raw);
   const paraIdx = raw + shift;
   const controlIdx = reqInt(args, 'controlIdx');
+  const path = tablePathArg(args);
+  if (path) {
+    if (path[0].controlIndex !== controlIdx) {
+      throw invalidArgs(`cellPath[0].controlIndex ${path[0].controlIndex} must equal controlIdx ${controlIdx} — the path starts at the outer table (or header/footer) named by paraIdx/controlIdx`);
+    }
+    const t: TableRef = { sectionIdx, paraIdx, controlIdx, path };
+    try {
+      w.engine.tableDimsOf(t);
+    } catch {
+      throw invalidArgs(`cellPath ${JSON.stringify(path)} from s${sectionIdx} p${paraIdx} c${controlIdx} does not reach a table — copy it from a get_structure "nested table" or header/footer table line`);
+    }
+    return t;
+  }
   try {
     w.engine.tableDims(sectionIdx, paraIdx, controlIdx);
   } catch {
-    throw invalidArgs(`s${sectionIdx} p${paraIdx} c${controlIdx} is not a table — take the address from a get_structure table line`);
+    const hf = w.engine.headerFooters().find((h) => h.sectionIdx === sectionIdx && h.paraIdx === paraIdx && h.controlIdx === controlIdx);
+    throw invalidArgs(hf
+      ? `s${sectionIdx} p${paraIdx} c${controlIdx} is the ${hf.isHeader ? 'header' : 'footer'}, not a table — a table inside it needs cellPath from its get_structure line`
+      : `s${sectionIdx} p${paraIdx} c${controlIdx} is not a table — take the address from a get_structure table line`);
   }
   w.noteTableBefore?.(sectionIdx, paraIdx, controlIdx);
   return { sectionIdx, paraIdx, controlIdx };
 }
 
+/** 표 도구의 cellPath — 길이 2 이상(중첩 표·머리말/꼬리말 안 표). 길이 1 이면 최상위 표와 같으니 무시한다. */
+function tablePathArg(args: Record<string, unknown>): CellPathEntry[] | undefined {
+  const raw = args['cellPath'];
+  if (!given(raw)) return undefined;
+  if (!Array.isArray(raw) || raw.length < 1 || raw.length > 8) throw invalidArgs('cellPath must be 1..8 entries {controlIndex, cellIndex, cellParaIndex}');
+  const path = raw.map((e, i) => {
+    const r = asRecord(e);
+    // 구조 줄의 마지막 cellIndex 자리 "n" 을 그대로 보내도 받는다 — 표 도구에는 표만 필요하다
+    const cellIndex = r['cellIndex'] === 'n' ? 0 : r['cellIndex'];
+    const out = { controlIndex: r['controlIndex'] as number, cellIndex: (cellIndex ?? 0) as number, cellParaIndex: (r['cellParaIndex'] ?? 0) as number };
+    if (![out.controlIndex, out.cellIndex, out.cellParaIndex].every((n) => Number.isSafeInteger(n) && n >= 0)) {
+      throw invalidArgs(`cellPath[${i}] must be {controlIndex, cellIndex, cellParaIndex} non-negative integers`);
+    }
+    return out;
+  });
+  return path.length > 1 ? path : undefined;
+}
+
+/** 경로 표에 엔진 경로가 없는 연산(표 계산식·캡션) — 무엇이 되는지 함께 알린다 */
+function nestedUnsupported(what: string): DoogleToolError {
+  return new DoogleToolError(
+    'ENGINE_UNSUPPORTED',
+    `${what} is not available for nested or header/footer tables (the engine has no path API for it). `
+      + 'Everything else in edit_table, set_table_props, set_cell_props, set_zone_borders and delete_table works there with cellPath.',
+  );
+}
+
 /** 표의 한 행·열에 놓인 셀 번호 (병합 셀은 시작 칸 기준) */
-function cellsOfLine(engine: Engine, t: { sectionIdx: number; paraIdx: number; controlIdx: number }, axis: 'row' | 'col', index: number): number[] {
-  const dims = engine.tableDims(t.sectionIdx, t.paraIdx, t.controlIdx);
+function cellsOfLine(engine: Engine, t: TableRef, axis: 'row' | 'col', index: number): number[] {
+  const dims = engine.tableDimsOf(t);
   const out: number[] = [];
   for (let i = 0; i < dims.cellCount; i++) {
     try {
-      const info = engine.cellInfo(t.sectionIdx, t.paraIdx, t.controlIdx, i);
+      const info = engine.cellInfoOf(t, i);
       if ((axis === 'row' ? info.row : info.col) === index) out.push(i);
     } catch { /* 건너뛴다 */ }
   }
   return out;
 }
 
-function cellIdxAt(engine: Engine, t: { sectionIdx: number; paraIdx: number; controlIdx: number }, row: number, col: number): number {
-  const dims = engine.tableDims(t.sectionIdx, t.paraIdx, t.controlIdx);
+function cellIdxAt(engine: Engine, t: TableRef, row: number, col: number): number {
+  const dims = engine.tableDimsOf(t);
   for (let i = 0; i < dims.cellCount; i++) {
-    const info = engine.cellInfo(t.sectionIdx, t.paraIdx, t.controlIdx, i);
+    const info = engine.cellInfoOf(t, i);
     if (row >= info.row && row < info.row + info.rowSpan && col >= info.col && col < info.col + info.colSpan) return i;
   }
   throw invalidArgs(`no cell at row ${row}, col ${col} (table is ${dims.rowCount}x${dims.colCount})`);
 }
 
-function columnWidthsMm(engine: Engine, t: { sectionIdx: number; paraIdx: number; controlIdx: number }): { widths: number[]; cells: Array<{ cellIdx: number; col: number; colSpan: number; width: number }> } {
-  const dims = engine.tableDims(t.sectionIdx, t.paraIdx, t.controlIdx);
-  const widths: number[] = Array(dims.colCount).fill(0);
-  const cells: Array<{ cellIdx: number; col: number; colSpan: number; width: number }> = [];
+interface CellGeometry { cellIdx: number; row: number; col: number; rowSpan: number; colSpan: number; width: number; height: number }
+
+function cellGeometry(engine: Engine, t: TableRef): CellGeometry[] {
+  const dims = engine.tableDimsOf(t);
+  const cells: CellGeometry[] = [];
   for (let i = 0; i < dims.cellCount; i++) {
-    const info = engine.cellInfo(t.sectionIdx, t.paraIdx, t.controlIdx, i);
-    const props = engine.json<{ width?: number }>('getCellProperties', t.sectionIdx, t.paraIdx, t.controlIdx, i);
-    const width = props?.width ?? 0;
-    cells.push({ cellIdx: i, col: info.col, colSpan: info.colSpan, width });
-    if (info.colSpan === 1 && widths[info.col] === 0) widths[info.col] = width;
+    const info = engine.cellInfoOf(t, i);
+    const props = engine.cellPropsOf(t, i);
+    cells.push({
+      cellIdx: i, row: info.row, col: info.col, rowSpan: info.rowSpan, colSpan: info.colSpan,
+      width: typeof props['width'] === 'number' ? props['width'] as number : 0,
+      height: typeof props['height'] === 'number' ? props['height'] as number : 0,
+    });
   }
+  return cells;
+}
+
+function columnWidthsMm(engine: Engine, t: TableRef): { widths: number[]; cells: CellGeometry[] } {
+  const dims = engine.tableDimsOf(t);
+  const widths: number[] = Array(dims.colCount).fill(0);
+  const cells = cellGeometry(engine, t);
+  for (const c of cells) if (c.colSpan === 1 && widths[c.col] === 0) widths[c.col] = c.width;
   return { widths, cells };
 }
 
-/** 열 너비(HU)를 맞춘다 — 셀마다 차이를 resizeTableCells 로 보낸다 */
-function resizeColumns(engine: Engine, t: { sectionIdx: number; paraIdx: number; controlIdx: number }, target: number[]): void {
+/** 열 너비(HU)를 맞춘다 — 셀마다 차이를 resizeTableCells(ByPath) 로 보낸다 */
+function resizeColumns(engine: Engine, t: TableRef, target: number[]): void {
   const { cells } = columnWidthsMm(engine, t);
   const updates = cells.map((c) => {
     const want = target.slice(c.col, c.col + c.colSpan).reduce((a, b) => a + b, 0);
     return { cellIdx: c.cellIdx, widthDelta: Math.round(want - c.width) };
   }).filter((u) => u.widthDelta !== 0);
-  if (updates.length > 0) engine.json('resizeTableCells', t.sectionIdx, t.paraIdx, t.controlIdx, JSON.stringify(updates));
+  engine.resizeCells(t, updates);
+}
+
+/** 행 높이(HU)를 맞춘다 — null 인 행은 그대로. 여러 행에 걸친 셀은 그 행들 합으로 맞춘다 */
+function resizeRows(engine: Engine, t: TableRef, target: Array<number | null>): void {
+  const cells = cellGeometry(engine, t);
+  // 지금 행 높이 — 한 행짜리 셀의 높이(가장 큰 값)를 그 행 높이로 본다
+  const current: number[] = Array(target.length).fill(0);
+  for (const c of cells) if (c.rowSpan === 1 && c.row < current.length) current[c.row] = Math.max(current[c.row], c.height);
+  const want = target.map((v, r) => (v === null ? current[r] : v));
+  const updates = cells.map((c) => {
+    if (target.slice(c.row, c.row + c.rowSpan).every((v) => v === null)) return { cellIdx: c.cellIdx, heightDelta: 0 };
+    const sum = want.slice(c.row, c.row + c.rowSpan).reduce((a, b) => a + b, 0);
+    return { cellIdx: c.cellIdx, heightDelta: Math.round(sum - c.height) };
+  }).filter((u) => u.heightDelta !== 0);
+  engine.resizeCells(t, updates);
+}
+
+/** 경로 표가 들어갈 수 있는 폭(HU) — 중첩 표는 그 표를 품은 셀의 안쪽 폭, 머리말·꼬리말 안 표는 본문 폭 */
+function containerWidthHu(engine: Engine, t: TableRef): number {
+  const path = t.path!;
+  if (engine.inHeaderFooter(t) && path.length === 2) {
+    const def = engine.json<Record<string, number>>('getPageDef', t.sectionIdx);
+    return (def['width'] ?? 0) - (def['marginLeft'] ?? 0) - (def['marginRight'] ?? 0) - (def['marginGutter'] ?? 0);
+  }
+  // 바깥 표 = 경로에서 이 표 바로 앞 항목. 그 항목의 cellIndex 가 이 표를 품은 셀이다
+  const outerPath = path.slice(0, -1);
+  const outer: TableRef = { sectionIdx: t.sectionIdx, paraIdx: t.paraIdx, controlIdx: t.controlIdx, ...(outerPath.length > 1 ? { path: outerPath } : {}) };
+  const hostCell = outerPath[outerPath.length - 1].cellIndex;
+  const p = engine.cellPropsOf(outer, hostCell);
+  const num = (k: string) => (typeof p[k] === 'number' ? p[k] as number : 0);
+  return num('width') - num('paddingLeft') - num('paddingRight');
 }
 
 const editTable: WriteHandler = (w, args) => {
@@ -1090,7 +1319,8 @@ const editTable: WriteHandler = (w, args) => {
   const t = tableTarget(w, args, 'edit_table');
   const op = args['op'];
   const { sectionIdx, paraIdx, controlIdx } = t;
-  const dims = engine.tableDims(sectionIdx, paraIdx, controlIdx);
+  const nested = t.path !== undefined;
+  const dims = engine.tableDimsOf(t);
   const idx = (key: string, max: number): number => {
     const v = reqInt(args, key);
     if (v >= max) throw invalidArgs(`${key} ${v} is out of range (0..${max - 1})`);
@@ -1101,34 +1331,34 @@ const editTable: WriteHandler = (w, args) => {
   switch (op) {
     case 'insert_row': {
       const at = idx('rowIdx', dims.rowCount);
-      engine.json('insertTableRow', sectionIdx, paraIdx, controlIdx, at, args['below'] !== false);
+      engine.tableWrite(t, 'insertTableRow', 'insertTableRowByPath', at, args['below'] !== false);
       added = { axis: 'row', index: args['below'] !== false ? at + 1 : at };
       break;
     }
     case 'insert_col': {
       const at = idx('colIdx', dims.colCount);
-      engine.json('insertTableColumn', sectionIdx, paraIdx, controlIdx, at, args['right'] !== false);
+      engine.tableWrite(t, 'insertTableColumn', 'insertTableColumnByPath', at, args['right'] !== false);
       added = { axis: 'col', index: args['right'] !== false ? at + 1 : at };
       break;
     }
     case 'delete_row':
       if (dims.rowCount <= 1) throw invalidArgs('cannot delete the only row — use delete_table');
-      engine.json('deleteTableRow', sectionIdx, paraIdx, controlIdx, idx('rowIdx', dims.rowCount)); break;
+      engine.tableWrite(t, 'deleteTableRow', 'deleteTableRowByPath', idx('rowIdx', dims.rowCount)); break;
     case 'delete_col':
       if (dims.colCount <= 1) throw invalidArgs('cannot delete the only column — use delete_table');
-      engine.json('deleteTableColumn', sectionIdx, paraIdx, controlIdx, idx('colIdx', dims.colCount)); break;
+      engine.tableWrite(t, 'deleteTableColumn', 'deleteTableColumnByPath', idx('colIdx', dims.colCount)); break;
     case 'merge_cells': {
       const sr = idx('startRow', dims.rowCount); const sc = idx('startCol', dims.colCount);
       const er = idx('endRow', dims.rowCount); const ec = idx('endCol', dims.colCount);
       if (er < sr || ec < sc) throw invalidArgs('endRow/endCol must be >= startRow/startCol');
-      engine.json('mergeTableCells', sectionIdx, paraIdx, controlIdx, sr, sc, er, ec);
+      engine.tableWrite(t, 'mergeTableCells', 'mergeTableCellsByPath', sr, sc, er, ec);
       break;
     }
     case 'split_cell': {
       const r = idx('rowIdx', dims.rowCount); const c = idx('colIdx', dims.colCount);
       const nr = reqInt(args, 'splitRows'); const nc = reqInt(args, 'splitCols');
       if (nr < 1 || nc < 1 || nr * nc < 2) throw invalidArgs('splitRows and splitCols must be >= 1 and split into at least 2 cells');
-      engine.json('splitTableCellInto', sectionIdx, paraIdx, controlIdx, r, c, nr, nc, true, false);
+      engine.tableWrite(t, 'splitTableCellInto', 'splitTableCellIntoByPath', r, c, nr, nc, true, false);
       break;
     }
     case 'set_column_widths': {
@@ -1136,14 +1366,35 @@ const editTable: WriteHandler = (w, args) => {
       if (!Array.isArray(list) || list.length !== dims.colCount || !list.every((v) => typeof v === 'number' && v > 0 && v <= 500)) {
         throw invalidArgs(`columnWidthsMm must list ${dims.colCount} positive widths (mm)`);
       }
-      if (engine.has('setTableColumnWidths')) {
+      if (!nested && engine.has('setTableColumnWidths')) {
         engine.json('setTableColumnWidths', sectionIdx, paraIdx, controlIdx, Uint32Array.from((list as number[]).map(mmToHu)));
+      } else if (nested && engine.has('setTableColumnWidthsByPath')) {
+        engine.tableWrite(t, 'setTableColumnWidths', 'setTableColumnWidthsByPath', Uint32Array.from((list as number[]).map(mmToHu)));
       } else {
         resizeColumns(engine, t, (list as number[]).map(mmToHu));
       }
       break;
     }
+    case 'set_row_heights': {
+      const list = args['rowHeightsMm'];
+      if (!Array.isArray(list) || list.length !== dims.rowCount
+        || !list.every((v) => v === null || (typeof v === 'number' && v > 0 && v <= 500))) {
+        throw invalidArgs(`rowHeightsMm must list ${dims.rowCount} row heights (mm, > 0; null keeps that row) — a row still grows to fit its text`);
+      }
+      resizeRows(engine, t, (list as Array<number | null>).map((v) => (v === null ? null : mmToHu(v))));
+      break;
+    }
     case 'fit_to_page': {
+      if (nested) {
+        // 중첩 표는 품은 셀 안쪽 폭에, 머리말·꼬리말 안 표는 본문 폭에 맞춘다(줄이기만)
+        const room = containerWidthHu(engine, t);
+        const { widths } = columnWidthsMm(engine, t);
+        const total = widths.reduce((a, b) => a + b, 0);
+        if (room <= 0 || total <= 0) throw invalidArgs('could not measure the nested table or the cell that holds it');
+        if (total <= room) { note = 'table already fits the space that holds it'; break; }
+        resizeColumns(engine, t, widths.map((v) => Math.floor(v * room / total)));
+        break;
+      }
       if (engine.has('fitTableToPage')) {
         engine.json('fitTableToPage', sectionIdx, paraIdx, controlIdx);
         break;
@@ -1159,6 +1410,7 @@ const editTable: WriteHandler = (w, args) => {
       break;
     }
     case 'apply_formula': {
+      if (nested) throw nestedUnsupported('edit_table apply_formula');
       const formula = reqString(args, 'formula');
       const cellIdx = cellIdxAt(engine, t, reqInt(args, 'row'), reqInt(args, 'col'));
       const fmt = asRecord(args['format']);
@@ -1169,10 +1421,10 @@ const editTable: WriteHandler = (w, args) => {
       // 엔진에 표 캡션 생성 경로가 없다(ENGINE_GAPS.md §2) — 도구 정의에서도 뺐다.
       throw new DoogleToolError('ENGINE_UNSUPPORTED', 'Table captions cannot be edited in this build — type the caption as an ordinary paragraph above or below the table.');
     default:
-      throw invalidArgs('op must be insert_row|insert_col|delete_row|delete_col|merge_cells|split_cell|set_column_widths|fit_to_page|apply_formula');
+      throw invalidArgs('op must be insert_row|insert_col|delete_row|delete_col|merge_cells|split_cell|set_column_widths|set_row_heights|fit_to_page|apply_formula');
   }
   engine.invalidate();
-  const after = engine.tableDims(sectionIdx, paraIdx, controlIdx);
+  const after = engine.tableDimsOf(t);
   w.touches.push({ sectionIdx, paraStart: paraIdx, paraEnd: paraIdx, paraDelta: 0, table: { paraIdx, controlIdx } });
   // 새 행·열의 셀 번호를 바로 돌려준다 — 값을 채우려고 구조를 다시 읽지 않아도 된다.
   const newCells = added ? cellsOfLine(engine, t, added.axis, added.index) : null;
@@ -1180,20 +1432,24 @@ const editTable: WriteHandler = (w, args) => {
     rowCount: after.rowCount, colCount: after.colCount, cellCount: after.cellCount,
     ...(added && newCells ? { [added.axis === 'row' ? 'newRow' : 'newCol']: { [added.axis === 'row' ? 'rowIdx' : 'colIdx']: added.index, cellIdxs: newCells } } : {}),
     ...(note ? { note } : {}),
+    ...(nested ? { columnWidthsMm: columnWidthsMm(engine, t).widths.map(huToMm) } : {}),
   };
 };
 
 const setTableProps: WriteHandler = (w, args) => {
   const t = tableTarget(w, args, 'set_table_props');
-  const props = parseTableProps(asRecord(args['tableProps']));
-  w.engine.json('setTableProperties', t.sectionIdx, t.paraIdx, t.controlIdx, JSON.stringify(props));
+  const raw = asRecord(args['tableProps']);
+  const caption = Object.keys(raw).filter((k) => k.startsWith('caption'));
+  if (t.path && caption.length > 0) throw nestedUnsupported(`set_table_props ${caption.join('/')}`);
+  const props = parseTableProps(raw);
+  w.engine.tableWrite(t, 'setTableProperties', 'setTablePropertiesByPath', JSON.stringify(props));
   w.touches.push({ sectionIdx: t.sectionIdx, paraStart: t.paraIdx, paraEnd: t.paraIdx, paraDelta: 0, table: { paraIdx: t.paraIdx, controlIdx: t.controlIdx } });
   return {};
 };
 
 const setCellProps: WriteHandler = (w, args) => {
   const t = tableTarget(w, args, 'set_cell_props');
-  const dims = w.engine.tableDims(t.sectionIdx, t.paraIdx, t.controlIdx);
+  const dims = w.engine.tableDimsOf(t);
   let cells: number[];
   if (given(args['cellIdxs'])) {
     if (given(args['cellIdx'])) throw invalidArgs('send cellIdx (one cell) or cellIdxs (several), not both');
@@ -1203,15 +1459,28 @@ const setCellProps: WriteHandler = (w, args) => {
     if (cellIdx >= dims.cellCount) throw invalidArgs(`cellIdx ${cellIdx} is out of range (0..${dims.cellCount - 1})`);
     cells = [cellIdx];
   }
-  const props = JSON.stringify(parseCellProps(asRecord(args['cellProps'])));
-  for (const cellIdx of cells) w.engine.json('setCellProperties', t.sectionIdx, t.paraIdx, t.controlIdx, cellIdx, props);
+  const parsed = parseCellProps(asRecord(args['cellProps']));
+  if (t.path && !w.engine.has('setCellPropertiesByPath')) {
+    // 낡은 엔진 빌드: 경로 셀 속성 쓰기가 없어 크기만 증감(resizeTableCellsByPath)으로 맞춘다
+    const other = Object.keys(asRecord(args['cellProps'])).filter((k) => k !== 'widthMm' && k !== 'heightMm');
+    if (other.length > 0) w.engine.requirePathMethod('setCellPropertiesByPath');
+    const updates = cells.map((cellIdx) => {
+      const cur = w.engine.cellPropsOf(t, cellIdx);
+      const delta = (key: 'width' | 'height') => (typeof parsed[key] === 'number' && typeof cur[key] === 'number' ? (parsed[key] as number) - (cur[key] as number) : 0);
+      return { cellIdx, widthDelta: delta('width'), heightDelta: delta('height') };
+    }).filter((u) => u.widthDelta !== 0 || u.heightDelta !== 0);
+    w.engine.resizeCells(t, updates);
+  } else {
+    const props = JSON.stringify(parsed);
+    for (const cellIdx of cells) w.engine.tableWrite(t, 'setCellProperties', 'setCellPropertiesByPath', cellIdx, props);
+  }
   w.touches.push({ sectionIdx: t.sectionIdx, paraStart: t.paraIdx, paraEnd: t.paraIdx, paraDelta: 0, table: { paraIdx: t.paraIdx, controlIdx: t.controlIdx } });
   return cells.length > 1 ? { cells: cells.length } : {};
 };
 
 const setZoneBorders: WriteHandler = (w, args) => {
   const t = tableTarget(w, args, 'set_zone_borders');
-  const dims = w.engine.tableDims(t.sectionIdx, t.paraIdx, t.controlIdx);
+  const dims = w.engine.tableDimsOf(t);
   const corner = (key: string) => {
     const c = asRecord(args[key]);
     const row = c['row']; const col = c['col'];
@@ -1237,8 +1506,13 @@ const setZoneBorders: WriteHandler = (w, args) => {
   if (Object.keys(props).length === 0 && !given(fill)) throw invalidArgs('set_zone_borders needs at least one border, fillColor, diagonal or centerLine');
   const r0 = Math.min(s.row, e.row); const c0 = Math.min(s.col, e.col);
   const r1 = Math.max(s.row, e.row); const c1 = Math.max(s.col, e.col);
+  if (t.path) {
+    // 경로 표: 하나라도 없으면 아무것도 바꾸기 전에 거절한다
+    if (Object.keys(props).length > 0) w.engine.requirePathMethod('setCellZonePropertiesByPath');
+    if (given(fill)) w.engine.requirePathMethod('setCellPropertiesByPath');
+  }
   if (Object.keys(props).length > 0) {
-    w.engine.json('setCellZoneProperties', t.sectionIdx, t.paraIdx, t.controlIdx, r0, c0, r1, c1, JSON.stringify(props));
+    w.engine.tableWrite(t, 'setCellZoneProperties', 'setCellZonePropertiesByPath', r0, c0, r1, c1, JSON.stringify(props));
   }
   let filled = 0;
   if (typeof fill === 'string') {
@@ -1246,9 +1520,9 @@ const setZoneBorders: WriteHandler = (w, args) => {
     // 그래서 채움은 영역 안 셀마다 직접 넣는다 — 결과가 화면과 같다.
     const cellFill = JSON.stringify({ fillType: 'solid', fillColor: fill });
     for (let i = 0; i < dims.cellCount; i++) {
-      const info = w.engine.cellInfo(t.sectionIdx, t.paraIdx, t.controlIdx, i);
+      const info = w.engine.cellInfoOf(t, i);
       if (info.row < r0 || info.row > r1 || info.col < c0 || info.col > c1) continue;
-      w.engine.json('setCellProperties', t.sectionIdx, t.paraIdx, t.controlIdx, i, cellFill);
+      w.engine.tableWrite(t, 'setCellProperties', 'setCellPropertiesByPath', i, cellFill);
       filled++;
     }
   }
@@ -1258,6 +1532,20 @@ const setZoneBorders: WriteHandler = (w, args) => {
 
 const deleteTable: WriteHandler = (w, args) => {
   const t = tableTarget(w, args, 'delete_table');
+  if (t.path) {
+    // 중첩·머리말/꼬리말 안 표: 표를 품은 문단에서 컨트롤만 걷어낸다(문단 수는 그대로)
+    const path = t.path;
+    if (w.engine.has('deleteTableByPath')) {
+      w.engine.json('deleteTableByPath', t.sectionIdx, t.paraIdx, JSON.stringify(path));
+    } else {
+      // 낡은 엔진 빌드에도 있는 셀 안 표 지우기 — 경로는 표를 품은 칸까지, 컨트롤 번호는 따로
+      w.engine.requirePathMethod('deleteCellTableControlByPath');
+      w.engine.json('deleteCellTableControlByPath', t.sectionIdx, t.paraIdx, JSON.stringify(path.slice(0, -1)), path[path.length - 1].controlIndex);
+    }
+    w.engine.invalidate();
+    w.touches.push({ sectionIdx: t.sectionIdx, paraStart: t.paraIdx, paraEnd: t.paraIdx, paraDelta: 0, table: { paraIdx: t.paraIdx, controlIdx: t.controlIdx } });
+    return { deleted: { paraIdx: t.paraIdx, controlIdx: t.controlIdx, cellPath: path } };
+  }
   const before = w.engine.paragraphCount(t.sectionIdx);
   w.engine.json('deleteTableControl', t.sectionIdx, t.paraIdx, t.controlIdx);
   w.engine.invalidate();
@@ -1353,7 +1641,7 @@ const deleteParagraphs: WriteHandler = (w, args) => {
   w.noteRemoval(removed);
   for (let p = end; p >= start; p--) engine.deleteParagraph(sectionIdx, p);
   const at = Math.min(start, engine.paragraphCount(sectionIdx) - 1);
-  w.touches.push(bodyTouch(sectionIdx, at, at, -n));
+  w.touches.push({ ...bodyTouch(sectionIdx, at, at, -n), shiftFrom: at });
   return {
     deletedParagraphs: n, deleted: clip200(removed),
     ...(objects.length > 0 ? { deletedObjects: objects.length } : {}),
@@ -1406,7 +1694,7 @@ const moveParagraphs: WriteHandler = (w, args) => {
   // 옮긴 범위와 목적지 사이의 문단 번호가 모두 바뀐다 — 그 구간을 통째로 건드린 것으로 적는다(밖은 그대로)
   const lo = Math.min(start, newStart);
   const hi = Math.max(end, newStart + n - 1);
-  w.touches.push(bodyTouch(sectionIdx, lo, hi, 0));
+  w.touches.push({ ...bodyTouch(sectionIdx, lo, hi, 0), reorders: true });
   return {
     moved: { paragraphs: n, from: [start, end], to: [newStart, newStart + n - 1] },
     ...(shift ? { rebasedParaShift: shift } : {}),
@@ -1620,6 +1908,7 @@ export const WRITE_HANDLERS: Readonly<Record<string, WriteHandler>> = Object.fre
   set_bookmark: setBookmark,
   edit_header_footer: editHeaderFooter,
   set_page_layout: setPageLayout,
+  set_columns: setColumns,
   create_table: createTable,
   edit_table: editTable,
   set_table_props: setTableProps,
@@ -1636,6 +1925,6 @@ export const WRITE_HANDLERS: Readonly<Record<string, WriteHandler>> = Object.fre
 export const BATCHABLE_EDIT_TOOLS: ReadonlySet<string> = new Set([
   'insert_text', 'delete_range', 'replace_range', 'apply_char_format', 'apply_para_format', 'apply_style', 'apply_list',
   'insert_paragraphs', 'delete_paragraphs', 'move_paragraphs', 'set_field_value', 'insert_page_break', 'insert_footnote', 'edit_footnote', 'set_bookmark', 'edit_header_footer',
-  'set_page_layout', 'create_table', 'edit_table', 'set_table_props', 'set_cell_props', 'set_zone_borders', 'delete_table',
+  'set_page_layout', 'set_columns', 'create_table', 'edit_table', 'set_table_props', 'set_cell_props', 'set_zone_borders', 'delete_table',
   'insert_equation', 'edit_object', 'insert_shape',
 ]);

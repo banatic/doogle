@@ -11,7 +11,7 @@
  *   render:"crop"|"page" 의 PNG(image {mimeType, base64})를 붙인다.
  */
 import { EditJournal, type EditJournalEntry } from './edit-journal.ts';
-import { Engine, ENGINE_EDIT_METHODS } from './engine-adapter.ts';
+import { Engine, ENGINE_EDIT_METHODS, type TableRef } from './engine-adapter.ts';
 import { ENGINE_METHOD_SIGNATURES, checkEngineArgs, engineSignatureText } from './engine-signatures.ts';
 import { RevisionTracker, timeSeededRevision } from './revision.ts';
 import { PendingStaging } from './pending.ts';
@@ -41,6 +41,28 @@ export const BATCHABLE_READ_TOOLS: ReadonlySet<string> = new Set([
   'get_para_format', 'get_char_format', 'get_table_properties', 'get_table_layout', 'get_engine_edit_capabilities',
   'list_styles', 'list_numberings', 'get_outline', 'list_footnotes', 'list_bookmarks', 'preview_equation', 'verify_changes',
 ]);
+
+/** 문단 번호를 돌려주거나 문단 하나를 다시 보는 읽기 — 이것을 읽으면 STALE_INDEX 의 기준이 지금으로 옮겨진다 */
+const COORDINATE_READS: ReadonlySet<string> = new Set([
+  'get_structure', 'get_text_range', 'find_text', 'get_selection', 'get_page_geometry', 'get_outline', 'get_fields',
+  'get_para_format', 'get_char_format', 'get_table_properties', 'get_table_layout', 'list_footnotes', 'list_bookmarks',
+]);
+
+/** 전체 모드 되돌리기 지점 한도 — 지점 하나가 문서 사본 하나다 */
+const UNDO_MAX = 5;
+
+interface UndoEntry {
+  thread: string;
+  tool: string;
+  summary: string;
+  /** 쓰기 직전 스냅샷 */
+  snapshot: number;
+  revBefore: number;
+  revAfter: number;
+  instance: number | undefined;
+  /** 문단을 넣거나 지우거나 옮겼다 — 되돌리면 그 뒤 번호가 다시 바뀐다 */
+  structural: boolean;
+}
 
 /** hub 가 직접 처리하는 대화 제어 도구 — studio 에 오면 안 된다 */
 const CONTROL_TOOLS = new Set(['ask_user_question', 'request_permission', 'present_implementation_plan', 'update_todos']);
@@ -118,6 +140,23 @@ export class DoogleToolExecutor {
   private verifiedUpTo = new Map<string, number>();
   private lastInstance: number | undefined;
   private readonly reads: Record<string, ReadHandler>;
+  /**
+   * 스레드별 마지막 문서 읽기의 revision — 모델이 가진 문단 번호의 기준. 그 뒤 이 실행기의 쓰기가 문단을
+   * 넣거나 지우거나 옮겼는데 다시 읽지 않고 그 뒤쪽 번호로 쓰면 STALE_INDEX 로 한 번 멈춰 세운다.
+   * -1 = 문단 수를 바꾼 편집을 되돌렸다 — 다음 좌표 쓰기 전에 다시 읽어야 한다.
+   */
+  private readBasis = new Map<string, number>();
+  /** 지금 실행 중인 호출의 스레드 (호출은 runtime 이 한 번에 하나씩 줄 세운다) */
+  private activeThread = 'agent';
+  /** 이번 호출에서 STALE_INDEX 를 낸 적이 있다 — 호출이 끝나면 기준을 지금으로 옮긴다(한 번만 멈춘다) */
+  private staleFlagged = false;
+  /**
+   * 전체 모드(바로 적용) 쓰기의 되돌리기 지점 — 쓰기 직전 스냅샷. 에이전트 모드 쓰기는 검토 대기 행의
+   * 직전 스냅샷(PendingStaging)이 같은 일을 한다. undo 도구가 쓴다.
+   */
+  private undoStack: UndoEntry[] = [];
+  /** 문단 수·순서를 바꾼 검토 대기 행 id — 되돌리면 번호를 다시 읽어야 한다 */
+  private structuralSets = new Set<string>();
 
   constructor(deps: DoogleAgentDeps) {
     this.deps = deps;
@@ -168,14 +207,22 @@ export class DoogleToolExecutor {
     this.tracker.dispose();
     this.staging.dispose();
     this.history.dispose();
+    this.dropUndoStack();
   }
 
   // ─── 진입점 ─────────────────────────────────────────────
 
   async execute(name: string, rawArgs: unknown, ctx: ToolContext): Promise<ToolResult> {
+    const thread = this.threadOf(ctx);
+    this.activeThread = thread;
+    this.staleFlagged = false;
     try {
       const result = await this.dispatch(name, asRecord(rawArgs), ctx);
-      const thread = this.threadOf(ctx);
+      // 문단 번호를 주는 읽기는 모델이 가진 번호의 기준을 지금으로 맞춘다
+      const items = name === 'read_batch' && Array.isArray(asRecord(rawArgs)['reads']) ? asRecord(rawArgs)['reads'] as unknown[] : [];
+      if (COORDINATE_READS.has(name) || items.some((r) => COORDINATE_READS.has(String(asRecord(r)['tool'])))) {
+        this.readBasis.set(thread, this.revision);
+      }
       const note = this.reviewNotes.get(thread);
       if (note && result && typeof result === 'object' && !Array.isArray(result)) {
         this.reviewNotes.delete(thread);
@@ -184,6 +231,9 @@ export class DoogleToolExecutor {
       return { ok: true, result };
     } catch (error) {
       return errorPayload(error);
+    } finally {
+      if (this.staleFlagged) this.readBasis.set(thread, this.revision);
+      this.staleFlagged = false;
     }
   }
 
@@ -205,6 +255,9 @@ export class DoogleToolExecutor {
       // 실행기가 문서를 다 읽기 전에(인스턴스 0) 만들어졌으면, 갈래가 이미 새 인스턴스로 잡은 첫 지점을
       // 첫 도구 호출이 통째로 지워 버린다(새 문서의 첫 요청에서 지점이 사라지던 문제).
       this.journal.clear();
+      this.readBasis.clear();
+      // 이전 문서의 스냅샷 번호는 새 문서에서 뜻이 없다 — 버리지 않고(다른 문서의 번호다) 잊는다
+      this.undoStack = [];
     }
   }
 
@@ -226,6 +279,7 @@ export class DoogleToolExecutor {
     if (name === 'apply_edits') return this.applyEdits(args, ctx);
     if (name === 'apply_engine_edits') return this.applyEngineEdits(args, ctx);
     if (name === 'prepare_engine_edit_session') return this.prepareEngineEditSession(args);
+    if (name === 'undo') return this.undo(args, ctx);
     if (name === 'insert_chart') {
       throw new DoogleToolError('ENGINE_UNSUPPORTED', 'insert_chart is not available in 두글 v1 — build the data as a table with create_table instead.');
     }
@@ -253,10 +307,15 @@ export class DoogleToolExecutor {
     return this.batch?.journal.reduce((sum, e) => sum + Math.abs(e.paraDelta), 0) ?? 0;
   }
 
-  requireRevision(args: Record<string, unknown>, sectionIdx?: number, paraStart?: number, paraEnd?: number): number {
+  requireRevision(args: Record<string, unknown>, sectionIdx?: number, paraStart?: number, paraEnd?: number, engine?: Engine): number {
     const expected = this.expectedOf(args);
     const current = this.revision;
-    if (expected === current || this.journal.contentUnchanged(expected, current)) return 0;
+    if (expected === current || this.journal.contentUnchanged(expected, current)) {
+      if (sectionIdx !== undefined && paraStart !== undefined && paraEnd !== undefined) {
+        this.checkStaleIndex(sectionIdx, paraStart, paraEnd, engine);
+      }
+      return 0;
+    }
     if (expected < current && sectionIdx !== undefined && paraStart !== undefined && paraEnd !== undefined) {
       const slack = this.batchSlack();
       const r = this.journal.rebase(expected, current, sectionIdx, paraStart - slack, paraEnd + slack);
@@ -270,10 +329,73 @@ export class DoogleToolExecutor {
       + '(e.g. your own preceding edit was at a later position). Otherwise — including any chance the user edited — re-read the affected range and retry with fresh coordinates.');
   }
 
-  requireRevisionAnchored(args: Record<string, unknown>, anchor: ResolvedAnchor): void {
+  /**
+   * 낡은 문단 번호 막기. expectedRevision 은 지금과 같지만(모델이 쓰기 결과의 revision 을 이어 보냈다)
+   * 이 스레드가 마지막으로 번호를 읽은 뒤 이 실행기의 쓰기가 대상 번호 앞에서 문단을 넣거나 지우거나 옮겼으면,
+   * 그 번호는 읽을 때의 문단이 아닐 수 있다 — 조용히 엉뚱한 줄을 고치는 대신 STALE_INDEX 로 멈추고
+   * 지금 그 번호의 문단과 옛 번호가 옮겨 간 자리를 보여 준다. 같은 호출을 다시 보내면 통과한다(한 번만 멈춘다).
+   */
+  private checkStaleIndex(sectionIdx: number, paraStart: number, paraEnd: number, engine?: Engine): void {
+    const thread = this.activeThread;
+    const basis = this.readBasis.get(thread);
+    if (basis === undefined) return;
+    const current = this.revision;
+    const lead = (p: number): string => {
+      if (!engine) return '';
+      try {
+        if (p < 0 || p >= engine.paragraphCount(sectionIdx)) return ' (no such paragraph now)';
+        const text = engine.text(sectionIdx, p, undefined, 0, 40).replace(/\s+/g, ' ').trim();
+        return text ? ` "${text}${engine.length(sectionIdx, p) > 40 ? '…' : ''}"` : ' (empty paragraph)';
+      } catch { return ''; }
+    };
+    if (basis === -1) {
+      this.staleFlagged = true;
+      throw new DoogleToolError(
+        'STALE_INDEX',
+        `You undid an edit that added, removed or moved paragraphs, so paragraph indexes you read since then no longer match. s${sectionIdx} p${paraStart} now holds${lead(paraStart)}. `
+          + 'Re-read the range (get_structure range, or find_text) and resend with fresh indexes — or resend unchanged if p'
+          + `${paraStart} is what you mean.`,
+        { currentRevision: current },
+      );
+    }
+    if (basis >= current) return;
+    const hit = this.journal.shiftSince(basis, current, sectionIdx, paraStart, paraEnd);
+    if (!hit) return;
+    this.staleFlagged = true;
+    const t = hit.paraIdx;
+    const e = hit.entry;
+    const what = e.reorders ? `reordered paragraphs p${e.paraStart}-p${e.paraEnd}`
+      : e.paraDelta < 0 ? `removed ${-e.paraDelta} paragraph(s) there` : `added ${e.paraDelta} paragraph(s) at p${e.paraStart}-p${e.paraEnd}`;
+    const moved = this.journal.rebase(basis, current, sectionIdx, t, t);
+    const then = moved.ok
+      ? (moved.shift !== 0
+        ? `If p${t} came from your read at revision ${basis}, that paragraph is now p${t + moved.shift}${lead(t + moved.shift)} — resend with that index (or keep p${t} and send expectedRevision=${basis}; it is rebased automatically).`
+        : '')
+      : `If p${t} came from your read at revision ${basis}, that paragraph was itself changed since — re-read before editing it.`;
+    throw new DoogleToolError(
+      'STALE_INDEX',
+      `Paragraph indexes in s${sectionIdx} from p${e.reorders || e.paraDelta < 0 ? e.paraStart : e.paraEnd + 1} on changed at revision ${hit.revision} (an earlier write of yours ${what}) after your last read at revision ${basis}, `
+        + `and this call targets p${t}, which is in the shifted part. p${t} now holds${lead(t)}. ${then} `
+        + 'If you already counted the shift, resend unchanged. To avoid this, re-read (get_structure range) after writes that add or remove paragraphs, or address text with find instead of paraIdx.',
+      { currentRevision: current, readRevision: basis, paraIdx: t, ...(moved.ok && moved.shift !== 0 ? { paraIdxAtRead: t, nowAt: t + moved.shift } : {}) },
+    );
+  }
+
+  requireRevisionAnchored(args: Record<string, unknown>, anchor: ResolvedAnchor, engine?: Engine): void {
     const expected = this.expectedOf(args);
     const current = this.revision;
-    if (expected === current) return;
+    if (expected === current) {
+      // 문단 번호로 범위를 좁힌 앵커는 그 번호가 낡았으면 엉뚱한 문단 안에서 같은 글을 찾을 수 있다
+      if (anchor.scoped && !asRecord(args['anchor'])['within']) {
+        const cell = asRecord(args['cell']);
+        const para = typeof cell['paraIdx'] === 'number' ? cell['paraIdx'] as number
+          : typeof args['paraIdx'] === 'number' ? args['paraIdx'] as number
+            : typeof args['startParaIdx'] === 'number' ? args['startParaIdx'] as number : undefined;
+        const end = typeof cell['paraIdx'] === 'number' ? para : typeof args['endParaIdx'] === 'number' ? args['endParaIdx'] as number : para;
+        if (para !== undefined) this.checkStaleIndex(anchor.sectionIdx, Math.min(para, end ?? para), Math.max(para, end ?? para), engine);
+      }
+      return;
+    }
     if (expected < current && this.journal.covers(expected, current)) return;
     throw this.mismatch(current, expected, anchor.scoped
       ? `The paragraph indexes scoping this text match may have moved — re-read with get_structure, then resend with expectedRevision=${current} and fresh indexes.`
@@ -300,8 +422,8 @@ export class DoogleToolExecutor {
         const key = `${s}:${p}:${c}`;
         if (!this.tableOverflowBefore.has(key)) this.tableOverflowBefore.set(key, this.tableOverflowPx(engine, s, p, c));
       },
-      requireRevision: (a, s, p0, p1) => this.requireRevision(a, s, p0, p1),
-      requireRevisionAnchored: (a, m) => this.requireRevisionAnchored(a, m),
+      requireRevision: (a, s, p0, p1) => this.requireRevision(a, s, p0, p1, engine),
+      requireRevisionAnchored: (a, m) => this.requireRevisionAnchored(a, m, engine),
       noteRemoval: (text) => {
         const b = this.batch;
         if (b && text) b.removals.push({ index: b.index, tool: b.tool, text });
@@ -344,6 +466,12 @@ export class DoogleToolExecutor {
     const revBefore = this.revision;
     this.tableOverflowBefore.clear();
     if (staged) this.staging.beginWrite(thread, pre);
+    // 전체 모드: undo 도구가 돌아갈 쓰기 직전 지점 (실패하면 버린다)
+    let undoPoint: number | null = null;
+    if (!staged) {
+      try { undoPoint = pre.saveSnapshot(); } catch { undoPoint = null; }
+    }
+    const dropUndoPoint = () => { if (undoPoint !== null) pre.discardSnapshot(undoPoint); undoPoint = null; };
     let touches: Touch[] = [];
     let result: Record<string, unknown>;
     const formatLog: FormatDiff[] = [];
@@ -380,17 +508,27 @@ export class DoogleToolExecutor {
       });
     } catch (error) {
       if (staged) this.staging.abortWrite(pre);
+      dropUndoPoint();
       throw await settleCommandError(error);
     }
     if (failure) {
       if (staged) this.staging.abortWrite(pre);
+      dropUndoPoint();
       throw failure;
     }
     const revAfter = this.tracker.noteWrite(revBefore);
     const precise = touches.length > 0 && touches.every((t) => !t.wholeSection);
     if (precise) {
-      const entries = this.batch ? this.batch.journal : touches.map((t) => ({ sectionIdx: t.sectionIdx, paraStart: t.paraStart, paraEnd: t.paraEnd, paraDelta: t.paraDelta }));
+      const entries = this.batch ? this.batch.journal : touches.map(journalEntryOf);
       for (const entry of entries) this.journal.record(revBefore, revAfter, entry);
+    }
+    const structural = touches.some((t) => t.wholeSection || t.reorders || (t.paraDelta !== 0 && !t.cell));
+    if (undoPoint !== null) {
+      this.pushUndo({
+        thread, tool, summary: summarize(tool, args), snapshot: undoPoint, revBefore, revAfter,
+        instance: this.deps.documentInstance?.(), structural,
+      });
+      undoPoint = null;
     }
     this.deps.refreshView?.();
     const engine = this.engine();
@@ -405,6 +543,10 @@ export class DoogleToolExecutor {
       });
       out['changeSetId'] = cs.id;
       out['staged'] = true;
+      // 검토가 끝난(적용·거절된) 행은 잊는다 — 남은 대기 행만 기억한다
+      const live = new Set(this.staging.list().map((c) => c.id));
+      for (const id of this.structuralSets) if (!live.has(id)) this.structuralSets.delete(id);
+      if (structural) this.structuralSets.add(cs.id);
     }
     if (render === 'crop' || render === 'page') {
       try {
@@ -487,6 +629,14 @@ export class DoogleToolExecutor {
       pages: pageList.slice(0, AFTER_MAX_PAGES),
       ...(pageList.length > AFTER_MAX_PAGES ? { morePages: pageList.length - AFTER_MAX_PAGES } : {}),
     };
+    // 문단 수·순서를 바꾼 쓰기 — 그 뒤 문단 번호가 바뀌었다는 것을 결과에 바로 싣는다 (낡은 번호로 이어 쓰는 사고 방지)
+    const shifts: Array<Record<string, unknown>> = [];
+    for (const t of touches) {
+      if (t.wholeSection || t.cell) continue;
+      if (t.reorders) shifts.push({ sectionIdx: t.sectionIdx, reordered: [t.paraStart, t.paraEnd] });
+      else if (t.paraDelta !== 0) shifts.push({ sectionIdx: t.sectionIdx, fromParaIdx: t.shiftFrom ?? t.paraEnd + 1, delta: t.paraDelta });
+    }
+    if (shifts.length > 0) out['indexShift'] = shifts.slice(0, 8);
     const warnings: string[] = [];
     const reflow: string[] = [];
     if (baseline.pageStarts) {
@@ -696,7 +846,7 @@ export class DoogleToolExecutor {
             for (const f of w.engine.formatLog?.slice(formatsBefore) ?? []) f.item = index;
             for (const t of w.touches.slice(before)) {
               t.item = index;
-              batch.journal.push({ sectionIdx: t.sectionIdx, paraStart: t.paraStart, paraEnd: t.paraEnd, paraDelta: t.paraDelta });
+              batch.journal.push(journalEntryOf(t));
               // 이 항목이 문단 수를 바꿨으면, 앞 항목들이 적어 둔 자리(그 뒤쪽 문단)를 같은 만큼 민다 —
               // 그래야 after 보고와 검토 위치가 배치가 끝난 문서의 문단 번호를 가리킨다.
               if (t.paraDelta !== 0 && !t.wholeSection) shiftEarlierTouches(w.touches.slice(0, before), t);
@@ -835,6 +985,126 @@ export class DoogleToolExecutor {
     if (bad) throw invalidArgs(bad);
     const value = engine.call(method, ...callArgs);
     return { revision: this.revision, result: typeof value === 'string' ? (() => { try { return JSON.parse(value); } catch { return value; } })() : value };
+  }
+
+  // ─── 되돌리기 (undo 도구) ─────────────────────────────────
+
+  private pushUndo(entry: UndoEntry): void {
+    this.undoStack.push(entry);
+    while (this.undoStack.length > UNDO_MAX) {
+      const old = this.undoStack.shift()!;
+      this.discardSnapshotOf(old);
+    }
+  }
+
+  private discardSnapshotOf(entry: UndoEntry): void {
+    // 다른 문서의 스냅샷 번호면 건드리지 않는다
+    if (this.deps.documentInstance?.() !== entry.instance) return;
+    const doc = this.deps.getDocument();
+    if (doc) new Engine(doc).discardSnapshot(entry.snapshot);
+  }
+
+  private dropUndoStack(): void {
+    for (const e of this.undoStack) this.discardSnapshotOf(e);
+    this.undoStack = [];
+  }
+
+  /**
+   * 에이전트가 자기 편집을 되돌린다 — 사용자가 Ctrl+Z 를 누르지 않아도 되게.
+   *  - 에이전트 모드: 이 스레드의 검토 대기 행 중 마지막 count 개를 거절한다(그 행 직전 스냅샷으로 복원 —
+   *    사용자의 "거절"과 같은 기구). 대기 목록에서도 빠진다.
+   *  - 전체 모드: 쓰기마다 남긴 직전 스냅샷으로 돌아간다(그 복원도 실행 취소 한 단계라 사용자가 다시 되살릴 수 있다).
+   * 어느 쪽이든 그 사이 사용자가 문서를 고쳤으면 그 편집까지 지우게 되므로 거절하고 사용자에게 맡긴다.
+   */
+  private undo(args: Record<string, unknown>, ctx: ToolContext): unknown {
+    const thread = this.threadOf(ctx);
+    const engine = this.engine();
+    const expected = this.expectedOf(args);
+    const current = this.revision;
+    if (expected !== current) {
+      throw this.mismatch(current, expected, `Something changed the document after your last call (possibly the user). Re-read to see what changed; resend undo with expectedRevision=${current} only if the edits you want gone are still your most recent ones.`);
+    }
+    const count = optInt(args, 'count') ?? 1;
+    if (count < 1 || count > UNDO_MAX * 4) throw invalidArgs(`count must be 1..${UNDO_MAX * 4}`);
+    const pending = this.staging.list(thread);
+    if (pending.length > 0) return this.undoStaged(thread, pending, count);
+    return this.undoDirect(thread, engine, count);
+  }
+
+  private undoStaged(thread: string, pending: ReturnType<PendingStaging['list']>, count: number): unknown {
+    // 사용자가 행 단위로 적용(✓)해 둔 행은 사용자 결정이다 — 그 행까지 되돌리지 않는다
+    const open = pending.length - (pending.map((c) => c.kept === true).lastIndexOf(true) + 1);
+    if (count > open) {
+      throw new DoogleToolError('NOTHING_TO_UNDO', open === 0
+        ? 'None of your staged edits can be undone by you: the user already applied (✓) the most recent ones. Ask the user to reject them in the review list if they should go.'
+        : `Only your last ${open} staged edit(s) can be undone (the user applied the ones before). Resend with count ≤ ${open}.`);
+    }
+    const target = pending[pending.length - count];
+    if (this.staging.hasUserEditsSince(target.id)) {
+      throw new DoogleToolError('UNDO_BLOCKED', 'The user edited the document after those edits; undoing them would also discard the user\'s own changes. Nothing was changed. Tell the user to use the review list (거절) or Ctrl+Z instead.');
+    }
+    const undone = pending.slice(pending.length - count);
+    const r = this.staging.rejectFrom(target.id, { byAgent: true });
+    if (undone.some((c) => this.structuralSets.has(c.id))) this.readBasis.set(thread, -1);
+    for (const c of undone) this.structuralSets.delete(c.id);
+    return {
+      revision: this.revision,
+      undone: r.rejected,
+      mode: 'staged',
+      edits: undone.map((c) => ({ tool: c.tool, summary: c.summary })),
+      remainingStaged: this.staging.list(thread).length,
+      note: 'The document is back to its state before those edits, and they left the review list. Paragraph indexes are back to what they were before them — re-read before editing nearby.',
+    };
+  }
+
+  private undoDirect(thread: string, engine: Engine, count: number): unknown {
+    const instance = this.deps.documentInstance?.();
+    // 문서가 바뀌었거나 사용자가 그 뒤에 고쳤으면(revision 이 마지막 쓰기 뒤와 다르면) 지점이 낡았다
+    const stack = this.undoStack;
+    const top = stack[stack.length - 1];
+    if (!top || top.instance !== instance) {
+      throw new DoogleToolError('NOTHING_TO_UNDO', 'There is no edit of yours to undo in this document (only writes made in 전체 mode during this session, or staged edits still waiting for review, can be undone; the last 5 are kept). Ask the user to use Ctrl+Z if needed.');
+    }
+    if (top.revAfter !== this.revision) {
+      throw new DoogleToolError('UNDO_BLOCKED', 'The document changed after your last edit (the user edited, or undo/redo was used), so restoring your earlier state would discard those changes. Nothing was changed. Tell the user to use Ctrl+Z instead.');
+    }
+    const mine: UndoEntry[] = [];
+    for (let i = stack.length - 1; i >= 0 && mine.length < count; i--) {
+      const e = stack[i];
+      const next = mine[mine.length - 1];
+      // 같은 스레드의 연달은 쓰기만 — 사이에 다른 변경(revision 이 이어지지 않음)이 있으면 멈춘다
+      if (e.thread !== thread || e.instance !== instance || (next && next.revBefore !== e.revAfter)) break;
+      mine.push(e);
+    }
+    if (mine.length < count) {
+      throw new DoogleToolError('NOTHING_TO_UNDO', mine.length === 0
+        ? 'Your most recent edit is not one this chat made, so it cannot be undone here.'
+        : `Only your last ${mine.length} edit(s) can be undone (earlier ones are not kept, or something else changed the document in between). Resend with count ≤ ${mine.length}.`);
+    }
+    const target = mine[mine.length - 1];
+    const revBefore = this.revision;
+    try {
+      this.deps.transaction('doogle:undo', (doc) => { new Engine(doc).restoreSnapshot(target.snapshot); });
+    } catch (error) {
+      throw new DoogleToolError('UNDO_FAILED', `Could not restore the state before those edits (${error instanceof Error ? error.message : String(error)}). Nothing was changed; tell the user to use Ctrl+Z.`);
+    }
+    this.tracker.noteWrite(revBefore);
+    this.deps.refreshView?.();
+    // 되돌린 쓰기들의 지점은 다 썼다
+    this.undoStack = stack.slice(0, stack.length - mine.length);
+    for (const e of mine) this.discardSnapshotOf(e);
+    // 문서는 이제 남은 맨 위 쓰기 직후와 같다 — 이어서 undo 할 수 있게 그 쓰기의 revision 을 지금으로 옮긴다
+    const below = this.undoStack[this.undoStack.length - 1];
+    if (below && below.revAfter === target.revBefore) below.revAfter = this.revision;
+    if (mine.some((e) => e.structural)) this.readBasis.set(thread, -1);
+    void engine;
+    return {
+      revision: this.revision,
+      undone: mine.length,
+      mode: 'direct',
+      edits: mine.map((e) => ({ tool: e.tool, summary: e.summary })),
+      note: 'The document is back to its state before those edits (the user can redo with Ctrl+Z). Paragraph indexes are back to what they were before them — re-read before editing nearby.',
+    };
   }
 
   // ─── 읽기 ────────────────────────────────────────────────
@@ -1067,10 +1337,61 @@ export class DoogleToolExecutor {
     return Object.fromEntries(Object.entries(out).filter(([, v]) => v !== undefined));
   }
 
+  /** 중첩 표·머리말/꼬리말 안 표 — 경로로 읽을 수 있는 것(크기·셀)만 (표 속성 읽기는 엔진 경로 API 가 없다) */
+  private getPathTableProperties(args: Record<string, unknown>, engine: Engine, t: TableRef): unknown {
+    let dims;
+    try { dims = engine.tableDimsOf(t); } catch {
+      throw invalidArgs(`cellPath ${JSON.stringify(t.path)} from s${t.sectionIdx} p${t.paraIdx} c${t.controlIdx} does not reach a table — copy it from a get_structure "nested table" or header/footer table line`);
+    }
+    const mm = (v: unknown) => (typeof v === 'number' ? huToMm(v) : undefined);
+    const widths: number[] = Array(dims.colCount).fill(0);
+    const heights: number[] = Array(dims.rowCount).fill(0);
+    for (let i = 0; i < dims.cellCount; i++) {
+      try {
+        const info = engine.cellInfoOf(t, i);
+        const c = engine.cellPropsOf(t, i);
+        if (info.colSpan === 1 && typeof c['width'] === 'number' && widths[info.col] === 0) widths[info.col] = c['width'] as number;
+        if (info.rowSpan === 1 && typeof c['height'] === 'number') heights[info.row] = Math.max(heights[info.row], c['height'] as number);
+      } catch { /* 건너뛴다 */ }
+    }
+    const out: Record<string, unknown> = {
+      revision: this.revision,
+      nested: true,
+      ...(engine.inHeaderFooter(t) ? { inHeaderFooter: true } : {}),
+      rowCount: dims.rowCount, colCount: dims.colCount, cellCount: dims.cellCount,
+      columnWidthsMm: widths.map(huToMm),
+      rowHeightsMm: heights.map(huToMm),
+      widthMm: huToMm(widths.reduce((a, b) => a + b, 0)),
+      note: 'Nested/header-footer table: edit it with edit_table, set_table_props, set_cell_props, set_zone_borders or delete_table (same paraIdx, controlIdx, cellPath); apply_formula and captions are top-level only. Rows still grow to fit their text.',
+    };
+    const cellIdx = optInt(args, 'cellIdx');
+    if (cellIdx !== undefined) {
+      if (cellIdx >= dims.cellCount) throw invalidArgs(`cellIdx ${cellIdx} is out of range (0..${dims.cellCount - 1})`);
+      const c = engine.cellPropsOf(t, cellIdx);
+      out['cell'] = {
+        cellIdx, ...engine.cellInfoOf(t, cellIdx), widthMm: mm(c['width']), heightMm: mm(c['height']),
+        verticalAlign: ['top', 'center', 'bottom'][c['verticalAlign'] as number] ?? c['verticalAlign'],
+        paddingMm: { left: mm(c['paddingLeft']), right: mm(c['paddingRight']), top: mm(c['paddingTop']), bottom: mm(c['paddingBottom']) },
+      };
+    }
+    return out;
+  }
+
   private getTableProperties(args: Record<string, unknown>, engine: Engine): unknown {
     const sectionIdx = sectionOf(engine, args, 'get_table_properties');
     const paraIdx = reqInt(args, 'paraIdx');
     const controlIdx = reqInt(args, 'controlIdx');
+    const cellPath = Array.isArray(args['cellPath']) ? (args['cellPath'] as unknown[]).map((e) => {
+      const r = asRecord(e);
+      return { controlIndex: Number(r['controlIndex']), cellIndex: r['cellIndex'] === 'n' ? 0 : Number(r['cellIndex'] ?? 0), cellParaIndex: Number(r['cellParaIndex'] ?? 0) };
+    }) : null;
+    if (cellPath && cellPath.length > 1) {
+      if (!cellPath.every((e) => [e.controlIndex, e.cellIndex, e.cellParaIndex].every((n) => Number.isSafeInteger(n) && n >= 0))) {
+        throw invalidArgs('cellPath entries must be {controlIndex, cellIndex, cellParaIndex} non-negative integers');
+      }
+      if (cellPath[0].controlIndex !== controlIdx) throw invalidArgs(`cellPath[0].controlIndex must equal controlIdx ${controlIdx}`);
+      return this.getPathTableProperties(args, engine, { sectionIdx, paraIdx, controlIdx, path: cellPath });
+    }
     const dims = engine.tableDims(sectionIdx, paraIdx, controlIdx);
     const t = engine.json<Record<string, unknown>>('getTableProperties', sectionIdx, paraIdx, controlIdx);
     const mm = (v: unknown) => (typeof v === 'number' ? huToMm(v) : undefined);
@@ -1376,6 +1697,11 @@ function reviewTargets(
   return out;
 }
 
+/** 터치 → 편집 저널 기록 */
+function journalEntryOf(t: Touch): EditJournalEntry {
+  return { sectionIdx: t.sectionIdx, paraStart: t.paraStart, paraEnd: t.paraEnd, paraDelta: t.paraDelta, ...(t.reorders ? { reorders: true } : {}) };
+}
+
 /**
  * 배치의 뒤 항목(later)이 문단 수를 바꿨을 때, 앞 항목들이 적어 둔 자리를 같은 만큼 옮긴다.
  * later 는 편집 뒤 좌표다: 편집 전 영역의 끝은 paraEnd - paraDelta 이고 그 뒤 문단이 paraDelta 만큼 움직였다.
@@ -1387,6 +1713,7 @@ function shiftEarlierTouches(earlier: Touch[], later: Touch): void {
     if (t.paraStart <= regionEndBefore) continue;
     t.paraStart += later.paraDelta;
     t.paraEnd += later.paraDelta;
+    if (t.shiftFrom !== undefined) t.shiftFrom += later.paraDelta;
     if (t.cell) t.cell = { ...t.cell, paraIdx: t.cell.paraIdx + later.paraDelta };
     if (t.table) t.table = { ...t.table, paraIdx: t.table.paraIdx + later.paraDelta };
     if (t.tableCells) t.tableCells = t.tableCells.map((c) => ({ ...c, paraIdx: c.paraIdx + later.paraDelta }));

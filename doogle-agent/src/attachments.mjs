@@ -20,6 +20,10 @@ export const ATTACHMENT_LIMITS = Object.freeze({
   perThread: 40,
   /** 파일 하나에서 보관하는 글자 수 (넘는 부분은 studio 가 자르고 truncated 로 알린다) */
   textChars: 600_000,
+  /** 한글 문서 서식 요약의 글자 수 (studio 는 4,000자 안으로 만든다 — rhwp-studio attach/doc-format.ts) */
+  formatChars: 8_000,
+  /** 한 턴에 통째로 싣는 서식 요약의 총량 (글과 따로 센다) */
+  inlineFormatTotalChars: 12_000,
   /** 파일 하나의 그림 수 (그림 파일은 1, 글이 없는 PDF 는 쪽 그림 여러 장) */
   imagesPerFile: 12,
   /** 그림 하나의 base64 길이 */
@@ -116,7 +120,10 @@ export function normalizeAttachments(raw) {
         });
       }
     }
-    if (!text.trim() && images.length === 0) {
+    // 서식 요약 — 한글 문서만 온다. 글과 따로 두고, 한도를 넘으면 자른다
+    let format = typeof a.format === 'string' ? a.format.replace(/\r\n?/g, '\n').trim() : '';
+    if (format.length > ATTACHMENT_LIMITS.formatChars) format = format.slice(0, ATTACHMENT_LIMITS.formatChars);
+    if (!text.trim() && images.length === 0 && !format) {
       return fail('EMPTY_ATTACHMENT', `"${name}"에서 읽을 내용을 찾지 못했습니다`);
     }
     const m = a.meta && typeof a.meta === 'object' ? a.meta : {};
@@ -125,6 +132,7 @@ export function normalizeAttachments(raw) {
       mime: typeof a.mime === 'string' ? a.mime.slice(0, 100) : '',
       size: cleanInt(a.size) ?? 0,
       text, images,
+      ...(format ? { format } : {}),
       meta: {
         ...(cleanInt(m.pages, 100_000) ? { pages: cleanInt(m.pages, 100_000) } : {}),
         ...(cleanInt(m.sheets, 10_000) ? { sheets: cleanInt(m.sheets, 10_000) } : {}),
@@ -159,13 +167,14 @@ export function describeAttachment(meta) {
   if (meta.sheets) parts.push(`시트 ${meta.sheets}개`);
   if (meta.slides) parts.push(`슬라이드 ${meta.slides}장`);
   if (meta.images > 0) parts.push(`그림 ${meta.images}장`);
+  if (meta.formatChars > 0) parts.push('서식 요약 있음');
   if (meta.truncated) parts.push('뒷부분 잘림');
   return parts.join(', ');
 }
 
 /** 블록 안에 실을 글 — 닫는 태그와 헷갈릴 글자열을 풀어 둔다 */
 function fence(text) {
-  return text.replace(/<(\/?)(doogle_attachments|attachment)\b/gi, '<$1\u200b$2');
+  return text.replace(/<(\/?)(doogle_attachments|attachment(?:_format)?)\b/gi, '<$1\u200b$2');
 }
 
 /**
@@ -181,9 +190,10 @@ export function attachmentsBlock(all, fresh = []) {
   const lines = [];
   const bodies = [];
   let budget = L.inlineTotalChars;
+  let formatBudget = L.inlineFormatTotalChars;
   if (fresh.length > 0) {
     lines.push(`이번 메시지에 새로 붙인 파일 ${fresh.length}개:`);
-    for (const { meta, text } of fresh) {
+    for (const { meta, text, format } of fresh) {
       let how = '';
       if (meta.chars > 0) {
         if (meta.chars <= L.inlineChars && meta.chars <= budget) {
@@ -200,6 +210,16 @@ export function attachmentsBlock(all, fresh = []) {
         }
       }
       if (meta.images > 0) how += `${how ? ' · ' : ''}그림은 read_attachment {name${meta.images > 1 ? ', image' : ''}} 로 보기`;
+      if (format) {
+        // 서식 요약(쪽 모양·문단 서식·표) — "이 양식대로" 요청에 쓴다. 작으니(4,000자 안) 따로 센 예산 안에서 통째로 싣는다
+        if (format.length <= formatBudget) {
+          formatBudget -= format.length;
+          bodies.push(`<attachment_format name=${JSON.stringify(meta.name)} note="이 파일의 서식 요약 — 쪽 모양 mm, 글자·문단 pt">\n${fence(format)}\n</attachment_format>`);
+          how += `${how ? ' · ' : ''}서식 요약이 아래에 있음`;
+        } else {
+          how += `${how ? ' · ' : ''}서식 요약은 read_attachment {name} 결과의 format`;
+        }
+      }
       lines.push(`- ${JSON.stringify(meta.name)} (${describeAttachment(meta)}) — ${how}`);
     }
   }
@@ -286,10 +306,11 @@ export class AttachmentStore {
       const meta = {
         id, name, kind: a.kind, mime: a.mime, size: a.size,
         chars: a.text.length, images: a.images.length,
+        ...(a.format ? { formatChars: a.format.length } : {}),
         ...a.meta,
         addedAt: new Date().toISOString(),
       };
-      const content = { id, name, kind: a.kind, text: a.text, images: a.images };
+      const content = { id, name, kind: a.kind, text: a.text, images: a.images, ...(a.format ? { format: a.format } : {}) };
       if (this.dir) {
         const file = this.#file(thread.id, id);
         await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
@@ -299,12 +320,12 @@ export class AttachmentStore {
       }
       this.#remember(this.#key(thread.id, id), content);
       thread.attachments.push(meta);
-      added.push({ meta, text: a.text });
+      added.push({ meta, text: a.text, ...(a.format ? { format: a.format } : {}) });
     }
     return { ok: true, added };
   }
 
-  /** @returns {Promise<{id:string,name:string,kind:string,text:string,images:any[]}|null>} */
+  /** @returns {Promise<{id:string,name:string,kind:string,text:string,images:any[],format?:string}|null>} */
   async content(threadId, id) {
     const key = this.#key(threadId, id);
     const hit = this.cache.get(key);
@@ -313,7 +334,10 @@ export class AttachmentStore {
     try {
       const raw = JSON.parse(await fs.readFile(this.#file(threadId, id), 'utf8'));
       if (!raw || raw.id !== id) return null;
-      const content = { id, name: String(raw.name ?? ''), kind: String(raw.kind ?? 'text'), text: String(raw.text ?? ''), images: Array.isArray(raw.images) ? raw.images : [] };
+      const content = {
+        id, name: String(raw.name ?? ''), kind: String(raw.kind ?? 'text'), text: String(raw.text ?? ''), images: Array.isArray(raw.images) ? raw.images : [],
+        ...(typeof raw.format === 'string' && raw.format ? { format: raw.format } : {}),
+      };
       this.#remember(key, content);
       return content;
     } catch {
@@ -338,6 +362,7 @@ export class AttachmentStore {
       chars: m.chars,
       images: m.images,
       ...(m.pages ? { pages: m.pages } : {}),
+      ...(m.formatChars ? { hasFormat: true } : {}),
       ...(m.truncated ? { truncated: true } : {}),
     }));
     return { ok: true, result: { count: files.length, files, ...(files.length === 0 ? { note: 'The user has not attached any reference file to this conversation.' } : {}) } };
@@ -388,6 +413,10 @@ export class AttachmentStore {
     }
 
     const text = content.text;
+    const format = typeof content.format === 'string' ? content.format : '';
+    if (!text && format && typeof args?.find !== 'string') {
+      return { ok: true, result: { ...base, totalChars: 0, text: '', format, note: 'The file has no body text — only its formatting summary (page setup, paragraph formats, tables).' } };
+    }
     if (!text) return fail('NO_TEXT', `${JSON.stringify(meta.name)} has no text — view it with read_attachment {name, image: 0}.`);
     if (typeof args?.find === 'string' && args.find.trim()) {
       const query = args.find.trim();
@@ -415,6 +444,8 @@ export class AttachmentStore {
         offset,
         text: text.slice(offset, end),
         nextOffset: end < text.length ? end : null,
+        // 서식 요약(쪽 모양·문단 서식·표)은 처음 읽을 때 함께 준다 — "이 양식대로" 맞출 때 쓴다
+        ...(offset === 0 && format ? { format } : {}),
         ...(end >= text.length && meta.truncated ? { note: 'The file was longer than the stored limit — its tail was cut off when it was attached.' } : {}),
         ...(content.images.length > 0 ? { images: content.images.length } : {}),
       },

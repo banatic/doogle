@@ -56,6 +56,16 @@ export function matchReviewKey(e: KeyLike): ReviewKeyAction | null {
 
 /** 거절 확인 문구 — 무엇이 함께 되돌아가는지 한 문장으로 */
 export function impactSentence(impact: RejectImpact, all = false): string {
+  if (all) {
+    // 모두 거절은 남은 변경에 작용한다 — 그 사이에 낀 적용 표시 행도 스냅샷 모델이라 함께 되돌아간다
+    const remaining = impact.count - impact.kept;
+    const extra: string[] = [];
+    if (impact.kept > 0) extra.push(`적용 표시한 ${impact.kept}건`);
+    if (impact.userEdits) extra.push('그 사이 직접 고친 내용');
+    return extra.length === 0
+      ? `남은 변경 ${remaining}건을 모두 되돌립니다.`
+      : `남은 변경 ${remaining}건과 함께 ${extra.join('과 ')}도 되돌아갑니다.`;
+  }
   const parts: string[] = [];
   if (!all && impact.later > 0) {
     const kept = impact.kept > 0 ? `(적용 표시한 ${impact.kept}건 포함)` : '';
@@ -65,6 +75,21 @@ export function impactSentence(impact: RejectImpact, all = false): string {
   if (parts.length === 0) return all ? `변경 ${impact.count}건을 모두 되돌립니다.` : '이 변경만 되돌립니다.';
   const lead = all ? `변경 ${impact.count}건과 함께 ` : '이 변경과 함께 ';
   return `${lead}${parts.join('과 ')}도 되돌아갑니다.`;
+}
+
+/**
+ * 머리줄 건수 — 일부를 처리했으면 "남은 변경 3 / 7", 아니면 "7건".
+ */
+export function remainingText(remaining: number, handled: number): string {
+  return handled > 0 ? `남은 변경 ${remaining} / ${remaining + handled}` : `${remaining}건`;
+}
+
+/**
+ * 한꺼번에 처리 단추 글 — 일부를 처리했으면 남은 것에만 작용함을 적는다 ("남은 3건 적용").
+ */
+export function bulkLabel(kind: 'accept' | 'reject', remaining: number, handled: number): string {
+  const verb = kind === 'accept' ? '적용' : '거절';
+  return handled > 0 ? `남은 ${remaining}건 ${verb}` : `모두 ${verb}`;
 }
 
 /** 목록 행 아래 파급 배지 문구 (뒤 행이 없으면 빈 문자열) */

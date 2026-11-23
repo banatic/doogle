@@ -111,7 +111,8 @@ export function createAttachTray(opts: {
     root.hidden = drafts.length === 0;
     root.replaceChildren(input, ...drafts.map((d) => {
       const detail = d.status === 'reading' ? '읽는 중…' : d.status === 'error' ? (d.error ?? '읽지 못했습니다')
-        : [d.kind ? KIND_LABEL[d.kind] : '', formatBytes(d.size)].filter(Boolean).join(' · ');
+        // 한글 문서는 서식 요약도 함께 간다 — "이 양식대로" 요청에 쓸 수 있다는 것을 칩에 적는다
+        : [d.kind ? KIND_LABEL[d.kind] : '', d.payload?.format ? '서식 포함' : '', formatBytes(d.size)].filter(Boolean).join(' · ');
       const node = chip(d.name, d.kind, detail);
       node.dataset.state = d.status;
       node.setAttribute('role', 'listitem');

@@ -9,7 +9,7 @@
     "build:no-hwpctrl": "RHWP_WITHOUT_HWPCTRL=1 tsc && RHWP_WITHOUT_HWPCTRL=1 vite build",
     "dev:no-hwpctrl": "RHWP_WITHOUT_HWPCTRL=1 vite",
     "preview": "vite preview",
-    "test": "node --test src/doogle/agent/__tests__/*.test.mjs"
+    "test": "node --test src/doogle/agent/__tests__/*.test.mjs src/doogle/review/__tests__/*.test.mjs"
   },
   "devDependencies": {
     "@types/chrome": "^0.3.7",

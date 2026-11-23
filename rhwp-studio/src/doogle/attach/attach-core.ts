@@ -4,7 +4,7 @@
  * 사이드바에 올린 파일은 화면에서 글(과 그림)로 바꿔 hub 로 보낸다 — 원본 바이트는 보내지 않는다
  * (doogle-agent/src/attachments.mjs). 여기는 형식 판별, 글 파일의 인코딩 풀기, 그리고 Office 문서
  * (docx · xlsx · pptx = zip 안의 XML)에서 글을 꺼내는 일을 맡는다. 한글 문서(hwp · hwpx)와 PDF 는
- * 문서 엔진이 읽는다(attach-read.ts).
+ * 문서 엔진이 읽는다(attach-read.ts). 한글 문서는 글과 함께 서식 요약(format)도 보낸다(doc-format.ts).
  */
 
 export type AttachKind = 'text' | 'hwp' | 'pdf' | 'docx' | 'xlsx' | 'pptx' | 'image';
@@ -27,6 +27,8 @@ export interface AttachmentPayload {
   mime: string;
   size: number;
   text?: string;
+  /** 한글 문서의 서식 요약 (쪽 모양·문단 서식·표 — attach/doc-format.ts). "이 양식대로" 요청에 쓴다 */
+  format?: string;
   images?: AttachImage[];
   meta?: AttachMeta;
 }
@@ -105,7 +107,7 @@ export function formatBytes(bytes: number): string {
 export function payloadBytes(list: ReadonlyArray<AttachmentPayload>): number {
   let n = 0;
   for (const a of list) {
-    n += (a.text?.length ?? 0) * 3 + 400;
+    n += ((a.text?.length ?? 0) + (a.format?.length ?? 0)) * 3 + 400;
     for (const img of a.images ?? []) n += img.base64.length + 120;
   }
   return n;

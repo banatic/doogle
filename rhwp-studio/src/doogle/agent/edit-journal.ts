@@ -20,6 +20,17 @@ export interface EditJournalEntry {
   paraEnd: number;
   /** 이 편집으로 paraEnd 뒤 문단들의 인덱스가 움직인 양. */
   paraDelta: number;
+  /** 문단 수는 그대로지만 [paraStart, paraEnd] 안의 문단 순서가 바뀌었다 (move_paragraphs). */
+  reorders?: boolean;
+}
+
+/** shiftSince 의 결과 — 대상 문단 번호를 바꾼 가장 최근 기록 */
+export interface IndexShiftHit {
+  /** 그 기록의 bump 직후 revision */
+  revision: number;
+  entry: EditJournalEntry;
+  /** 걸린 대상 번호 (지금 좌표) */
+  paraIdx: number;
 }
 
 /**
@@ -145,6 +156,42 @@ export class EditJournal {
       }
     }
     return { ok: true, shift };
+  }
+
+  /**
+   * (from, to] 사이의 기록된 쓰기가 지금 좌표 [paraStart, paraEnd] 의 문단 번호를 바꿨는가 —
+   * from 시점에 읽은 번호로 지금 문서를 가리키면 엉뚱한 문단이 되는 경우다. 바꾼 가장 최근 기록을 돌려준다.
+   *
+   * 기록을 새것부터 거슬러 보며 대상 번호를 옮긴다(기록 좌표는 그 기록이 적용된 직후 좌표다):
+   *  - 문단 수를 바꾼 기록(paraDelta≠0): paraEnd 뒤 번호가 밀렸다 → 걸림. [paraStart, paraEnd] 안은
+   *    그 쓰기의 결과(after)로 알려진 문단이라 거기서 그 대상은 더 따지지 않는다. 앞쪽은 그대로.
+   *  - 순서를 바꾼 기록(reorders): 구간 안이면 걸림.
+   * 기록 없는 bump(사용자 편집 등)가 끼면 판단하지 않는다(null) — 그 경우는 revision 검사가 맡는다.
+   */
+  shiftSince(from: number, to: number, sectionIdx: number, paraStart: number, paraEnd: number): IndexShiftHit | null {
+    if (from >= to || !this.covers(from, to)) return null;
+    let targets = paraStart === paraEnd ? [paraStart] : [paraStart, paraEnd];
+    const seen = new Set<EditJournalEntry>();
+    for (let rev = to; rev > from && targets.length > 0; rev--) {
+      const list = this.entries.get(rev)!;
+      for (let i = list.length - 1; i >= 0 && targets.length > 0; i--) {
+        const entry = list[i];
+        if (seen.has(entry)) continue;
+        seen.add(entry);
+        if (entry.sectionIdx !== sectionIdx) continue;
+        const next: number[] = [];
+        for (const t of targets) {
+          if (entry.reorders && t >= entry.paraStart && t <= entry.paraEnd) return { revision: rev, entry, paraIdx: t };
+          if (entry.paraDelta !== 0) {
+            if (t > entry.paraEnd) return { revision: rev, entry, paraIdx: t };
+            if (t >= entry.paraStart) continue; // 그 쓰기가 만든·남긴 문단 — 결과로 알려졌다
+          }
+          next.push(t);
+        }
+        targets = next;
+      }
+    }
+    return null;
   }
 
   /**

@@ -4,6 +4,10 @@
  * 실행기의 PendingApi 를 감싸 kept(행 단위 적용) 행을 뺀 목록을 내고, 개수가 바뀔 때마다
  * window 이벤트 `doogle:pending-count {detail:{count}}` 를 쏜다(상태 표시줄이 듣는다).
  * 문서 이동(선택)은 막이 등록한 revealer 가 한다 — 이 모듈은 DOM·호스트를 모른다.
+ *
+ * 일부만 적용·거절하면 처리한 행은 목록에서 빠진다(적용 표시 행은 kept, 거절 행은 사라짐).
+ * 무엇이 남았는지 보이도록 한 묶음(대기 목록이 빌 때까지) 안에서 처리한 행을 따로 기억해
+ * `handled()`·`total` 로 낸다 — 표면은 "남은 변경 3 / 7" 과 처리한 행 접힘 목록을 그린다.
  */
 import type { PendingApi, PendingChangeSet } from '../agent/types.ts';
 
@@ -31,6 +35,12 @@ export interface DecisionReport {
   userEditsReverted: boolean;
 }
 
+/** 이번 묶음에서 처리한 변경 (적용 표시·확정 = accept, 거절·함께 되돌아감 = reject) */
+export interface HandledChange {
+  change: PendingChangeSet;
+  kind: 'accept' | 'reject';
+}
+
 export class ReviewStore {
   private api: PendingApi | null = null;
   private offApi: (() => void) | null = null;
@@ -41,6 +51,12 @@ export class ReviewStore {
   private readonly explainListeners = new Set<ExplainListener>();
   private readonly decisionListeners = new Set<(report: DecisionReport) => void>();
   private revealer: ((change: PendingChangeSet) => void) | null = null;
+  /** 이번 묶음에서 처리한 행 (처리 순서) — 대기 목록이 비면 비운다 */
+  private readonly handledLog = new Map<string, HandledChange>();
+  /** 직전에 본 대기 목록 (id → 행·kept) — 빠지거나 kept 가 된 행을 처리로 기록한다 */
+  private known = new Map<string, { change: PendingChangeSet; kept: boolean }>();
+  /** decide() 가 도는 동안의 결정 — 그 사이 빠진 행을 이 결정으로 기록한다 */
+  private deciding: 'accept' | 'reject' | null = null;
 
   /** 실행기 검토 API 를 붙인다 (null 이면 뗀다). */
   attach(api: PendingApi | null): void {
@@ -48,6 +64,8 @@ export class ReviewStore {
     this.offApi?.();
     this.offApi = null;
     this.api = api;
+    this.handledLog.clear();
+    this.known = new Map();
     if (api) this.offApi = api.onChange(() => this.changed());
     this.changed();
   }
@@ -74,6 +92,16 @@ export class ReviewStore {
 
   get count(): number {
     return this.rows().length;
+  }
+
+  /** 이번 묶음에서 처리한 변경 (처리 순서) */
+  handled(): HandledChange[] {
+    return [...this.handledLog.values()];
+  }
+
+  /** 이번 묶음 전체 = 남은 변경 + 처리한 변경 */
+  get total(): number {
+    return this.count + this.handledLog.size;
   }
 
   get currentId(): string | null {
@@ -120,20 +148,36 @@ export class ReviewStore {
     const rows = this.rows();
     const target = id ? rows.find((r) => r.id === id) : undefined;
     const threads = [...new Set(api.list().map((c) => c.threadId).filter(Boolean))];
+    if (target) {
+      // 결정한 행 다음의 남은 행으로 넘어간다 — 적용이면 아래 행(없으면 맨 위로), 거절이면 아래 행이 함께
+      // 되돌아가므로 바로 위 행. 결정 전에 정해 두어야 목록이 바뀌는 순간에도 맨 위로 튀지 않는다.
+      const index = rows.indexOf(target);
+      const below = rows.slice(index + 1);
+      const above = rows.slice(0, index);
+      const next = kind === 'accept' ? below[0] ?? above[0] : api.rejectFrom ? above[above.length - 1] : undefined;
+      this.current = next?.id ?? null;
+    }
     let report: DecisionReport;
-    if (kind === 'accept') {
-      if (target && api.accept) {
-        report = { kind, scope: 'one', count: api.accept(target.id).accepted, threads: [target.threadId], userEditsReverted: false };
+    this.deciding = kind;
+    try {
+      if (kind === 'accept') {
+        if (target && api.accept) {
+          report = { kind, scope: 'one', count: api.accept(target.id).accepted, threads: [target.threadId], userEditsReverted: false };
+        } else {
+          report = { kind, scope: 'all', count: api.acceptAll().accepted, threads, userEditsReverted: false };
+        }
+      } else if (target && api.rejectFrom) {
+        // 스냅샷 모델: 그 행 직전으로 복원 — 뒤 행도 함께 되돌아간다 (마지막 행이면 그 행만)
+        const r = api.rejectFrom(target.id);
+        report = { kind, scope: 'one', count: r.rejected, threads: [target.threadId], userEditsReverted: r.userEditsReverted };
       } else {
-        report = { kind, scope: 'all', count: api.acceptAll().accepted, threads, userEditsReverted: false };
+        const r = api.rejectAll();
+        report = { kind, scope: 'all', count: r.rejected, threads, userEditsReverted: r.userEditsReverted };
       }
-    } else if (target && api.rejectFrom) {
-      // 스냅샷 모델: 그 행 직전으로 복원 — 뒤 행도 함께 되돌아간다 (마지막 행이면 그 행만)
-      const r = api.rejectFrom(target.id);
-      report = { kind, scope: 'one', count: r.rejected, threads: [target.threadId], userEditsReverted: r.userEditsReverted };
-    } else {
-      const r = api.rejectAll();
-      report = { kind, scope: 'all', count: r.rejected, threads, userEditsReverted: r.userEditsReverted };
+    } finally {
+      // 실행기가 알리지 않은 확정(앞 kept 행 정리)까지 이 결정으로 기록한다
+      this.changed();
+      this.deciding = null;
     }
     for (const cb of [...this.decisionListeners]) {
       try { cb(report); } catch (error) { console.error('[doogle] decision listener failed', error); }
@@ -170,10 +214,13 @@ export class ReviewStore {
     };
   }
 
-  /** 이 거절은 확인을 받아야 하는가 — 뒤 행이나 사용자 편집이 함께 되돌아갈 때 */
+  /**
+   * 이 거절은 확인을 받아야 하는가 — 뒤 행이나 사용자 편집이 함께 되돌아갈 때.
+   * 남은 변경 모두 거절은 적용 표시한 행이 함께 되돌아갈 때도 묻는다.
+   */
   needsConfirm(id?: string): boolean {
     const impact = this.rejectImpact(id);
-    return id === undefined ? impact.userEdits : impact.later > 0 || impact.userEdits;
+    return id === undefined ? impact.userEdits || impact.kept > 0 : impact.later > 0 || impact.userEdits;
   }
 
   /** 대기 중 사용자 편집이 끼었는가 (알약의 "직접 편집 포함") */
@@ -223,7 +270,32 @@ export class ReviewStore {
     return () => { this.listeners.delete(cb); };
   }
 
+  /** 직전 목록과 비교해 처리한 행을 기록한다. 대기 목록이 비면 묶음이 끝난 것이다. */
+  private track(): void {
+    const all = this.api?.list() ?? [];
+    if (all.length === 0) {
+      this.handledLog.clear();
+      this.known = new Map();
+      return;
+    }
+    const now = new Map(all.map((c) => [c.id, c] as const));
+    for (const [id, prev] of this.known) {
+      const cur = now.get(id);
+      if (!prev.kept) {
+        if (cur?.kept) this.handledLog.set(id, { change: cur, kind: 'accept' });
+        else if (!cur) this.handledLog.set(id, { change: prev.change, kind: this.deciding ?? 'reject' });
+      } else if (!cur && this.deciding === 'reject') {
+        // 적용 표시했지만 앞 행 거절에 함께 되돌아갔다
+        this.handledLog.set(id, { change: prev.change, kind: 'reject' });
+      }
+    }
+    // 처음 보는 적용 표시 행(목록을 붙이기 전에 적용한 것)도 처리한 것으로 센다
+    for (const c of all) if (c.kept && !this.handledLog.has(c.id)) this.handledLog.set(c.id, { change: c, kind: 'accept' });
+    this.known = new Map(all.map((c) => [c.id, { change: c, kept: c.kept === true }] as const));
+  }
+
   private changed(): void {
+    this.track();
     const count = this.count;
     if (count !== this.lastCount) {
       this.lastCount = count;

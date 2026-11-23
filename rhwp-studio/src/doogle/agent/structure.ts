@@ -38,7 +38,9 @@ export const STRUCTURE_LEGEND = 'Lines: "s<sec> p<paraIdx> (<length>) <text>"; �
   + '⏎ = next cell paragraph (cellParaIdx 0,1,…). '
   + 'cell = {paraIdx: table p, controlIdx: table c, cellIdx}. format:"json" gives JSON. '
   + '▦ after a cellIdx = that cell holds a nested table, listed under the outer table as "nested table in [cellIdx] … cellPath […]"; '
-  + 'address its cells with the outer cell plus that cellPath, replacing n by the nested [n].';
+  + 'address its cells with the outer cell plus that cellPath, replacing n by the nested [n]. '
+  + 'Headers/footers come last as "footer s<sec> (both|odd|even) · cell {…,cellIdx:0}" with paragraphs "  p<n> (<length>) text" '
+  + 'and tables "  table in footer p<n> RxC · cell {…} + cellPath […]" — addressed like nested tables.';
 
 export interface StructureEmphasis { marks: string[]; size: number | null; mixedSize: boolean }
 
@@ -76,10 +78,23 @@ export interface StructureSection {
   tables: StructureTable[];
 }
 
+/** 머리말·꼬리말 하나 — 문단은 cell {paraIdx, controlIdx, cellIdx:0} 의 셀 문단처럼, 그 안 표는 중첩 표처럼 주소를 단다 */
+export interface StructureHeaderFooter {
+  sectionIdx: number;
+  kind: 'header' | 'footer';
+  applyTo: 'both' | 'even' | 'odd';
+  paraIdx: number;
+  controlIdx: number;
+  paragraphs: StructureCellParagraph[];
+  tables: StructureTable[];
+}
+
 export interface StructureData {
   pageCount: number;
   sectionCount: number;
   sections: StructureSection[];
+  /** 머리말·꼬리말 (range·sinceRevision 읽기에서는 싣지 않는다) */
+  headerFooters?: StructureHeaderFooter[];
   pageMarks: StructurePageMark[];
   pages?: { first: number; last: number };
   range?: { sectionIdx: number; fromPara: number; toPara: number };
@@ -410,7 +425,42 @@ export class StructureReader {
         }
       }
     }
+    if (!opts.range && !opts.only) {
+      const hfs = this.headerFooters(opts.fullText ? 2000 : Math.min(opts.maxPreviewChars, CELL_PREVIEW_CHARS));
+      if (hfs.length > 0) data.headerFooters = hfs;
+    }
     return data;
+  }
+
+  /** 머리말·꼬리말과 그 안 표 (구역 순) */
+  headerFooters(maxChars: number): StructureHeaderFooter[] {
+    const out: StructureHeaderFooter[] = [];
+    for (const hf of this.engine.headerFooters()) {
+      const cell: CellAddr = { paraIdx: hf.paraIdx, controlIdx: hf.controlIdx, cellIdx: 0 };
+      const paragraphs: StructureCellParagraph[] = [];
+      let n = 0;
+      try { n = this.engine.cellParagraphCount(hf.sectionIdx, cell); } catch { n = hf.paraCount; }
+      for (let cp = 0; cp < n; cp++) {
+        let length = 0;
+        let text = '';
+        try {
+          length = this.engine.length(hf.sectionIdx, cp, cell);
+          text = length === 0 ? '' : this.engine.text(hf.sectionIdx, cp, cell, 0, Math.min(length, maxChars));
+        } catch { /* 읽지 못한 문단은 빈 문단으로 보인다 */ }
+        paragraphs.push({ cellParaIdx: cp, length, text });
+      }
+      const tables: StructureTable[] = [];
+      for (const path of this.engine.nestedTables(hf.sectionIdx, cell)) {
+        const table = this.table(hf.sectionIdx, hf.paraIdx, hf.controlIdx, maxChars, path);
+        if (table) tables.push(table);
+      }
+      out.push({
+        sectionIdx: hf.sectionIdx, kind: hf.isHeader ? 'header' : 'footer',
+        applyTo: (['both', 'even', 'odd'] as const)[hf.applyTo] ?? 'both',
+        paraIdx: hf.paraIdx, controlIdx: hf.controlIdx, paragraphs, tables,
+      });
+    }
+    return out;
   }
 }
 
@@ -440,10 +490,14 @@ function nestedPathText(path: CellPathEntry[]): string {
   return `[${items.join(',')}]`;
 }
 
-function emitTable(lines: string[], sec: number, table: StructureTable, indent = '  ', parentCellIdx?: number): void {
+function emitTable(lines: string[], sec: number, table: StructureTable, indent = '  ', parentCellIdx?: number, label?: string): void {
   const untagged = table.untaggedFromCellIdx;
   const tags = untagged === undefined ? '' : untagged === 0 ? ' (no cell tags)' : ` (no cell tags from [${untagged}])`;
-  if (table.path) {
+  if (table.path && label) {
+    const top = table.path[0];
+    lines.push(`${indent}${label} ${table.rowCount}x${table.colCount}`
+      + ` · cell {paraIdx:${table.paraIdx},controlIdx:${top.controlIndex},cellIdx:${top.cellIndex}} + cellPath ${nestedPathText(table.path)}${tags}`);
+  } else if (table.path) {
     const top = table.path[0];
     lines.push(`${indent}nested table in [${parentCellIdx ?? top.cellIndex}] ${table.rowCount}x${table.colCount}`
       + ` · cell {paraIdx:${table.paraIdx},controlIdx:${top.controlIndex},cellIdx:${top.cellIndex}} + cellPath ${nestedPathText(table.path)}${tags}`);
@@ -537,7 +591,25 @@ export function renderCompactStructure(data: StructureData, revisionLabel: strin
     flushEmpty();
     for (const table of tables) emitTable(lines, sec, table);
   }
+  for (const hf of data.headerFooters ?? []) emitHeaderFooter(lines, hf);
   return lines.join('\n');
+}
+
+/**
+ * 머리말·꼬리말 — "footer s0 (both) · cell {…}" 한 줄, 그 문단 "  p<n> (<len>) text", 그 안 표는
+ * "  table in footer p<n> RxC · cell {…} + cellPath […]" 와 셀 그리드(중첩 표와 같은 주소 규칙).
+ */
+function emitHeaderFooter(lines: string[], hf: StructureHeaderFooter): void {
+  lines.push(`${hf.kind} s${hf.sectionIdx} (${hf.applyTo}) · cell {paraIdx:${hf.paraIdx},controlIdx:${hf.controlIdx},cellIdx:0}`);
+  for (const p of hf.paragraphs) {
+    if (p.length === 0) continue;
+    const cut = scalarLength(p.text) < p.length;
+    lines.push(`  p${p.cellParaIdx} (${p.length}) ${structureLineText(p.text)}${cut ? '…' : ''}`);
+  }
+  for (const table of hf.tables) {
+    const hostPara = table.path?.[0]?.cellParaIndex ?? 0;
+    emitTable(lines, hf.sectionIdx, table, '  ', undefined, `table in ${hf.kind} p${hostPara}`);
+  }
 }
 
 /** 앞에서 maxChars 글자만 (scalar) */

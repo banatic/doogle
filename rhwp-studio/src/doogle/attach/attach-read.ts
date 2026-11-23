@@ -4,6 +4,7 @@
  *  - 글 파일: 인코딩을 풀어 그대로 (attach-core.ts decodeText)
  *  - docx · xlsx · pptx: zip 안의 XML 에서 글만 (attach-core.ts officeText)
  *  - hwp · hwpx · pdf: 문서 엔진(WASM)으로 따로 열어 글만 꺼낸 뒤 바로 닫는다. 편집기에 열린 문서는 건드리지 않는다.
+ *    한글 문서는 서식 요약(쪽 모양·문단 서식·표 — doc-format.ts)도 함께 꺼낸다.
  *    글이 없는 PDF(스캔본)는 앞쪽 몇 쪽을 그림으로 보낸다.
  *  - 그림: 긴 변을 줄여 JPEG/PNG 로 다시 담는다.
  *
@@ -14,6 +15,7 @@ import {
   ATTACH_LIMITS, AttachError, classifyFile, clipText, decodeText, fitWithin, formatBytes, officeText,
   type AttachImage, type AttachmentPayload, type AttachMeta,
 } from './attach-core.ts';
+import { engineFormatSummary } from './doc-format.ts';
 import { engineDocumentText, pagedDocumentText } from './doc-text.ts';
 
 /** 글이 없는 쪽(스캔본)을 그림으로 보내는 수 */
@@ -77,7 +79,7 @@ async function engineModule(): Promise<{ HwpDocument: WasmDocClass }> {
 }
 
 /** 한글 문서·PDF 를 엔진으로 따로 열어 글(글이 없으면 쪽 그림)을 꺼낸다 */
-async function readWithEngine(bytes: Uint8Array, kind: 'hwp' | 'pdf'): Promise<{ text: string; images: AttachImage[]; meta: AttachMeta }> {
+async function readWithEngine(bytes: Uint8Array, kind: 'hwp' | 'pdf'): Promise<{ text: string; format?: string; images: AttachImage[]; meta: AttachMeta }> {
   const { HwpDocument } = await engineModule();
   if (kind === 'pdf' && HwpDocument.supportsPdfImport?.() !== true) {
     throw new AttachError('UNSUPPORTED_TYPE', '이 버전은 PDF 를 읽지 못합니다');
@@ -94,7 +96,14 @@ async function readWithEngine(bytes: Uint8Array, kind: 'hwp' | 'pdf'): Promise<{
     const engine = new Engine(doc);
     if (kind === 'hwp') {
       const read = engineDocumentText(engine, ATTACH_LIMITS.textChars);
-      return { text: read.text, images: [], meta: { ...(read.pages > 0 ? { pages: read.pages } : {}), ...(read.truncated ? { truncated: true } : {}) } };
+      // 서식 요약은 덤이다 — 못 만들어도 글은 보낸다
+      let format = '';
+      try { format = engineFormatSummary(engine); } catch { format = ''; }
+      return {
+        text: read.text, images: [],
+        ...(format ? { format } : {}),
+        meta: { ...(read.pages > 0 ? { pages: read.pages } : {}), ...(read.truncated ? { truncated: true } : {}) },
+      };
     }
     // PDF: 엔진은 쪽마다 글상자로 연다(본문 문단이 없다) — 쪽 배치에서 글을 읽는다. 쪽 번호가 원본 그대로다
     const read = pagedDocumentText(engine, ATTACH_LIMITS.textChars);
@@ -137,6 +146,7 @@ export async function readAttachment(file: File): Promise<AttachmentPayload> {
 
   const bytes = new Uint8Array(await file.arrayBuffer());
   let text = '';
+  let format = '';
   let images: AttachImage[] = [];
   let meta: AttachMeta = {};
   if (kind === 'text') {
@@ -146,16 +156,20 @@ export async function readAttachment(file: File): Promise<AttachmentPayload> {
   } else if (kind === 'docx' || kind === 'xlsx' || kind === 'pptx') {
     ({ text, meta } = await officeText(kind, bytes));
   } else {
-    ({ text, images, meta } = await readWithEngine(bytes, kind));
+    const read = await readWithEngine(bytes, kind);
+    ({ text, images, meta } = read);
+    format = read.format ?? '';
   }
   const clipped = clipText(text);
   if (clipped.truncated) meta.truncated = true;
-  if (!clipped.text.trim() && images.length === 0) {
+  // 글이 없어도 서식 요약이 있으면 보낸다 — 빈 양식(쪽 모양만 쓸 문서)도 참고 파일이 된다
+  if (!clipped.text.trim() && images.length === 0 && !format) {
     throw new AttachError('EMPTY', kind === 'pdf' ? '글을 찾지 못했습니다 (그림으로만 된 PDF)' : '읽을 글이 없습니다');
   }
   return {
     ...base,
     ...(clipped.text.trim() ? { text: clipped.text } : {}),
+    ...(format ? { format } : {}),
     ...(images.length > 0 ? { images } : {}),
     ...(Object.keys(meta).length > 0 ? { meta } : {}),
   };
