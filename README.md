@@ -1,46 +1,47 @@
 # 두글 (doogle)
 
-두글은 HWP/HWPX 문서 AI 에이전트 수정기입니다.
+두글은 HWP·HWPX 데스크톱 편집기입니다.
 
-![빈 신청서에 "예시데이터로 문서 채워줘" 라고 부탁하자 에이전트가 칸을 채우는 모습](docs/doogle/media/demo-fill-form.webp)
+[설치 파일 다운로드](https://github.com/banatic/doogle/releases/latest)
 
-chatGPT, Claude를 지원합니다.
+## 에이전트로 HWP 수정하기
+
+![두글이 카드에서 한봄, 2명, 어린 왕자를 읽어 참가 신청서의 세 칸에 입력하는 과정](docs/doogle/media/demo-fill-form.webp)
+
+AI 도우미를 쓰려면 Node.js 22 이상을 설치하고 두글 설정에서 ChatGPT 또는 Claude를 연결하세요. 
+
+API 키로도 연결할 수 있습니다.
+
+
+## Branch 시스템
+
+![문서 갈래에서 빈 신청서로 되돌아간 뒤 다시 작성한 지점을 선택해 세 항목을 복원하는 모습](docs/doogle/media/demo-branches.webp)
+
+## Split 창
+
+![행사 안내문과 당일 진행표를 탭으로 연 뒤 화면을 좌우로 나누는 모습](docs/doogle/media/demo-split-view.webp)
 
 ## 개발 실행
 
-필요한 것: Node 22 이상, Rust stable(`wasm32-unknown-unknown` 타깃), wasm-pack, Tauri 2 빌드 환경.
+Node.js 22 이상, Rust와 `wasm32-unknown-unknown` 타깃, wasm-pack, Tauri 2 빌드 환경이 필요합니다. 저장소 루트에서 실행하세요.
 
 ```sh
-# 1. 엔진을 WASM 으로 빌드한다 (저장소 루트에서, 처음 한 번과 src/ 를 고친 뒤)
-scripts/wasm-pack-locked.sh --target web --out-dir pkg      # Windows: scripts\wasm-pack-locked.cmd ...
+# 문서 엔진 빌드 (Windows에서는 아래 .cmd 명령 사용)
+./scripts/wasm-pack-locked.sh --target web --out-dir pkg
+# .\scripts\wasm-pack-locked.cmd --target web --out-dir pkg
 
-# 2. 의존성 설치
-cd rhwp-studio; npm install; cd ..
-cd doogle-agent; npm install; cd ..
-
-# 3. 데스크탑 앱 실행 (rhwp-studio 개발 서버를 함께 띄운다)
-cd doogle-desk; npm install; npm run tauri dev
+npm --prefix rhwp-studio ci
+npm --prefix doogle-agent ci
+npm --prefix doogle-desk ci
+npm --prefix doogle-desk run tauri dev
 ```
 
-AI 사이드바는 사용자 PATH 의 Node 22+ 로 `doogle-agent` 허브를 띄운다. Node 가 없으면 편집기만 동작한다.
-
-## 구성
-
-| 경로 | 내용 |
-| --- | --- |
-| `doogle-agent/` | AI 에이전트 허브(Node). 모델 제공자 연결, 문서 도구, MCP 브리지 |
-| `doogle-desk/` | Tauri 2 데스크탑 셸. 창, 파일 열기·저장, 허브 실행, 자동 업데이트 |
-| `rhwp-studio/` | 편집기 화면(Vite + TypeScript). 두글 전용 UI 는 `src/doogle/`, 진입 페이지는 `doogle.html` |
-| `src/` | Rust 문서 엔진(HWP/HWPX 파서·조판·렌더러·직렬화). WASM 으로 빌드해 `pkg/` 에 둔다 |
-| `docs/doogle/` | 설계·도구·릴리스 문서 |
-
-릴리스와 자동 업데이트, upstream 동기화는 [docs/doogle/RELEASE.md](docs/doogle/RELEASE.md) 를 본다.
+빌드와 배포 절차는 [릴리스 가이드](docs/doogle/RELEASE.md)에 있습니다.
 
 ## 출처와 라이선스
 
-- 문서 엔진과 편집기 화면은 [edwardkim/rhwp](https://github.com/edwardkim/rhwp)(MIT)를 바탕으로 한다.
-- 에이전트 도구 설계는 [banatic/rhwp-x](https://github.com/banatic/rhwp-x)(MIT)에서 가져왔다.
-- 라이선스는 [LICENSE](LICENSE)(MIT), 서드파티 고지는 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md),
-  [THIRD_PARTY.md](THIRD_PARTY.md), `licenses/`, 글꼴 고지는 [docs/doogle/FONTS.md](docs/doogle/FONTS.md) 에 있다.
+문서 엔진과 편집기는 [rhwp](https://github.com/edwardkim/rhwp)를 기반으로 하고 있습니다. MIT 라이선스입니다.
+
+[두글 라이선스 (MIT)](LICENSE) · [서드파티 구성 요소](THIRD_PARTY.md) · [서드파티 라이선스](THIRD_PARTY_LICENSES.md) · [글꼴 고지](docs/doogle/FONTS.md)
 
 본 제품은 한글과컴퓨터의 한글 문서 파일(.hwp) 공개 문서를 참고하여 개발하였습니다.
